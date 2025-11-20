@@ -1875,3 +1875,176 @@ WaddleBot uses comprehensive GitHub Actions for automated building, testing, and
 - HTTPS/TLS termination at ingress level
 
 This context should be referenced for all future development to maintain consistency with the overall WaddleBot architecture and patterns.
+## Flask/Quart Conversion - Build & Test Process (2025-10-30)
+
+### Container Build Process
+
+All Flask module Docker builds follow the GitHub Actions workflow pattern defined in `.github/workflows/containers.yml`:
+
+**Build Context**: Repository root (`/home/penguin/code/WaddleBot`)
+**Dockerfile Location**: `{module_name}_flask/Dockerfile`
+**Build Command Pattern**:
+```bash
+docker build \
+  -f {module}_flask/Dockerfile \
+  -t waddlebot/{name}:latest \
+  --build-arg MODULE_NAME={name} \
+  --build-arg MODULE_PORT={port} \
+  .
+```
+
+**Key Points**:
+1. Build context is `.` (repo root) to access `libs/flask_core`
+2. Dockerfile is specified with `-f {module}_flask/Dockerfile`
+3. Shared library (`libs/flask_core`) is copied into container and installed first
+4. Module-specific `requirements.txt` does NOT include editable install (`-e ../libs/flask_core`)
+5. Build arguments pass module name and port
+
+### Module Structure - Flask Conversion
+
+All modules have been converted from py4web to Flask/Quart with `_flask` suffix:
+
+**Original py4web modules** → **New Flask/Quart modules**:
+- `router_module/` → `router_module_flask/`
+- `marketplace_module/` → `marketplace_module_flask/`
+- `portal_module/` → `portal_module_flask/`
+- `twitch_module/` → `twitch_module_flask/`
+- `discord_module/` → `discord_module_flask/`
+- `slack_module/` → `slack_module_flask/`
+- `ai_interaction_module/` → `ai_interaction_module_flask/`
+- `alias_interaction_module/` → `alias_interaction_module_flask/`
+- `shoutout_interaction_module/` → `shoutout_interaction_module_flask/`
+- `inventory_interaction_module/` → `inventory_interaction_module_flask/`
+- `calendar_interaction_module/` → `calendar_interaction_module_flask/`
+- `memories_interaction_module/` → `memories_interaction_module_flask/`
+- `youtube_music_interaction_module/` → `youtube_music_interaction_module_flask/`
+- `spotify_interaction_module/` → `spotify_interaction_module_flask/`
+- `labels_core_module/` → `labels_core_module_flask/`
+- `browser_source_core_module/` → `browser_source_core_module_flask/`
+- `identity_core_module/` → `identity_core_module_flask/`
+- `community_module/` → `community_module_flask/`
+- `reputation_module/` → `reputation_module_flask/`
+
+### Shared Library (Flask Core)
+
+**Location**: `/libs/flask_core/`
+**Installation**: Installed in Docker container via `pip install .` before module dependencies
+**Components**:
+- `database.py` - AsyncDAL wrapper around PyDAL
+- `auth.py` - Flask-Security-Too + OAuth (Authlib)
+- `datamodels.py` - Python 3.13 dataclasses with slots
+- `logging_config.py` - AAA logging system
+- `api_utils.py` - API decorators and helpers
+- `setup.py` - Package installation
+
+### Dockerfile Pattern (All Flask Modules)
+
+```dockerfile
+# Build from parent directory: docker build -f {module}_flask/Dockerfile -t waddlebot/{name}:latest .
+
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Copy shared library
+COPY libs/flask_core /app/libs/flask_core
+
+# Install shared library
+RUN cd /app/libs/flask_core && pip install --no-cache-dir .
+
+# Copy module files
+COPY {module}_flask/requirements.txt /app/
+COPY {module}_flask /app/
+
+# Install module dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Create log directory
+RUN mkdir -p /var/log/waddlebotlog
+
+# Expose port
+EXPOSE {port}
+
+# Run with Hypercorn
+CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:{port}", "--workers", "4"]
+```
+
+### Test Scripts
+
+**Python Compilation Test**: `test_all_modules.sh` (Python script variant used)
+- Tests all 66 Python files
+- Matches local testing to GitHub Actions validation
+
+**Container Build Test**: `test_build_all.sh`
+- Builds all 19 Flask module containers
+- Matches GitHub Actions workflow build process
+- Tests health endpoints after container start
+- Validates complete build pipeline
+
+### Running Tests Locally
+
+**Python Compile Test**:
+```bash
+python3 -c "
+import os, subprocess
+for root, dirs, files in os.walk('.'):
+    for f in files:
+        if f.endswith('.py'):
+            fpath = os.path.join(root, f)
+            result = subprocess.run(['python3', '-m', 'py_compile', fpath], capture_output=True)
+            if result.returncode == 0:
+                print(f'✓ {fpath}')
+"
+```
+
+**Container Build Test**:
+```bash
+chmod +x test_build_all.sh
+./test_build_all.sh
+```
+
+**Single Module Build** (example: AI module):
+```bash
+docker build -f ai_interaction_module_flask/Dockerfile -t waddlebot/ai-interaction:test .
+```
+
+### GitHub Actions Workflow Updates Needed
+
+The `.github/workflows/containers.yml` file needs updates to reflect Flask module names:
+
+1. **Change all module paths** from `{module}/` to `{module}_flask/`
+2. **Update detect-changes filters** to use `_flask` suffix
+3. **Update build matrix** `module` field to use `_flask` suffix
+4. **Add new modules** not in original workflow:
+   - `calendar_interaction_module_flask`
+   - `memories_interaction_module_flask`
+   - `youtube_music_interaction_module_flask`
+   - `spotify_interaction_module_flask`
+   - `browser_source_core_module_flask`
+   - `identity_core_module_flask`
+   - `community_module_flask`
+   - `reputation_module_flask`
+
+### Python 3.13 Features Used
+
+All Flask modules use Python 3.13 optimizations:
+- **Dataclasses with slots=True**: 40-50% memory reduction
+- **Structural pattern matching**: `match/case` statements
+- **Type aliases**: `type AsyncHandler = ...`
+- **TaskGroup**: Structured concurrency with `asyncio.TaskGroup`
+
+### Testing Status (2025-10-30)
+
+✅ **Python Compilation**: 66/66 files pass
+✅ **Docker Build**: AI module tested successfully
+⏳ **All Container Builds**: Pending full test run
+⏳ **Go Compilation**: Premium/Desktop needs `go mod download`
+
+### Next Steps for CI/CD
+
+1. Update `.github/workflows/containers.yml` with all Flask module names
+2. Run full container build test via `test_build_all.sh`
+3. Update `docker-compose.yml` to use new Flask module names
+4. Test Go compilation in Premium/Desktop (needs dependencies)
+5. Update deployment documentation with new module names
+
