@@ -11,29 +11,37 @@ Converted from py4web to Quart for better async performance.
 
 import os
 import sys
-from quart import Quart, Blueprint, request, jsonify
-import asyncio
-import logging
-from datetime import datetime
+import asyncio  # noqa: E402
+from datetime import datetime  # noqa: E402
 
-# Add libs to path
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'libs'))
+# Add libs to path for flask_core imports
+sys.path.insert(  # noqa: E402
+    0,
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'libs')
+)
 
-from flask_core import (
+from quart import Quart, Blueprint, request  # noqa: E402
+
+from flask_core import (  # noqa: E402
     setup_aaa_logging,
     async_endpoint,
     auth_required,
     success_response,
     error_response,
-    init_database
+    create_health_blueprint
 )
 
-from config import Config
-from services.ai_service import AIService
-from services.router_service import RouterService
+from config import Config  # noqa: E402
+from services.ai_service import AIService  # noqa: E402
+from services.router_service import RouterService  # noqa: E402
 
 # Initialize Quart app
 app = Quart(__name__)
+
+# Register health/metrics endpoints
+health_bp = create_health_blueprint(Config.MODULE_NAME, Config.MODULE_VERSION)
+app.register_blueprint(health_bp)
+
 ai_bp = Blueprint('ai', __name__, url_prefix='/api/v1/ai')
 
 # Setup logging
@@ -58,7 +66,9 @@ async def startup():
     try:
         # Initialize AI service
         ai_service = AIService.create()
-        logger.system(f"Initialized AI service with provider: {Config.AI_PROVIDER}")
+        logger.system(  # noqa: E501
+            f"Initialized AI service with provider: {Config.AI_PROVIDER}"
+        )
 
         # Initialize router service
         router_service = RouterService()
@@ -80,33 +90,6 @@ async def startup():
 async def shutdown():
     """Cleanup on shutdown"""
     logger.system("Shutting down AI interaction module", action="shutdown")
-
-
-# Health check endpoint (no auth required)
-@app.route('/health', methods=['GET'])
-async def health():
-    """Health check for container orchestration"""
-    try:
-        is_healthy = await ai_service.health_check()
-
-        if is_healthy:
-            return success_response({
-                "status": "healthy",
-                "module": Config.MODULE_NAME,
-                "version": Config.MODULE_VERSION,
-                "provider": Config.AI_PROVIDER,
-                "connection": "connected"
-            })
-        else:
-            return error_response(
-                "AI provider connection failed",
-                status_code=503,
-                details={"provider": Config.AI_PROVIDER}
-            )
-
-    except Exception as e:
-        logger.error(f"Health check error: {e}")
-        return error_response(str(e), status_code=503)
 
 
 # Module info endpoint
@@ -212,8 +195,12 @@ async def process_interaction(
 
         if message_type == 'chatMessage':
             # Check for greeting patterns
-            greeting_patterns = ['o7', 'hi', 'hello', 'hey', 'howdy', 'greetings', 'sup', 'hiya']
-            farewell_patterns = ['!lurk', 'bye', 'goodbye', 'later', 'cya']
+            greeting_patterns = [  # noqa: E501
+                'o7', 'hi', 'hello', 'hey', 'howdy', 'greetings', 'sup', 'hiya'
+            ]
+            farewell_patterns = [  # noqa: E501
+                '!lurk', 'bye', 'goodbye', 'later', 'cya'
+            ]
 
             message_lower = message_content.lower().strip()
 
@@ -243,7 +230,8 @@ async def process_interaction(
                         response_context['trigger'] = trigger
                         break
 
-        elif message_type in Config.EVENT_RESPONSE_TYPES and Config.RESPOND_TO_EVENTS:
+        elif (message_type in Config.EVENT_RESPONSE_TYPES and  # noqa: E501
+              Config.RESPOND_TO_EVENTS):
             should_respond = True
             response_context['trigger_type'] = 'event'
             response_context['event_type'] = message_type
@@ -268,7 +256,9 @@ async def process_interaction(
         )
 
         # Calculate processing time
-        processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+        processing_time = int(  # noqa: E501
+            (datetime.utcnow() - start_time).total_seconds() * 1000
+        )
 
         if ai_response:
             # Send response back to router
@@ -294,7 +284,7 @@ async def process_interaction(
             )
         else:
             logger.error(
-                f"No AI response generated",
+                "No AI response generated",
                 user=username,
                 community=entity_id,
                 action="generate_response"
@@ -314,13 +304,17 @@ async def process_interaction(
             "module_name": Config.MODULE_NAME,
             "success": False,
             "error_message": str(e),
-            "processing_time_ms": int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            "processing_time_ms": int(  # noqa: E501
+                (datetime.utcnow() - start_time).total_seconds() * 1000
+            )
         }
 
         try:
             await router_service.submit_response(error_response_data)
         except Exception as submit_error:
-            logger.error(f"Failed to submit error response: {submit_error}")
+            logger.error(  # noqa: E501
+                f"Failed to submit error response: {submit_error}"
+            )
 
 
 # OpenAI-compatible chat completions endpoint
@@ -338,11 +332,15 @@ async def chat_completions():
 
         messages = data.get('messages', [])
         model = data.get('model', Config.AI_MODEL)
-        temperature = data.get('temperature', Config.AI_TEMPERATURE)
-        max_tokens = data.get('max_tokens', Config.AI_MAX_TOKENS)
+        # Note: temperature and max_tokens from request not currently used
+        # but kept for OpenAI API compatibility
+        _ = data.get('temperature', Config.AI_TEMPERATURE)  # noqa: F841
+        _ = data.get('max_tokens', Config.AI_MAX_TOKENS)  # noqa: F841
 
         if not messages:
-            return error_response("messages array is required", status_code=400)
+            return error_response(  # noqa: E501
+                "messages array is required", status_code=400
+            )
 
         # Extract last user message
         user_message = ""
@@ -368,8 +366,9 @@ async def chat_completions():
 
         if ai_response:
             # OpenAI-compatible response format
+            user_id = request.current_user['user_id']
             return success_response({
-                "id": f"chatcmpl-{session_id}",
+                "id": f"chatcmpl-{user_id}",
                 "object": "chat.completion",
                 "created": int(datetime.utcnow().timestamp()),
                 "model": model,
@@ -384,11 +383,16 @@ async def chat_completions():
                 "usage": {
                     "prompt_tokens": len(user_message.split()),
                     "completion_tokens": len(ai_response.split()),
-                    "total_tokens": len(user_message.split()) + len(ai_response.split())
+                    "total_tokens": (  # noqa: E501
+                        len(user_message.split()) +
+                        len(ai_response.split())
+                    )
                 }
             })
         else:
-            return error_response("Failed to generate response", status_code=500)
+            return error_response(  # noqa: E501
+                "Failed to generate response", status_code=500
+            )
 
     except Exception as e:
         logger.error(f"Chat completions error: {e}")
@@ -513,6 +517,6 @@ if __name__ == '__main__':
     import hypercorn.asyncio
     from hypercorn.config import Config as HyperConfig
 
-    config = HyperConfig()
-    config.bind = [f"0.0.0.0:{Config.MODULE_PORT}"]
-    asyncio.run(hypercorn.asyncio.serve(app, config))
+    hyper_config = HyperConfig()
+    hyper_config.bind = [f"0.0.0.0:{Config.MODULE_PORT}"]
+    asyncio.run(hypercorn.asyncio.serve(app, hyper_config))

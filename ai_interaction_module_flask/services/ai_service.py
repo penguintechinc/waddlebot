@@ -8,7 +8,6 @@ Unified AI service supporting multiple providers:
 """
 
 import logging
-from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Protocol
 from dataclasses import dataclass
 
@@ -141,7 +140,9 @@ class AIService:
             logger.error(f"Failed to get available models: {e}")
             return []
 
-    def _get_fallback_response(self, message_type: str, context: Dict[str, Any]) -> str:
+    def _get_fallback_response(  # noqa: E501
+        self, message_type: str, context: Dict[str, Any]
+    ) -> str:
         """
         Get fallback response when AI generation fails.
 
@@ -162,7 +163,10 @@ class AIService:
                     case 'farewell':
                         return "See you later! 👋"
                     case 'question':
-                        return "I'm having trouble processing that right now. Please try again!"
+                        return (  # noqa: E501
+                            "I'm having trouble processing that right now. "
+                            "Please try again!"
+                        )
                     case _:
                         return "Thanks for chatting! 😊"
 

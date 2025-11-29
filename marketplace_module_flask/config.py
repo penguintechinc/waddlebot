@@ -1,8 +1,10 @@
 """Configuration for marketplace_module"""
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
+
 
 class Config:
     MODULE_NAME = 'marketplace_module'

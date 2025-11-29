@@ -1,6 +1,7 @@
 """Rate Limiter - Sliding window rate limiting"""
 from datetime import datetime
 
+
 class RateLimiter:
     def __init__(self):
         self.windows = {}

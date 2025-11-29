@@ -39,10 +39,16 @@ class RouterService:
                 )
 
                 if response.status_code == 200:
-                    logger.info(f"Successfully submitted response for session {response_data.get('session_id')}")
+                    logger.info(  # noqa: E501
+                        f"Successfully submitted response for "
+                        f"session {response_data.get('session_id')}"
+                    )
                     return True
                 else:
-                    logger.error(f"Failed to submit response: {response.status_code} - {response.text}")
+                    logger.error(  # noqa: E501
+                        f"Failed to submit response: "
+                        f"{response.status_code} - {response.text}"
+                    )
                     return False
 
         except Exception as e:

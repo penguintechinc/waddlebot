@@ -1874,6 +1874,165 @@ WaddleBot uses comprehensive GitHub Actions for automated building, testing, and
 - Rate limiting on ingress
 - HTTPS/TLS termination at ingress level
 
+## Critical Development Rules
+
+### Development Philosophy: Safe, Stable, and Feature-Complete
+
+**NEVER take shortcuts or the "easy route" - ALWAYS prioritize safety, stability, and feature completeness**
+
+#### Core Principles
+- **No Quick Fixes**: Resist quick workarounds or partial solutions
+- **Complete Features**: Fully implemented with proper error handling and validation
+- **Safety First**: Security, data integrity, and fault tolerance are non-negotiable
+- **Stable Foundations**: Build on solid, tested components
+- **Future-Proof Design**: Consider long-term maintainability and scalability
+- **No Technical Debt**: Address issues properly the first time
+
+#### Red Flags (Never Do These)
+- Skipping input validation "just this once"
+- Hardcoding credentials or configuration
+- Ignoring error returns or exceptions
+- Commenting out failing tests to make CI pass
+- Deploying without proper testing
+- Using deprecated or unmaintained dependencies
+- Implementing partial features with "TODO" placeholders
+- Bypassing security checks for convenience
+- Assuming data is valid without verification
+- Leaving debug code or backdoors in production
+
+#### Quality Checklist Before Completion
+- All error cases handled properly
+- Unit tests cover all code paths
+- Integration tests verify component interactions
+- Security requirements fully implemented
+- Performance meets acceptable standards
+- Documentation complete and accurate
+- Code review standards met
+- No hardcoded secrets or credentials
+- Logging and monitoring in place
+- Build passes in containerized environment
+- No security vulnerabilities in dependencies
+- Edge cases and boundary conditions tested
+
+### Git Workflow
+- **NEVER commit automatically** unless explicitly requested by the user
+- **NEVER push to remote repositories** under any circumstances
+- **ONLY commit when explicitly asked** - never assume commit permission
+- Always use feature branches for development
+- Require pull request reviews for main branch
+- Automated testing must pass before merge
+
+### Local State Management (Crash Recovery)
+- **ALWAYS maintain local .PLAN and .TODO files** for crash recovery
+- **Keep .PLAN file updated** with current implementation plans and progress
+- **Keep .TODO file updated** with task lists and completion status
+- **Update these files in real-time** as work progresses
+- **Add to .gitignore**: Both .PLAN and .TODO files must be in .gitignore
+- **File format**: Use simple text format for easy recovery
+- **Automatic recovery**: Upon restart, check for existing files to resume work
+
+### Dependency Security Requirements
+- **ALWAYS check for Dependabot alerts** before every commit
+- **Monitor vulnerabilities via Socket.dev** for all dependencies
+- **Mandatory security scanning** before any dependency changes
+- **Fix all security alerts immediately** - no commits with outstanding vulnerabilities
+- **Regular security audits**: `pip-audit`, `npm audit`, `safety check`
+
+### Linting & Code Quality Requirements
+- **ALL code must pass linting** before commit - no exceptions
+- **Python**: flake8, black, isort, mypy (type checking), bandit (security)
+- **JavaScript/TypeScript**: ESLint, Prettier
+- **Go**: golangci-lint (includes staticcheck, gosec, etc.)
+- **Docker**: hadolint
+- **YAML**: yamllint
+- **Shell**: shellcheck
+- **CodeQL**: All code must pass CodeQL security analysis
+- **PEP Compliance**: Python code must follow PEP 8, PEP 257 (docstrings), PEP 484 (type hints)
+
+### Build & Deployment Requirements
+- **NEVER mark tasks as completed until successful build verification**
+- All Python builds MUST be executed within Docker containers
+- Use containerized builds for local development and CI/CD pipelines
+- Build failures must be resolved before task completion
+
+### Documentation Standards
+- **README.md**: Keep as overview and pointer to comprehensive docs/ folder
+- **docs/ folder**: Create comprehensive documentation for all aspects
+- **RELEASE_NOTES.md**: Maintain in docs/ folder, prepend new version releases to top
+- Update CLAUDE.md when adding significant context
+- **Build status badges**: Always include in README.md
+- **Company homepage**: Point to www.penguintech.io
+- **License**: All projects use Limited AGPL3 with preamble for fair use
+
+### File Size Limits
+- **Maximum file size**: 25,000 characters for ALL code and markdown files
+- **Split large files**: Decompose into modules, libraries, or separate documents
+- **CLAUDE.md exception**: Maximum 39,000 characters (only exception to 25K rule)
+- **High-level approach**: CLAUDE.md contains high-level context and references detailed docs
+- **Documentation strategy**: Create detailed documentation in `docs/` folder and link to them from CLAUDE.md
+- **Keep focused**: Critical context, architectural decisions, and workflow instructions only
+- **User approval required**: ALWAYS ask user permission before splitting CLAUDE.md files
+- **Use Task Agents**: Utilize task agents (subagents) to be more expedient and efficient when making changes to large files, updating or reviewing multiple files, or performing complex multi-step operations
+
+## PenguinTech License Server Integration
+
+All projects integrate with the centralized PenguinTech License Server at `https://license.penguintech.io` for feature gating and enterprise functionality.
+
+**IMPORTANT: License enforcement is ONLY enabled when project is marked as release-ready**
+- Development phase: All features available, no license checks
+- Release phase: License validation required, feature gating active
+
+**License Key Format**: `PENG-XXXX-XXXX-XXXX-XXXX-ABCD`
+
+**Core Endpoints**:
+- `POST /api/v2/validate` - Validate license
+- `POST /api/v2/features` - Check feature entitlements
+- `POST /api/v2/keepalive` - Report usage statistics
+
+**Environment Variables**:
+```bash
+# License configuration
+LICENSE_KEY=PENG-XXXX-XXXX-XXXX-XXXX-ABCD
+LICENSE_SERVER_URL=https://license.penguintech.io
+PRODUCT_NAME=waddlebot
+
+# Release mode (enables license enforcement)
+RELEASE_MODE=false  # Development (default)
+RELEASE_MODE=true   # Production (explicitly set)
+```
+
+## WaddleAI Integration
+
+For AI capabilities beyond the built-in AI Interaction Module, integrate with WaddleAI located at `~/code/WaddleAI`.
+
+**When to Use WaddleAI:**
+- Advanced natural language processing (NLP)
+- Custom machine learning model inference
+- AI-powered automation beyond chat responses
+- Intelligent data analysis and recommendations
+
+**Integration Pattern:**
+- WaddleAI runs as separate microservice container
+- Communicate via REST API or gRPC
+- Environment variable configuration for API endpoints
+- License-gate advanced AI features as enterprise functionality
+
+## Version Management System
+
+**Format**: `vMajor.Minor.Patch.build`
+- **Major**: Breaking changes, API changes, removed features
+- **Minor**: Significant new features and functionality additions
+- **Patch**: Minor updates, bug fixes, security patches
+- **Build**: Epoch64 timestamp of build time
+
+**Update Commands**:
+```bash
+./scripts/version/update-version.sh          # Increment build timestamp
+./scripts/version/update-version.sh patch    # Increment patch version
+./scripts/version/update-version.sh minor    # Increment minor version
+./scripts/version/update-version.sh major    # Increment major version
+```
+
 This context should be referenced for all future development to maintain consistency with the overall WaddleBot architecture and patterns.
 ## Flask/Quart Conversion - Build & Test Process (2025-10-30)
 

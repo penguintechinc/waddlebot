@@ -1,9 +1,11 @@
 """Router Controller - Main routing endpoints"""
-from quart import Blueprint, request, current_app
-from flask_core import async_endpoint, success_response, error_response
 import asyncio
 
+from quart import Blueprint, request, current_app
+from flask_core import async_endpoint, success_response
+
 router_bp = Blueprint('router', __name__)
+
 
 @router_bp.route('/events', methods=['POST'])
 @async_endpoint
@@ -14,6 +16,7 @@ async def process_event():
     result = await processor.process_event(data)
     return success_response(result)
 
+
 @router_bp.route('/events/batch', methods=['POST'])
 @async_endpoint
 async def process_events_batch():
@@ -23,6 +26,7 @@ async def process_events_batch():
     results = await asyncio.gather(*[processor.process_event(e) for e in events[:100]])
     return success_response({"results": results, "count": len(results)})
 
+
 @router_bp.route('/commands', methods=['GET'])
 @async_endpoint
 async def list_commands():
@@ -30,6 +34,7 @@ async def list_commands():
     processor = current_app.config['command_processor']
     commands = await processor.list_commands()
     return success_response(commands)
+
 
 @router_bp.route('/responses', methods=['POST'])
 @async_endpoint
@@ -39,6 +44,7 @@ async def submit_response():
     processor = current_app.config['command_processor']
     await processor.handle_module_response(data)
     return success_response({"message": "Response received"})
+
 
 @router_bp.route('/metrics', methods=['GET'])
 @async_endpoint

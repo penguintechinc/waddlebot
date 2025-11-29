@@ -1,20 +1,23 @@
 """
 Kong admin broker - Quart Application
 """
-import os, sys
-from quart import Quart, Blueprint, request
-from datetime import datetime
 import asyncio
+import os
+import sys
+
+from quart import Blueprint, Quart
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'libs'))
-from flask_core import setup_aaa_logging, init_database, async_endpoint, success_response, error_response
-from config import Config
+
+from config import Config  # noqa: E402
+from flask_core import async_endpoint, init_database, setup_aaa_logging, success_response  # noqa: E402
 
 app = Quart(__name__)
 api_bp = Blueprint('api', __name__, url_prefix='/api/v1')
 logger = setup_aaa_logging(Config.MODULE_NAME, Config.MODULE_VERSION)
 
 dal = None
+
 
 @app.before_serving
 async def startup():
@@ -24,9 +27,11 @@ async def startup():
     app.config['dal'] = dal
     logger.system("kong_admin_broker started", result="SUCCESS")
 
+
 @app.route('/health')
 async def health():
     return {"status": "healthy", "module": Config.MODULE_NAME, "version": Config.MODULE_VERSION}, 200
+
 
 @api_bp.route('/status')
 @async_endpoint

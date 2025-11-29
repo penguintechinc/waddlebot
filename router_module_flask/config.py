@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 class Config:
     MODULE_NAME = 'router_module'
     MODULE_VERSION = '2.0.0'

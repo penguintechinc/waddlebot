@@ -1,8 +1,10 @@
 """Configuration for identity_core_module"""
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
+
 
 class Config:
     MODULE_NAME = 'identity_core_module'

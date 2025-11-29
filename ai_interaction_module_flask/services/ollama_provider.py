@@ -32,7 +32,9 @@ class OllamaProvider:
     port: str = field(default_factory=lambda: Config.OLLAMA_PORT)
     use_tls: bool = field(default_factory=lambda: Config.OLLAMA_USE_TLS)
     model: str = field(default_factory=lambda: Config.OLLAMA_MODEL)
-    temperature: float = field(default_factory=lambda: Config.OLLAMA_TEMPERATURE)
+    temperature: float = field(  # noqa: E501
+        default_factory=lambda: Config.OLLAMA_TEMPERATURE
+    )
     max_tokens: int = field(default_factory=lambda: Config.OLLAMA_MAX_TOKENS)
     timeout: int = field(default_factory=lambda: Config.OLLAMA_TIMEOUT)
     cert_path: str = field(default_factory=lambda: Config.OLLAMA_CERT_PATH)
@@ -69,9 +71,14 @@ class OllamaProvider:
             if self.cert_path:
                 try:
                     context.load_verify_locations(self.cert_path)
-                    logger.info(f"Loaded custom certificate from {self.cert_path}")
+                    logger.info(  # noqa: E501
+                        f"Loaded custom certificate from {self.cert_path}"
+                    )
                 except Exception as e:
-                    logger.warning(f"Failed to load certificate from {self.cert_path}: {e}")
+                    logger.warning(  # noqa: E501
+                        f"Failed to load certificate from "
+                        f"{self.cert_path}: {e}"
+                    )
 
             return context
         else:
@@ -79,7 +86,9 @@ class OllamaProvider:
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
-            logger.warning("SSL verification disabled - not recommended for production!")
+            logger.warning(  # noqa: E501
+                "SSL verification disabled - not recommended for production!"
+            )
             return context
 
     async def health_check(self) -> bool:
@@ -90,7 +99,10 @@ class OllamaProvider:
             True if healthy, False otherwise
         """
         try:
-            async with httpx.AsyncClient(verify=self.ssl_context if self.use_tls else True) as client:
+            verify_param = (  # noqa: E501
+                self.ssl_context if self.use_tls else True
+            )
+            async with httpx.AsyncClient(verify=verify_param) as client:
                 response = await client.get(
                     f"{self.base_url}/api/tags",
                     timeout=5.0
@@ -146,7 +158,10 @@ class OllamaProvider:
             }
 
             # Make async request
-            async with httpx.AsyncClient(verify=self.ssl_context if self.use_tls else True) as client:
+            verify_param = (  # noqa: E501
+                self.ssl_context if self.use_tls else True
+            )
+            async with httpx.AsyncClient(verify=verify_param) as client:
                 response = await client.post(
                     f"{self.base_url}/api/generate",
                     json=payload,
@@ -160,16 +175,17 @@ class OllamaProvider:
                     # Clean and validate response
                     cleaned_response = self._clean_response(generated_text)
 
-                    logger.info(
-                        f"Ollama generated response: {len(cleaned_response)} chars "
-                        f"(tokens: {data.get('eval_count', 0)})"
+                    logger.info(  # noqa: E501
+                        f"Ollama generated response: {len(cleaned_response)} "
+                        f"chars (tokens: {data.get('eval_count', 0)})"
                     )
 
                     return cleaned_response
 
                 else:
-                    logger.error(
-                        f"Ollama request failed: {response.status_code} - {response.text}"
+                    logger.error(  # noqa: E501
+                        f"Ollama request failed: {response.status_code} - "
+                        f"{response.text}"
                     )
                     return None
 
@@ -177,7 +193,10 @@ class OllamaProvider:
             logger.error(f"Ollama request timed out after {self.timeout}s")
             return None
         except Exception as e:
-            logger.error(f"Error generating Ollama response: {e}", exc_info=True)
+            logger.error(  # noqa: E501
+                f"Error generating Ollama response: {e}",
+                exc_info=True
+            )
             return None
 
     async def get_available_models(self) -> list:
@@ -188,7 +207,10 @@ class OllamaProvider:
             List of model names
         """
         try:
-            async with httpx.AsyncClient(verify=self.ssl_context if self.use_tls else True) as client:
+            verify_param = (  # noqa: E501
+                self.ssl_context if self.use_tls else True
+            )
+            async with httpx.AsyncClient(verify=verify_param) as client:
                 response = await client.get(
                     f"{self.base_url}/api/tags",
                     timeout=5.0
@@ -196,7 +218,10 @@ class OllamaProvider:
 
                 if response.status_code == 200:
                     data = response.json()
-                    models = [model['name'] for model in data.get('models', [])]
+                    models = [  # noqa: E501
+                        model['name']
+                        for model in data.get('models', [])
+                    ]
                     logger.info(f"Found {len(models)} Ollama models")
                     return models
 
@@ -230,9 +255,13 @@ class OllamaProvider:
         # Python 3.13 pattern matching for prompt creation
         match message_type:
             case 'chatMessage':
-                return self._create_chat_prompt(message_content, user_id, platform, context)
+                return self._create_chat_prompt(  # noqa: E501
+                    message_content, user_id, platform, context
+                )
             case _:
-                return self._create_event_prompt(message_type, user_id, platform, context)
+                return self._create_event_prompt(  # noqa: E501
+                    message_type, user_id, platform, context
+                )
 
     def _create_chat_prompt(
         self,
@@ -254,13 +283,23 @@ class OllamaProvider:
         # Add trigger-specific context
         match trigger_type:
             case 'greeting':
-                prompt_parts.append("The user is greeting you. Respond warmly and friendly.")
+                prompt_parts.append(  # noqa: E501
+                    "The user is greeting you. Respond warmly and friendly."
+                )
             case 'farewell':
-                prompt_parts.append("The user is saying goodbye. Respond with a friendly farewell.")
+                prompt_parts.append(  # noqa: E501
+                    "The user is saying goodbye. "
+                    "Respond with a friendly farewell."
+                )
             case 'question':
-                prompt_parts.append("The user is asking a question. Provide a helpful, informative answer.")
+                prompt_parts.append(  # noqa: E501
+                    "The user is asking a question. "
+                    "Provide a helpful, informative answer."
+                )
             case _:
-                prompt_parts.append("Respond helpfully and naturally to the user's message.")
+                prompt_parts.append(  # noqa: E501
+                    "Respond helpfully and naturally to the user's message."
+                )
 
         # Add user message
         prompt_parts.append(f"\nUser {user_id} said: {message_content}")
@@ -319,7 +358,9 @@ class OllamaProvider:
                 instruction = "Generate a welcoming message."
 
             case _:
-                event_desc = f"User {user_id} triggered a {message_type} event!"
+                event_desc = (  # noqa: E501
+                    f"User {user_id} triggered a {message_type} event!"
+                )
                 instruction = "Generate an appropriate response."
 
         return f"""{Config.SYSTEM_PROMPT}

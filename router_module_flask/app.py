@@ -1,14 +1,23 @@
 """WaddleBot Router Module (Quart) - Central command routing system"""
-import os, sys
-from quart import Quart, Blueprint
-from datetime import datetime
+import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'libs'))
 
-from flask_core import setup_aaa_logging, init_database
-from config import Config
+from quart import Quart  # noqa: E402
+from flask_core import (  # noqa: E402
+    create_health_blueprint,
+    init_database,
+    setup_aaa_logging,
+)
+from config import Config  # noqa: E402
 
 app = Quart(__name__)
+
+# Register health/metrics endpoints
+health_bp = create_health_blueprint(Config.MODULE_NAME, Config.MODULE_VERSION)
+app.register_blueprint(health_bp)
+
 logger = setup_aaa_logging(Config.MODULE_NAME, Config.MODULE_VERSION, Config.LOG_LEVEL)
 
 # Initialize services
@@ -17,6 +26,7 @@ command_processor = None
 cache_manager = None
 rate_limiter = None
 session_manager = None
+
 
 @app.before_serving
 async def startup():
@@ -28,7 +38,11 @@ async def startup():
 
     logger.system("Starting router module", action="startup")
 
-    dal = init_database(Config.DATABASE_URL, pool_size=Config.ROUTER_MAX_WORKERS, read_replica_uri=Config.READ_REPLICA_URL)
+    dal = init_database(
+        Config.DATABASE_URL,
+        pool_size=Config.ROUTER_MAX_WORKERS,
+        read_replica_uri=Config.READ_REPLICA_URL,
+    )
     app.config['dal'] = dal
 
     cache_manager = CacheManager()
@@ -43,18 +57,17 @@ async def startup():
 
     logger.system("Router module started successfully", result="SUCCESS")
 
+
 # Register blueprints
-from controllers.router import router_bp
-from controllers.admin import admin_bp
+from controllers.router import router_bp  # noqa: E402
+from controllers.admin import admin_bp  # noqa: E402
+
 app.register_blueprint(router_bp, url_prefix='/api/v1/router')
 app.register_blueprint(admin_bp, url_prefix='/api/v1/admin')
 
-@app.route('/health')
-async def health():
-    return {"status": "healthy", "module": Config.MODULE_NAME, "version": Config.MODULE_VERSION}, 200
-
 if __name__ == '__main__':
-    import hypercorn.asyncio, asyncio
+    import asyncio
+    import hypercorn.asyncio
     from hypercorn.config import Config as HyperConfig
     config = HyperConfig()
     config.bind = [f"0.0.0.0:{Config.MODULE_PORT}"]

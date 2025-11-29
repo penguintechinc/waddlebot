@@ -1,8 +1,10 @@
 """Configuration for kong_admin_broker"""
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
+
 
 class Config:
     MODULE_NAME = 'kong_admin_broker'

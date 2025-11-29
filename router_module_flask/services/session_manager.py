@@ -1,6 +1,7 @@
 """Session Manager - Redis session management"""
 import secrets
 
+
 class SessionManager:
     def __init__(self):
         pass

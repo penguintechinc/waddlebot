@@ -1,6 +1,6 @@
 """Alias Service - Linux-style command alias management"""
-from typing import Dict, Any, List, Optional
-import re
+from typing import Any, Dict, List, Optional
+
 
 class AliasService:
     """
@@ -24,7 +24,7 @@ class AliasService:
 
     async def list_aliases(self, community_id: str) -> List[Dict[str, Any]]:
         """List all aliases for community"""
-        query = (self.dal.aliases.community_id == community_id) & (self.dal.aliases.is_active == True)
+        query = (self.dal.aliases.community_id == community_id) & (self.dal.aliases.is_active is True)  # noqa: E712
         rows = await self.dal.select_async(query)
         return [dict(row) for row in rows]
 
@@ -39,7 +39,7 @@ class AliasService:
     async def execute_alias(self, alias_name: str, user: str, args: List[str]) -> Optional[str]:
         """Execute alias with variable substitution"""
         # Get alias command
-        query = (self.dal.aliases.alias_name == alias_name) & (self.dal.aliases.is_active == True)
+        query = (self.dal.aliases.alias_name == alias_name) & (self.dal.aliases.is_active is True)  # noqa: E712
         rows = await self.dal.select_async(query)
 
         if not rows:

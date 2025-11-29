@@ -31,7 +31,9 @@ from .api_utils import (
     error_response,
     paginate_response,
     async_endpoint,
-    auth_required
+    auth_required,
+    create_health_blueprint,
+    record_request_metrics
 )
 
 __all__ = [
@@ -59,4 +61,7 @@ __all__ = [
     "paginate_response",
     "async_endpoint",
     "auth_required",
+    # Health & Metrics
+    "create_health_blueprint",
+    "record_request_metrics",
 ]

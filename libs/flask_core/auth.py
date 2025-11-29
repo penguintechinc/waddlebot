@@ -9,8 +9,9 @@ Provides comprehensive authentication and authorization:
 - Role-based access control (RBAC)
 """
 
-from flask_security import Security, SQLAlchemyUserDatastore, UserMixin, RoleMixin
-from flask_security.utils import hash_password, verify_password
+# Flask-Security imports for future use in full auth setup
+# from flask_security import Security, SQLAlchemyUserDatastore, UserMixin, RoleMixin
+# from flask_security.utils import hash_password, verify_password
 from authlib.integrations.flask_client import OAuth
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
@@ -288,11 +289,11 @@ async def verify_api_key_async(api_key: str, dal) -> Optional[Dict[str, Any]]:
     hashed_key = hash_api_key(api_key)
 
     # Query API keys table
-    query = (dal.api_keys.key_hash == hashed_key) & (dal.api_keys.is_active == True)
+    query = (dal.api_keys.key_hash == hashed_key) & (dal.api_keys.is_active is True)
     rows = await dal.select_async(query)
 
     if not rows:
-        logger.warning(f"Invalid API key attempt")
+        logger.warning("Invalid API key attempt")
         return None
 
     key_record = rows.first()

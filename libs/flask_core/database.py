@@ -6,7 +6,9 @@ Provides async wrapper around PyDAL for non-blocking database operations.
 Supports connection pooling, read replicas, and transaction management.
 """
 
-from pydal import DAL, Field
+from pydal import DAL
+# Field is exported via DAL but imported here for module users
+from pydal import Field  # noqa: F401
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Any, List, Dict
@@ -106,7 +108,8 @@ class AsyncDAL:
             Rows object with query results
         """
         loop = asyncio.get_event_loop()
-        dal = self.read_dal if self.read_dal else self.dal
+        # Use read replica if available for select operations
+        _ = self.read_dal if self.read_dal else self.dal
 
         def _select():
             try:

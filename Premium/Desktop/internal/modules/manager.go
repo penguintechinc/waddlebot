@@ -15,6 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"waddlebot-bridge/internal/config"
 	"waddlebot-bridge/internal/logger"
+	"waddlebot-bridge/internal/models"
 	"waddlebot-bridge/internal/storage"
 )
 
@@ -24,34 +25,15 @@ type Manager struct {
 	storage     storage.Storage
 	logger      *logrus.Logger
 	modules     map[string]*Module
-	moduleInfos map[string]*ModuleInfo
+	moduleInfos map[string]*models.ModuleInfo
 	mutex       sync.RWMutex
 }
 
-// ModuleInfo represents information about a module
-type ModuleInfo struct {
-	Name         string            `json:"name"`
-	Version      string            `json:"version"`
-	Description  string            `json:"description"`
-	Author       string            `json:"author"`
-	Actions      []ActionInfo      `json:"actions"`
-	Dependencies []string          `json:"dependencies"`
-	Permissions  []string          `json:"permissions"`
-	Config       map[string]string `json:"config"`
-	Enabled      bool              `json:"enabled"`
-	LoadedAt     time.Time         `json:"loaded_at"`
-	LastUsed     time.Time         `json:"last_used"`
-}
+// ModuleInfo is an alias for models.ModuleInfo for backward compatibility
+type ModuleInfo = models.ModuleInfo
 
-// ActionInfo represents information about an action
-type ActionInfo struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Parameters  map[string]interface{} `json:"parameters"`
-	ReturnType  string                 `json:"return_type"`
-	Timeout     int                    `json:"timeout"`
-	Permissions []string               `json:"permissions"`
-}
+// ActionInfo is an alias for models.ActionInfo for backward compatibility
+type ActionInfo = models.ActionInfo
 
 // Module represents a loaded module
 type Module struct {
@@ -67,16 +49,16 @@ type Module struct {
 type ModuleInterface interface {
 	// Initialize initializes the module with configuration
 	Initialize(config map[string]string) error
-	
+
 	// GetInfo returns module information
-	GetInfo() *ModuleInfo
-	
+	GetInfo() *models.ModuleInfo
+
 	// ExecuteAction executes a specific action
 	ExecuteAction(ctx context.Context, action string, parameters map[string]string) (map[string]interface{}, error)
-	
+
 	// GetActions returns available actions
-	GetActions() []ActionInfo
-	
+	GetActions() []models.ActionInfo
+
 	// Cleanup cleans up module resources
 	Cleanup() error
 }

@@ -1,8 +1,10 @@
 """Configuration for labels_core_module"""
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
+
 
 class Config:
     MODULE_NAME = 'labels_core_module'

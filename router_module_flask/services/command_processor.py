@@ -1,8 +1,6 @@
 """Command Processor - Async command routing and execution"""
-import asyncio
-from datetime import datetime
-from typing import Dict, Any, List, Optional
-import httpx
+from typing import Any, Dict, List
+
 
 class CommandProcessor:
     def __init__(self, dal, cache_manager, rate_limiter, session_manager):
@@ -17,7 +15,6 @@ class CommandProcessor:
             entity_id = event_data.get('entity_id')
             user_id = event_data.get('user_id')
             message = event_data.get('message', '')
-            message_type = event_data.get('message_type', 'chatMessage')
 
             # Generate session ID
             session_id = await self.session_manager.create_session(entity_id, user_id)
@@ -39,7 +36,14 @@ class CommandProcessor:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    async def execute_command(self, command: str, entity_id: str, user_id: str, message: str, session_id: str) -> Dict[str, Any]:
+    async def execute_command(
+        self,
+        command: str,
+        entity_id: str,
+        user_id: str,
+        message: str,
+        session_id: str,
+    ) -> Dict[str, Any]:
         """Execute command asynchronously"""
         # This would contain full command execution logic
         # For now, returning basic structure

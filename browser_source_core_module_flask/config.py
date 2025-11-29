@@ -1,15 +1,31 @@
-"""Configuration for browser_source_core_module"""
+"""Configuration for browser_source_core_module."""
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
-class Config:
+
+class Config:  # noqa: E302
+    """Configuration class for browser source module."""
+
     MODULE_NAME = 'browser_source_core_module'
     MODULE_VERSION = '2.0.0'
     MODULE_PORT = int(os.getenv('MODULE_PORT', '8027'))
-    DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://waddlebot:password@localhost:5432/waddlebot')
-    CORE_API_URL = os.getenv('CORE_API_URL', 'http://router-service:8000')
-    ROUTER_API_URL = os.getenv('ROUTER_API_URL', 'http://router-service:8000/api/v1/router')
+    DATABASE_URL = os.getenv(
+        'DATABASE_URL',
+        'postgresql://waddlebot:password@localhost:5432/waddlebot'
+    )
+    CORE_API_URL = os.getenv(
+        'CORE_API_URL',
+        'http://router-service:8000'
+    )
+    ROUTER_API_URL = os.getenv(
+        'ROUTER_API_URL',
+        'http://router-service:8000/api/v1/router'
+    )
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-    SECRET_KEY = os.getenv('SECRET_KEY', 'change-me-in-production')
+    SECRET_KEY = os.getenv(
+        'SECRET_KEY',
+        'change-me-in-production'
+    )

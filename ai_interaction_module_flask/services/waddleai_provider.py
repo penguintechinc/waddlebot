@@ -30,13 +30,27 @@ class WaddleAIProvider:
     - Automatic failover
     """
 
-    base_url: str = field(default_factory=lambda: Config.WADDLEAI_BASE_URL)
-    api_key: str = field(default_factory=lambda: Config.WADDLEAI_API_KEY)
-    model: str = field(default_factory=lambda: Config.WADDLEAI_MODEL)
-    temperature: float = field(default_factory=lambda: Config.WADDLEAI_TEMPERATURE)
-    max_tokens: int = field(default_factory=lambda: Config.WADDLEAI_MAX_TOKENS)
-    timeout: int = field(default_factory=lambda: Config.WADDLEAI_TIMEOUT)
-    preferred_model: str = field(default_factory=lambda: Config.WADDLEAI_PREFERRED_MODEL)
+    base_url: str = field(
+        default_factory=lambda: Config.WADDLEAI_BASE_URL
+    )
+    api_key: str = field(
+        default_factory=lambda: Config.WADDLEAI_API_KEY
+    )
+    model: str = field(
+        default_factory=lambda: Config.WADDLEAI_MODEL
+    )
+    temperature: float = field(  # noqa: E501
+        default_factory=lambda: Config.WADDLEAI_TEMPERATURE
+    )
+    max_tokens: int = field(  # noqa: E501
+        default_factory=lambda: Config.WADDLEAI_MAX_TOKENS
+    )
+    timeout: int = field(
+        default_factory=lambda: Config.WADDLEAI_TIMEOUT
+    )
+    preferred_model: str = field(  # noqa: E501
+        default_factory=lambda: Config.WADDLEAI_PREFERRED_MODEL
+    )
 
     def __post_init__(self):
         """Initialize provider"""
@@ -49,9 +63,10 @@ class WaddleAIProvider:
         if self.preferred_model:
             self.headers["X-Preferred-Model"] = self.preferred_model
 
-        logger.info(
+        logger.info(  # noqa: E501
             f"Initialized WaddleAI provider: {self.base_url} "
-            f"(Model: {self.model}, Preferred: {self.preferred_model or 'auto'})"
+            f"(Model: {self.model}, "
+            f"Preferred: {self.preferred_model or 'auto'})"
         )
 
     async def health_check(self) -> bool:
@@ -128,9 +143,10 @@ class WaddleAIProvider:
                     actual_provider = waddleai_data.get('provider', 'unknown')
                     actual_model = data.get('model', 'unknown')
 
-                    logger.info(
+                    logger.info(  # noqa: E501
                         f"WaddleAI response: {waddleai_tokens} tokens, "
-                        f"provider: {actual_provider}, model: {actual_model}"
+                        f"provider: {actual_provider}, "
+                        f"model: {actual_model}"
                     )
 
                     # Clean and return response
@@ -141,20 +157,28 @@ class WaddleAIProvider:
                     return None
 
                 elif response.status_code == 401:
-                    logger.error("WaddleAI authentication failed - check API key")
+                    logger.error(  # noqa: E501
+                        "WaddleAI authentication failed - check API key"
+                    )
                     return None
 
                 else:
-                    logger.error(
-                        f"WaddleAI request failed: {response.status_code} - {response.text}"
+                    logger.error(  # noqa: E501
+                        f"WaddleAI request failed: {response.status_code} "
+                        f"- {response.text}"
                     )
                     return None
 
         except httpx.TimeoutException:
-            logger.error(f"WaddleAI request timed out after {self.timeout}s")
+            logger.error(  # noqa: E501
+                f"WaddleAI request timed out after {self.timeout}s"
+            )
             return None
         except Exception as e:
-            logger.error(f"Error generating WaddleAI response: {e}", exc_info=True)
+            logger.error(  # noqa: E501
+                f"Error generating WaddleAI response: {e}",
+                exc_info=True
+            )
             return None
 
     async def get_available_models(self) -> list:
@@ -208,24 +232,34 @@ class WaddleAIProvider:
         messages = []
 
         # Add system message
-        system_prompt = self._create_system_prompt(message_type, platform, context)
+        system_prompt = self._create_system_prompt(  # noqa: E501
+            message_type, platform, context
+        )
         messages.append({
             "role": "system",
             "content": system_prompt
         })
 
         # Add conversation history if available
-        if Config.ENABLE_CHAT_CONTEXT and 'conversation_history' in context:
+        if (  # noqa: E501
+            Config.ENABLE_CHAT_CONTEXT and
+            'conversation_history' in context
+        ):
             history = context['conversation_history']
             for msg in history[-Config.CONTEXT_HISTORY_LIMIT:]:
-                if isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                if (  # noqa: E501
+                    isinstance(msg, dict) and
+                    'role' in msg and 'content' in msg
+                ):
                     messages.append(msg)
 
         # Add current user message
         if message_type == 'chatMessage':
             user_prompt = f"User {user_id} said: {message_content}"
         else:
-            user_prompt = self._create_event_user_message(message_type, user_id)
+            user_prompt = self._create_event_user_message(  # noqa: E501
+                message_type, user_id
+            )
 
         messages.append({
             "role": "user",
@@ -253,42 +287,82 @@ class WaddleAIProvider:
                 trigger_type = context.get('trigger_type', 'unknown')
                 match trigger_type:
                     case 'greeting':
-                        instruction = " Respond to this greeting warmly and briefly."
+                        instruction = (  # noqa: E501
+                            " Respond to this greeting warmly and briefly."
+                        )
                     case 'farewell':
-                        instruction = " Respond to this farewell kindly and briefly."
+                        instruction = (  # noqa: E501
+                            " Respond to this farewell kindly and briefly."
+                        )
                     case 'question':
-                        instruction = " Answer this question helpfully and concisely."
+                        instruction = (  # noqa: E501
+                            " Answer this question helpfully and concisely."
+                        )
                     case _:
                         instruction = " Respond naturally and helpfully."
                 type_context = instruction
 
             case _:
-                type_context = f" Respond enthusiastically to this {message_type} event."
+                type_context = (  # noqa: E501
+                    f" Respond enthusiastically to this "
+                    f"{message_type} event."
+                )
 
-        length_instruction = "\nKeep your response under 200 characters."
+        length_instruction = (
+            "\nKeep your response under 200 characters."
+        )
 
-        return base_prompt + platform_context + type_context + length_instruction
+        return (  # noqa: E501
+            base_prompt + platform_context + type_context +
+            length_instruction
+        )
 
-    def _create_event_user_message(self, message_type: str, user_id: str) -> str:
+    def _create_event_user_message(  # noqa: E501
+        self, message_type: str, user_id: str
+    ) -> str:
         """Create user message for events"""
 
         match message_type:
             case 'subscription':
-                return f"User {user_id} just subscribed! Generate a celebratory thank you."
+                return (  # noqa: E501
+                    f"User {user_id} just subscribed! "
+                    f"Generate a celebratory thank you."
+                )
             case 'follow':
-                return f"User {user_id} just followed! Generate a welcoming thank you."
+                return (  # noqa: E501
+                    f"User {user_id} just followed! "
+                    f"Generate a welcoming thank you."
+                )
             case 'donation':
-                return f"User {user_id} just donated! Generate a grateful thank you."
+                return (  # noqa: E501
+                    f"User {user_id} just donated! "
+                    f"Generate a grateful thank you."
+                )
             case 'cheer':
-                return f"User {user_id} just sent bits! Generate an excited thank you."
+                return (  # noqa: E501
+                    f"User {user_id} just sent bits! "
+                    f"Generate an excited thank you."
+                )
             case 'raid':
-                return f"User {user_id} raided the channel! Welcome the raiders."
+                return (  # noqa: E501
+                    f"User {user_id} raided the channel! "
+                    f"Welcome the raiders."
+                )
             case 'boost':
-                return f"User {user_id} boosted the server! Thank them for boosting."
+                return (  # noqa: E501
+                    f"User {user_id} boosted the server! "
+                    f"Thank them for boosting."
+                )
             case 'member_join':
-                return f"User {user_id} just joined! Welcome them warmly."
+                return (  # noqa: E501
+                    f"User {user_id} just joined! "
+                    f"Welcome them warmly."
+                )
             case _:
-                return f"User {user_id} triggered a {message_type} event! Respond appropriately."
+                return (  # noqa: E501
+                    f"User {user_id} triggered a {message_type} event! "
+                    f"Respond appropriately."
+                )
 
     def _clean_response(self, response: str) -> str:
         """

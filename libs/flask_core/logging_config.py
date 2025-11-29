@@ -18,7 +18,7 @@ from logging.handlers import RotatingFileHandler, SysLogHandler
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
-import json
+import json  # noqa: F401 - used in StructuredFormatter
 
 
 class StructuredFormatter(logging.Formatter):
@@ -254,7 +254,8 @@ def setup_aaa_logging(
         version=version,
         log_level=log_level or os.getenv('LOG_LEVEL', 'INFO'),
         log_dir=log_dir or os.getenv('LOG_DIR', '/var/log/waddlebotlog'),
-        enable_syslog=enable_syslog if enable_syslog is not None else os.getenv('ENABLE_SYSLOG', 'false').lower() == 'true',
+        enable_syslog=(enable_syslog if enable_syslog is not None
+                       else os.getenv('ENABLE_SYSLOG', 'false').lower() == 'true'),
         syslog_host=syslog_host or os.getenv('SYSLOG_HOST', 'localhost'),
         syslog_port=syslog_port or int(os.getenv('SYSLOG_PORT', '514')),
         syslog_facility=syslog_facility or os.getenv('SYSLOG_FACILITY', 'LOCAL0')

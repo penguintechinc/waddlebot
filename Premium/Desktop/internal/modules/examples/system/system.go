@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -144,21 +143,21 @@ func (m *SystemModule) getSystemInfo(ctx context.Context) (map[string]interface{
 	}
 
 	return map[string]interface{}{
-		"hostname":        hostInfo.Hostname,
-		"os":              hostInfo.OS,
-		"platform":        hostInfo.Platform,
-		"platform_family": hostInfo.PlatformFamily,
+		"hostname":         hostInfo.Hostname,
+		"os":               hostInfo.OS,
+		"platform":         hostInfo.Platform,
+		"platform_family":  hostInfo.PlatformFamily,
 		"platform_version": hostInfo.PlatformVersion,
-		"kernel_version":  hostInfo.KernelVersion,
-		"kernel_arch":     hostInfo.KernelArch,
-		"uptime":          hostInfo.Uptime,
-		"boot_time":       hostInfo.BootTime,
-		"processes":       hostInfo.Procs,
-		"go_version":      runtime.Version(),
-		"go_arch":         runtime.GOARCH,
-		"go_os":           runtime.GOOS,
-		"cpu_count":       runtime.NumCPU(),
-		"timestamp":       time.Now().Unix(),
+		"kernel_version":   hostInfo.KernelVersion,
+		"kernel_arch":      hostInfo.KernelArch,
+		"uptime":           hostInfo.Uptime,
+		"boot_time":        hostInfo.BootTime,
+		"processes":        hostInfo.Procs,
+		"go_version":       runtime.Version(),
+		"go_arch":          runtime.GOARCH,
+		"go_os":            runtime.GOOS,
+		"cpu_count":        runtime.NumCPU(),
+		"timestamp":        time.Now().Unix(),
 	}, nil
 }
 
@@ -278,14 +277,14 @@ func (m *SystemModule) getDiskUsage(ctx context.Context, parameters map[string]s
 	}
 
 	return map[string]interface{}{
-		"path":        path,
-		"total":       usage.Total,
-		"free":        usage.Free,
-		"used":        usage.Used,
-		"used_percent": usage.UsedPercent,
-		"inodes_total": usage.InodesTotal,
-		"inodes_used":  usage.InodesUsed,
-		"inodes_free":  usage.InodesFree,
+		"path":                path,
+		"total":               usage.Total,
+		"free":                usage.Free,
+		"used":                usage.Used,
+		"used_percent":        usage.UsedPercent,
+		"inodes_total":        usage.InodesTotal,
+		"inodes_used":         usage.InodesUsed,
+		"inodes_free":         usage.InodesFree,
 		"inodes_used_percent": usage.InodesUsedPercent,
 	}, nil
 }
@@ -304,20 +303,20 @@ func (m *SystemModule) getMemoryInfo(ctx context.Context) (map[string]interface{
 
 	return map[string]interface{}{
 		"virtual": map[string]interface{}{
-			"total":       memInfo.Total,
-			"available":   memInfo.Available,
-			"used":        memInfo.Used,
+			"total":        memInfo.Total,
+			"available":    memInfo.Available,
+			"used":         memInfo.Used,
 			"used_percent": memInfo.UsedPercent,
-			"free":        memInfo.Free,
-			"active":      memInfo.Active,
-			"inactive":    memInfo.Inactive,
-			"buffers":     memInfo.Buffers,
-			"cached":      memInfo.Cached,
+			"free":         memInfo.Free,
+			"active":       memInfo.Active,
+			"inactive":     memInfo.Inactive,
+			"buffers":      memInfo.Buffers,
+			"cached":       memInfo.Cached,
 		},
 		"swap": map[string]interface{}{
-			"total":       swapInfo.Total,
-			"used":        swapInfo.Used,
-			"free":        swapInfo.Free,
+			"total":        swapInfo.Total,
+			"used":         swapInfo.Used,
+			"free":         swapInfo.Free,
 			"used_percent": swapInfo.UsedPercent,
 		},
 	}, nil

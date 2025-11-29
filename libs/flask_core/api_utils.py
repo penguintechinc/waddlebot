@@ -5,14 +5,162 @@ API Utilities
 Standardized API response formatting, error handling, and decorators.
 """
 
-from quart import jsonify, request
+from quart import jsonify, request, Blueprint
 from functools import wraps
 from typing import Any, Dict, Optional, Callable, List
 import time
 import logging
+import os
+import psutil
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# Metrics storage for Prometheus format
+_metrics = {
+    'requests_total': 0,
+    'requests_success': 0,
+    'requests_error': 0,
+    'request_duration_seconds': []
+}
+
+
+def create_health_blueprint(module_name: str, module_version: str):
+    """
+    Create a blueprint with /health, /healthz, and /metrics endpoints.
+
+    Args:
+        module_name: Name of the module
+        module_version: Version of the module
+
+    Returns:
+        Blueprint with health and metrics endpoints
+    """
+    health_bp = Blueprint('health', __name__)
+
+    @health_bp.route('/health')
+    async def health():
+        """Basic health check endpoint."""
+        return jsonify({
+            "status": "healthy",
+            "module": module_name,
+            "version": module_version,
+            "timestamp": datetime.utcnow().isoformat()
+        }), 200
+
+    @health_bp.route('/healthz')
+    async def healthz():
+        """Kubernetes liveness/readiness probe endpoint."""
+        try:
+            # Basic checks
+            checks = {
+                "status": "healthy",
+                "module": module_name,
+                "version": module_version,
+                "checks": {
+                    "memory": "ok",
+                    "cpu": "ok"
+                }
+            }
+
+            # Memory check (fail if > 90% used)
+            memory = psutil.virtual_memory()
+            if memory.percent > 90:
+                checks["checks"]["memory"] = "warning"
+                checks["status"] = "degraded"
+
+            # CPU check (fail if > 95% used)
+            cpu_percent = psutil.cpu_percent(interval=0.1)
+            if cpu_percent > 95:
+                checks["checks"]["cpu"] = "warning"
+                checks["status"] = "degraded"
+
+            checks["timestamp"] = datetime.utcnow().isoformat()
+
+            status_code = 200 if checks["status"] == "healthy" else 503
+            return jsonify(checks), status_code
+
+        except Exception as e:
+            return jsonify({
+                "status": "unhealthy",
+                "module": module_name,
+                "version": module_version,
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }), 503
+
+    @health_bp.route('/metrics')
+    async def metrics():
+        """Prometheus metrics endpoint."""
+        try:
+            # Get process metrics
+            process = psutil.Process(os.getpid())
+            memory_info = process.memory_info()
+
+            # Calculate average request duration
+            avg_duration = 0
+            if _metrics['request_duration_seconds']:
+                recent = _metrics['request_duration_seconds'][-100:]
+                avg_duration = sum(recent) / len(recent)
+
+            # Format as Prometheus text format
+            metrics_output = f"""# HELP waddlebot_info Module information
+# TYPE waddlebot_info gauge
+waddlebot_info{{module="{module_name}",version="{module_version}"}} 1
+
+# HELP waddlebot_requests_total Total number of requests
+# TYPE waddlebot_requests_total counter
+waddlebot_requests_total{{module="{module_name}"}} {_metrics['requests_total']}
+
+# HELP waddlebot_requests_success_total Total successful requests
+# TYPE waddlebot_requests_success_total counter
+waddlebot_requests_success_total{{module="{module_name}"}} {_metrics['requests_success']}
+
+# HELP waddlebot_requests_error_total Total failed requests
+# TYPE waddlebot_requests_error_total counter
+waddlebot_requests_error_total{{module="{module_name}"}} {_metrics['requests_error']}
+
+# HELP waddlebot_request_duration_seconds Average request duration
+# TYPE waddlebot_request_duration_seconds gauge
+waddlebot_request_duration_seconds{{module="{module_name}"}} {avg_duration:.6f}
+
+# HELP waddlebot_memory_bytes Memory usage in bytes
+# TYPE waddlebot_memory_bytes gauge
+waddlebot_memory_bytes{{module="{module_name}",type="rss"}} {memory_info.rss}
+waddlebot_memory_bytes{{module="{module_name}",type="vms"}} {memory_info.vms}
+
+# HELP waddlebot_cpu_percent CPU usage percentage
+# TYPE waddlebot_cpu_percent gauge
+waddlebot_cpu_percent{{module="{module_name}"}} {process.cpu_percent()}
+
+# HELP waddlebot_open_files Number of open file descriptors
+# TYPE waddlebot_open_files gauge
+waddlebot_open_files{{module="{module_name}"}} {len(process.open_files())}
+
+# HELP waddlebot_threads Number of threads
+# TYPE waddlebot_threads gauge
+waddlebot_threads{{module="{module_name}"}} {process.num_threads()}
+"""
+            from quart import Response
+            return Response(metrics_output, mimetype='text/plain')
+
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    return health_bp
+
+
+def record_request_metrics(success: bool, duration: float):
+    """Record request metrics for Prometheus."""
+    _metrics['requests_total'] += 1
+    if success:
+        _metrics['requests_success'] += 1
+    else:
+        _metrics['requests_error'] += 1
+    _metrics['request_duration_seconds'].append(duration)
+    # Keep only last 1000 durations
+    if len(_metrics['request_duration_seconds']) > 1000:
+        _metrics['request_duration_seconds'] = _metrics['request_duration_seconds'][-1000:]
 
 
 def success_response(
@@ -310,7 +458,6 @@ def rate_limit(requests_per_minute: int = 60):
         @wraps(f)
         async def decorated_function(*args, **kwargs):
             from quart import current_app
-            import hashlib
 
             # Get rate limiter from app
             rate_limiter = current_app.config.get('rate_limiter')
@@ -323,11 +470,11 @@ def rate_limit(requests_per_minute: int = 60):
             user_info = getattr(request, 'current_user', None)
             user_id = user_info['user_id'] if user_info else request.remote_addr
 
-            key = f"rate_limit:{user_id}:{f.__name__}"
+            rate_key = f"rate_limit:{user_id}:{f.__name__}"
 
             # Check rate limit
             is_allowed = await rate_limiter.check_rate_limit(
-                key=key,
+                key=rate_key,
                 limit=requests_per_minute,
                 window_seconds=60
             )
@@ -373,7 +520,7 @@ def validate_request(schema: Dict[str, Any]):
         async def decorated_function(*args, **kwargs):
             try:
                 data = await request.get_json()
-            except Exception as e:
+            except Exception:
                 return error_response("Invalid JSON", status_code=400)
 
             # Validate required fields

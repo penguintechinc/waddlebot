@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	// License text that users must accept
+	// LicenseText is the premium license text that users must accept
 	LicenseText = `
 WaddleBot Premium Desktop Bridge License Agreement
 
@@ -66,7 +66,7 @@ func ValidateLicense() bool {
 	if !hasAcceptedLicense() {
 		return promptForLicenseAcceptance()
 	}
-	
+
 	// TODO: In production, this should verify the user's premium subscription status
 	// For now, we'll assume the license is valid if accepted
 	return true
@@ -80,7 +80,7 @@ func hasAcceptedLicense() bool {
 	}
 
 	licenseFile := fmt.Sprintf("%s/.waddlebot-bridge/%s", homeDir, licenseAcceptanceFile)
-	
+
 	// Check if license acceptance file exists
 	if _, err := os.Stat(licenseFile); os.IsNotExist(err) {
 		return false
@@ -99,14 +99,14 @@ func hasAcceptedLicense() bool {
 // promptForLicenseAcceptance displays the license and prompts for acceptance
 func promptForLicenseAcceptance() bool {
 	fmt.Println(LicenseText)
-	fmt.Println("\n" + strings.Repeat("=", 80))
+	fmt.Println(strings.Repeat("=", 80))
 	fmt.Println("WaddleBot Premium Desktop Bridge License Agreement")
 	fmt.Println(strings.Repeat("=", 80))
-	
+
 	fmt.Print("\nDo you have an active WaddleBot Premium subscription? (y/N): ")
 	var hasSubscription string
 	fmt.Scanln(&hasSubscription)
-	
+
 	if strings.ToLower(hasSubscription) != "y" && strings.ToLower(hasSubscription) != "yes" {
 		fmt.Println("\nThis software requires an active WaddleBot Premium subscription.")
 		fmt.Println("Please visit https://waddlebot.io/premium to subscribe.")
@@ -156,13 +156,13 @@ func saveLicenseAcceptance() error {
 // generateLicenseHash generates a hash of the license text and system info
 func generateLicenseHash() string {
 	// Combine license text with system information for uniqueness
-	data := fmt.Sprintf("%s|%s|%s|%d", 
-		LicenseText, 
-		runtime.GOOS, 
-		runtime.GOARCH, 
+	data := fmt.Sprintf("%s|%s|%s|%d",
+		LicenseText,
+		runtime.GOOS,
+		runtime.GOARCH,
 		time.Now().Unix()/86400, // Day-based timestamp
 	)
-	
+
 	hash := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(hash[:])
 }
