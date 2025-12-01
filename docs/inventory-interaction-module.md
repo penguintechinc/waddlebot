@@ -343,10 +343,6 @@ tail -f /var/log/waddlebotlog/inventory_interaction_module_audit.log
 grep "ERROR" /var/log/waddlebotlog/inventory_interaction_module_error.log
 ```
 
-## Contributing
-
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines on contributing to the inventory interaction module.
-
 ## License
 
 This module is part of the WaddleBot project and is licensed under the same terms as the main project.

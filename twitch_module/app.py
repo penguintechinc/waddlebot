@@ -1,116 +1,56 @@
 """
-Main application file for the Twitch py4web module
+Twitch collector - Quart Application
 """
-
+import asyncio
 import os
-import logging
-from py4web import action, request, response, abort, redirect, Field
-from py4web.core import Fixture
+import sys
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from quart import Blueprint, Quart
 
-# Import the module components
-from . import models
-from .controllers import webhooks, api, auth
+# Setup path for shared libraries
+sys.path.insert(0,
+                os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                             'libs'))
 
-# Import database
-from .models import db
+from flask_core import (async_endpoint, create_health_blueprint,  # noqa: E402
+                        init_database, setup_aaa_logging,
+                        success_response)
+from config import Config  # noqa: E402
 
-@action("twitch")
-@action("twitch/")
-def index():
-    """Main index page for the Twitch module"""
-    return {
-        "message": "WaddleBot Twitch Module",
-        "version": "1.0.0",
-        "endpoints": {
-            "auth": {
-                "login": "/twitch/auth/login",
-                "callback": "/twitch/auth/callback",
-                "status": "/twitch/auth/status",
-                "users": "/twitch/auth/users"
-            },
-            "api": {
-                "user": "/twitch/api/user/<user_id>",
-                "subscriptions": "/twitch/api/subscriptions",
-                "channels": "/twitch/api/channels"
-            },
-            "webhooks": {
-                "events": "/twitch/webhook",
-                "list_events": "/twitch/events",
-                "list_activities": "/twitch/activities"
-            }
-        }
-    }
+app = Quart(__name__)
 
-@action("twitch/health")
-def health_check():
-    """Health check endpoint"""
-    try:
-        # Test database connection
-        db.executesql("SELECT 1")
-        
-        return {
-            "status": "healthy",
-            "database": "connected",
-            "timestamp": str(db.executesql("SELECT datetime('now')")[0][0])
-        }
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        response.status = 503
-        return {
-            "status": "unhealthy",
-            "error": str(e)
-        }
+# Register health/metrics endpoints
+health_bp = create_health_blueprint(Config.MODULE_NAME, Config.MODULE_VERSION)
+app.register_blueprint(health_bp)
 
-@action("twitch/info")
-def module_info():
-    """Module information and statistics"""
-    try:
-        # Get database statistics
-        stats = {
-            "channels": db(db.twitch_channels).count(),
-            "subscriptions": db(db.twitch_subscriptions).count(),
-            "events": db(db.twitch_events).count(),
-            "activities": db(db.twitch_activities).count(),
-            "authenticated_users": db(db.twitch_tokens).count()
-        }
-        
-        # Get recent activity
-        recent_events = db(db.twitch_events).select(
-            orderby=~db.twitch_events.created_at,
-            limitby=(0, 5)
-        )
-        
-        recent_activities = db(db.twitch_activities).select(
-            orderby=~db.twitch_activities.created_at,
-            limitby=(0, 5)
-        )
-        
-        return {
-            "module": "WaddleBot Twitch Module",
-            "version": "1.0.0",
-            "statistics": stats,
-            "recent_events": [dict(event) for event in recent_events],
-            "recent_activities": [dict(activity) for activity in recent_activities]
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting module info: {str(e)}")
-        response.status = 500
-        return {"error": str(e)}
+api_bp = Blueprint('api', __name__, url_prefix='/api/v1')
+logger = setup_aaa_logging(Config.MODULE_NAME, Config.MODULE_VERSION)
 
-# Initialize database tables if needed
-def init_database():
-    """Initialize database tables"""
-    try:
-        db.commit()
-        logger.info("Database initialized successfully")
-    except Exception as e:
-        logger.error(f"Database initialization failed: {str(e)}")
-        raise
+dal = None
 
-# Call initialization
-init_database()
+
+@app.before_serving
+async def startup():
+    global dal
+    logger.system("Starting twitch_module", action="startup")
+    dal = init_database(Config.DATABASE_URL)
+    app.config['dal'] = dal
+    logger.system("twitch_module started", result="SUCCESS")
+
+
+@api_bp.route('/status')
+@async_endpoint
+async def status():
+    return success_response({
+        "status": "operational",
+        "module": Config.MODULE_NAME
+    })
+
+app.register_blueprint(api_bp)
+
+if __name__ == '__main__':
+    import hypercorn.asyncio
+    from hypercorn.config import Config as HyperConfig
+    config = HyperConfig()
+    config.bind = [f"0.0.0.0:{Config.MODULE_PORT}"]
+    asyncio.run(hypercorn.asyncio.serve(app, config))

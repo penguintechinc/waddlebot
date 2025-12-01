@@ -1,5 +1,1 @@
-"""
-Reputation module services
-"""
-
-from .reputation_service import ReputationService
+"""Services for reputation_module_flask"""

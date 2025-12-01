@@ -1,1 +1,1 @@
-# Services package for YouTube Music module
+"""Services for youtube_music_interaction_module_flask"""

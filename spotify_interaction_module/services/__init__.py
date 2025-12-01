@@ -1,1 +1,1 @@
-# Services package for Spotify module
+"""Services for spotify_interaction_module_flask"""

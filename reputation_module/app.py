@@ -1,50 +1,53 @@
 """
-Reputation module py4web application
+Reputation tracking - Quart Application
 """
-
-from py4web import action, request, response, HTTP
-from py4web.core import Fixture
 import os
-import logging
+import sys
+import asyncio
 
-from .models import db
-from .controllers import reputation_controller
-from .services.reputation_service import ReputationService
+from quart import Quart, Blueprint
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'libs'))  # noqa: E402
+from flask_core import (  # noqa: E402
+    setup_aaa_logging,
+    init_database,
+    async_endpoint,
+    success_response,
+    create_health_blueprint,
+)
+from config import Config  # noqa: E402
 
-# Initialize reputation service
-reputation_service = ReputationService()
+app = Quart(__name__)
 
-# Health check endpoint
-@action("health", method=["GET"])
-def health():
-    """Health check endpoint"""
-    try:
-        # Test database connection
-        db.executesql("SELECT 1")
-        return {"status": "healthy", "module": "reputation", "version": "1.0.0"}
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        raise HTTP(500, f"Health check failed: {str(e)}")
+# Register health/metrics endpoints
+health_bp = create_health_blueprint(Config.MODULE_NAME, Config.MODULE_VERSION)
+app.register_blueprint(health_bp)
 
-# Initialize global community on startup
-@action("init", method=["POST"])
-def initialize():
-    """Initialize global community and default reputation scores"""
-    try:
-        result = reputation_service.initialize_global_community()
-        return {"success": True, "message": "Global community initialized", "data": result}
-    except Exception as e:
-        logger.error(f"Initialization failed: {str(e)}")
-        raise HTTP(500, f"Initialization failed: {str(e)}")
+api_bp = Blueprint('api', __name__, url_prefix='/api/v1')
+logger = setup_aaa_logging(Config.MODULE_NAME, Config.MODULE_VERSION)
 
-if __name__ == "__main__":
-    # Auto-initialize on startup
-    try:
-        reputation_service.initialize_global_community()
-        logger.info("Global community initialized on startup")
-    except Exception as e:
-        logger.error(f"Failed to initialize global community: {str(e)}")
+dal = None
+
+
+@app.before_serving
+async def startup():
+    global dal
+    logger.system("Starting reputation_module", action="startup")
+    dal = init_database(Config.DATABASE_URL)
+    app.config['dal'] = dal
+    logger.system("reputation_module started", result="SUCCESS")
+
+
+@api_bp.route('/status')
+@async_endpoint
+async def status():
+    return success_response({"status": "operational", "module": Config.MODULE_NAME})
+
+app.register_blueprint(api_bp)
+
+if __name__ == '__main__':
+    import hypercorn.asyncio
+    from hypercorn.config import Config as HyperConfig
+    config = HyperConfig()
+    config.bind = [f"0.0.0.0:{Config.MODULE_PORT}"]
+    asyncio.run(hypercorn.asyncio.serve(app, config))

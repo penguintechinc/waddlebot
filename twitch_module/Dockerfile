@@ -1,39 +1,27 @@
-FROM python:3.12-slim
+# Build from parent directory: docker build -f twitch_module_flask/Dockerfile -t waddlebot/twitch:latest .
 
-LABEL maintainer="WaddleBot Team"
-LABEL description="WaddleBot Twitch Collector Module"
+FROM python:3.13-slim
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Copy shared library
+COPY libs/flask_core /app/libs/flask_core
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Install shared library
+RUN cd /app/libs/flask_core && pip install --no-cache-dir .
 
-# Install Python dependencies
+# Copy module files
+COPY twitch_module_flask/requirements.txt /app/
+COPY twitch_module_flask /app/
+
+# Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
-
-# Create non-root user
-RUN useradd -m -u 1000 waddlebot && \
-    chown -R waddlebot:waddlebot /app
-
-USER waddlebot
+# Create log directory
+RUN mkdir -p /var/log/waddlebotlog
 
 # Expose port
-EXPOSE 8000
+EXPOSE 8002
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/twitch/health || exit 1
-
-# Run the application
-CMD ["python", "-m", "py4web", "run", "apps", "--host", "0.0.0.0", "--port", "8000"]
+# Run with Hypercorn
+CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8002", "--workers", "4"]

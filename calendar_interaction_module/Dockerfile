@@ -1,31 +1,27 @@
-FROM python:3.12-slim
+# Build from parent directory: docker build -f calendar_interaction_module_flask/Dockerfile -t waddlebot/calendar-interaction:latest .
 
-# Set working directory
+FROM python:3.13-slim
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
+# Copy shared library
+COPY libs/flask_core /app/libs/flask_core
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
+# Install shared library
+RUN cd /app/libs/flask_core && pip install --no-cache-dir .
+
+# Copy module files
+COPY calendar_interaction_module_flask/requirements.txt /app/
+COPY calendar_interaction_module_flask /app/
+
+# Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
-
-# Create non-root user
-RUN groupadd -r waddlebot && useradd -r -g waddlebot waddlebot
-RUN chown -R waddlebot:waddlebot /app
-USER waddlebot
+# Create log directory
+RUN mkdir -p /var/log/waddlebotlog
 
 # Expose port
 EXPOSE 8030
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8030/health', timeout=5)"
-
-# Run the application
-CMD ["python", "app.py"]
+# Run with Hypercorn
+CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8030", "--workers", "4"]

@@ -1,1267 +1,742 @@
 """
-Labels Core Module for WaddleBot
-High-performance multi-threaded module for label management, user verification, and entity group role assignment
-Designed to handle thousands of requests per second
+Labels Core Module for WaddleBot - Flask/Quart Implementation
+Universal label management system supporting any entity type
 """
-
-from py4web import action, request, response, DAL, Field, HTTP
-from py4web.utils.cors import CORS
-import json
-import os
-import logging
-import hashlib
-import secrets
-import threading
-import time
-from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import lru_cache
-from typing import Dict, List, Optional, Tuple, Any
-import requests
-from dataclasses import dataclass, asdict
-from collections import defaultdict
 import asyncio
-from queue import Queue
-import redis
+import os
+import sys
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from quart import Blueprint, Quart, request
 
-# Database connection with connection pooling
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite://storage.db")
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'libs'))
 
-db = DAL(DATABASE_URL, pool_size=50, migrate=True)
-
-# Redis connection for caching
-REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
-REDIS_DB = int(os.environ.get("REDIS_DB", "0"))
-REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD")
-
-try:
-    redis_client = redis.Redis(
-        host=REDIS_HOST,
-        port=REDIS_PORT,
-        db=REDIS_DB,
-        password=REDIS_PASSWORD,
-        decode_responses=True,
-        socket_timeout=5,
-        socket_connect_timeout=5
-    )
-    redis_client.ping()
-    logger.info("Redis connection established")
-except Exception as e:
-    logger.warning(f"Redis connection failed: {e}")
-    redis_client = None
-
-# Thread pool for concurrent operations
-MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "20"))
-executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
-
-# Performance configuration
-CACHE_TTL = int(os.environ.get("CACHE_TTL", "300"))  # 5 minutes
-BULK_OPERATION_SIZE = int(os.environ.get("BULK_OPERATION_SIZE", "1000"))
-REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT", "30"))
-
-# Define database tables with proper indexing
-db.define_table(
-    'labels',
-    Field('id', 'id'),
-    Field('name', 'string', required=True),
-    Field('category', 'string', required=True),  # user, module, community, entityGroup
-    Field('description', 'text'),
-    Field('color', 'string'),  # Hex color code
-    Field('is_system', 'boolean', default=False),  # System-defined labels
-    Field('created_by', 'string', required=True),
-    Field('created_at', 'datetime', default=datetime.utcnow),
-    Field('updated_at', 'datetime', update=datetime.utcnow),
-    Field('is_active', 'boolean', default=True),
-    migrate=True
+from config import Config  # noqa: E402
+from flask_core import (  # noqa: E402
+    async_endpoint,
+    create_health_blueprint,
+    error_response,
+    init_database,
+    setup_aaa_logging,
+    success_response,
 )
 
-db.define_table(
-    'entity_labels',
-    Field('id', 'id'),
-    Field('entity_id', 'string', required=True),
-    Field('entity_type', 'string', required=True),  # user, module, community, entityGroup
-    Field('label_id', 'reference labels', required=True),
-    Field('applied_by', 'string', required=True),
-    Field('applied_at', 'datetime', default=datetime.utcnow),
-    Field('expires_at', 'datetime'),  # Optional expiration
-    Field('metadata', 'json'),  # Additional label-specific data
-    Field('is_active', 'boolean', default=True),
-    migrate=True
-)
+app = Quart(__name__)
 
-db.define_table(
-    'user_identities',
-    Field('id', 'id'),
-    Field('user_id', 'string', required=True),  # WaddleBot user ID
-    Field('platform', 'string', required=True),  # twitch, discord, slack
-    Field('platform_id', 'string', required=True),  # Platform-specific user ID
-    Field('platform_username', 'string', required=True),
-    Field('verification_code', 'string'),
-    Field('verification_expires', 'datetime'),
-    Field('is_verified', 'boolean', default=False),
-    Field('verified_at', 'datetime'),
-    Field('verification_method', 'string'),  # code, oauth, manual
-    Field('metadata', 'json'),
-    Field('created_at', 'datetime', default=datetime.utcnow),
-    Field('updated_at', 'datetime', update=datetime.utcnow),
-    Field('is_active', 'boolean', default=True),
-    migrate=True
-)
+# Register health/metrics endpoints
+health_bp = create_health_blueprint(Config.MODULE_NAME, Config.MODULE_VERSION)
+app.register_blueprint(health_bp)
 
-db.define_table(
-    'entity_groups',
-    Field('id', 'id'),
-    Field('entity_id', 'string', required=True),  # Community/server ID
-    Field('platform', 'string', required=True),  # discord, twitch
-    Field('group_type', 'string', required=True),  # role, moderator, vip
-    Field('group_id', 'string', required=True),  # Platform-specific group ID
-    Field('group_name', 'string', required=True),
-    Field('auto_assign_rules', 'json'),  # Label-based assignment rules
-    Field('is_auto_assign', 'boolean', default=False),
-    Field('created_by', 'string', required=True),
-    Field('created_at', 'datetime', default=datetime.utcnow),
-    Field('updated_at', 'datetime', update=datetime.utcnow),
-    Field('is_active', 'boolean', default=True),
-    migrate=True
-)
+api_bp = Blueprint('api', __name__, url_prefix='/api/v1')
+logger = setup_aaa_logging(Config.MODULE_NAME, Config.MODULE_VERSION)
 
-db.define_table(
-    'entity_group_members',
-    Field('id', 'id'),
-    Field('entity_group_id', 'reference entity_groups', required=True),
-    Field('user_id', 'string', required=True),
-    Field('platform_id', 'string', required=True),
-    Field('assigned_by', 'string', required=True),
-    Field('assigned_reason', 'string'),  # manual, auto_label, auto_rule
-    Field('assigned_at', 'datetime', default=datetime.utcnow),
-    Field('expires_at', 'datetime'),
-    Field('is_active', 'boolean', default=True),
-    migrate=True
-)
+dal = None
 
-db.define_table(
-    'label_search_cache',
-    Field('id', 'id'),
-    Field('search_key', 'string', required=True, unique=True),
-    Field('entity_type', 'string', required=True),
-    Field('results', 'json', required=True),
-    Field('created_at', 'datetime', default=datetime.utcnow),
-    Field('expires_at', 'datetime', required=True),
-    migrate=True
-)
+# Supported entity types - extensible for any item type
+ENTITY_TYPES = [
+    'user',           # User labels
+    'module',         # Module labels
+    'community',      # Community labels
+    'entityGroup',    # Entity group labels
+    'item',           # Generic items (inventory, resources, etc.)
+    'event',          # Calendar events
+    'memory',         # Memories (quotes, urls, notes)
+    'playlist',       # Music playlists
+    'browser_source', # Browser sources
+    'command',        # Custom commands
+    'alias',          # Command aliases
+]
 
-# Create comprehensive indexes for performance
-try:
-    # Label indexes
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_labels_category ON labels(category, is_active);')
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_labels_name ON labels(name, is_active);')
-    
-    # Entity label indexes
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_entity_labels_entity ON entity_labels(entity_id, entity_type, is_active);')
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_entity_labels_label ON entity_labels(label_id, is_active);')
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_entity_labels_composite ON entity_labels(entity_type, label_id, is_active);')
-    
-    # User identity indexes
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_user_identities_user ON user_identities(user_id, is_active);')
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_user_identities_platform ON user_identities(platform, platform_id, is_active);')
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_user_identities_verification ON user_identities(verification_code, verification_expires);')
-    
-    # Entity group indexes
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_entity_groups_entity ON entity_groups(entity_id, platform, is_active);')
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_entity_groups_auto ON entity_groups(is_auto_assign, is_active);')
-    
-    # Entity group member indexes
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_entity_group_members_group ON entity_group_members(entity_group_id, is_active);')
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_entity_group_members_user ON entity_group_members(user_id, is_active);')
-    
-    # Search cache indexes
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_label_search_cache_key ON label_search_cache(search_key, expires_at);')
-    db.executesql('CREATE INDEX IF NOT EXISTS idx_label_search_cache_expire ON label_search_cache(expires_at);')
-    
-except Exception as e:
-    logger.warning(f"Could not create indexes: {e}")
+# Label limits per entity type
+LABEL_LIMITS = {
+    'community': 5,
+    'user': 5,        # Per community
+    'item': 10,       # Items can have more labels
+    'event': 5,
+    'memory': 10,
+    'default': 5,
+}
 
-db.commit()
 
-# CORS setup
-CORS(response)
-
-# Module configuration
-MODULE_NAME = os.environ.get("MODULE_NAME", "labels_core")
-MODULE_VERSION = os.environ.get("MODULE_VERSION", "1.0.0")
-ROUTER_API_URL = os.environ.get("ROUTER_API_URL", "http://router:8000/router")
-
-# Data classes for type safety
 @dataclass
 class LabelInfo:
+    """Label information dataclass"""
     id: int
     name: str
     category: str
     description: str
     color: str
+    icon: Optional[str]
     is_system: bool
     created_by: str
-    created_at: datetime
+    created_at: str
     is_active: bool
+
 
 @dataclass
 class EntityLabelInfo:
+    """Entity label assignment information"""
+    id: int
     entity_id: str
     entity_type: str
+    label_id: int
     label_name: str
     label_color: str
+    label_icon: Optional[str]
     applied_by: str
-    applied_at: datetime
-    expires_at: Optional[datetime]
-    metadata: Dict
+    applied_at: str
+    expires_at: Optional[str]
+    metadata: Dict[str, Any]
 
-@dataclass
-class UserIdentityInfo:
-    user_id: str
-    platform: str
-    platform_id: str
-    platform_username: str
-    is_verified: bool
-    verified_at: Optional[datetime]
-    verification_method: str
 
-# Cache management
-class CacheManager:
-    def __init__(self):
-        self.local_cache = {}
-        self.cache_timestamps = {}
-        self.cache_lock = threading.RLock()
-    
-    def get(self, key: str) -> Any:
-        with self.cache_lock:
-            # Try Redis first
-            if redis_client:
-                try:
-                    value = redis_client.get(f"labels:{key}")
-                    if value:
-                        return json.loads(value)
-                except Exception as e:
-                    logger.warning(f"Redis get error: {e}")
-            
-            # Fall back to local cache
-            if key in self.local_cache:
-                if time.time() - self.cache_timestamps[key] < CACHE_TTL:
-                    return self.local_cache[key]
-                else:
-                    del self.local_cache[key]
-                    del self.cache_timestamps[key]
-            
-            return None
-    
-    def set(self, key: str, value: Any, ttl: int = CACHE_TTL):
-        with self.cache_lock:
-            # Set in Redis
-            if redis_client:
-                try:
-                    redis_client.setex(f"labels:{key}", ttl, json.dumps(value))
-                except Exception as e:
-                    logger.warning(f"Redis set error: {e}")
-            
-            # Set in local cache
-            self.local_cache[key] = value
-            self.cache_timestamps[key] = time.time()
-    
-    def delete(self, key: str):
-        with self.cache_lock:
-            # Delete from Redis
-            if redis_client:
-                try:
-                    redis_client.delete(f"labels:{key}")
-                except Exception as e:
-                    logger.warning(f"Redis delete error: {e}")
-            
-            # Delete from local cache
-            if key in self.local_cache:
-                del self.local_cache[key]
-                del self.cache_timestamps[key]
+def define_tables(db):
+    """Define database tables for labels system"""
+    # Labels table - stores label definitions
+    db.define_table(
+        'labels',
+        db.Field('name', 'string', length=100, notnull=True),
+        db.Field('category', 'string', length=50, notnull=True),
+        db.Field('description', 'text'),
+        db.Field('color', 'string', length=7, default='#6366f1'),
+        db.Field('icon', 'string', length=50),
+        db.Field('is_system', 'boolean', default=False),
+        db.Field('created_by', 'string', length=100, notnull=True),
+        db.Field('created_at', 'datetime', default=datetime.utcnow),
+        db.Field('updated_at', 'datetime', update=datetime.utcnow),
+        db.Field('is_active', 'boolean', default=True),
+        migrate=True
+    )
 
-cache_manager = CacheManager()
+    # Entity labels table - stores label assignments to entities
+    db.define_table(
+        'entity_labels',
+        db.Field('entity_id', 'string', length=255, notnull=True),
+        db.Field('entity_type', 'string', length=50, notnull=True),
+        db.Field('label_id', 'reference labels', notnull=True),
+        db.Field('community_id', 'string', length=100),
+        db.Field('applied_by', 'string', length=100, notnull=True),
+        db.Field('applied_at', 'datetime', default=datetime.utcnow),
+        db.Field('expires_at', 'datetime'),
+        db.Field('metadata', 'json'),
+        db.Field('is_active', 'boolean', default=True),
+        migrate=True
+    )
 
-# Background task queue for async operations
-task_queue = Queue()
+    db.commit()
+    return db
 
-def background_worker():
-    """Background worker for processing async tasks"""
-    while True:
-        try:
-            task = task_queue.get(timeout=1)
-            if task is None:
-                break
-            
-            task_type = task.get('type')
-            if task_type == 'auto_assign_roles':
-                process_auto_assign_roles(task['data'])
-            elif task_type == 'cleanup_expired':
-                cleanup_expired_items()
-            elif task_type == 'update_search_cache':
-                update_search_cache(task['data'])
-            
-            task_queue.task_done()
-        except Exception as e:
-            if str(e) != "Empty":  # Ignore timeout exceptions
-                logger.error(f"Background worker error: {e}")
 
-# Start background worker thread
-worker_thread = threading.Thread(target=background_worker, daemon=True)
-worker_thread.start()
+@app.before_serving
+async def startup():
+    """Initialize database on startup"""
+    global dal
+    logger.system("Starting labels_core_module", action="startup")
+    dal = init_database(Config.DATABASE_URL)
+    define_tables(dal)
+    app.config['dal'] = dal
+    logger.system("labels_core_module started", result="SUCCESS")
 
-@action("health", method=["GET"])
-def health():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "module": MODULE_NAME,
-        "version": MODULE_VERSION,
-        "timestamp": datetime.utcnow().isoformat(),
-        "performance": {
-            "cache_size": len(cache_manager.local_cache),
-            "active_threads": threading.active_count(),
-            "task_queue_size": task_queue.qsize()
-        }
-    }
 
-@action("labels", method=["GET"])
-def list_labels():
-    """List labels with caching and filtering"""
+# ============================================================================
+# Label Management Endpoints
+# ============================================================================
+
+@api_bp.route('/labels', methods=['GET'])
+@async_endpoint
+async def list_labels():
+    """
+    List all labels with optional filtering.
+    Query params: category, is_system, search
+    """
     try:
-        category = request.query.get("category")
-        entity_id = request.query.get("entity_id")
-        is_system = request.query.get("is_system")
-        
-        cache_key = f"labels:{category}:{entity_id}:{is_system}"
-        cached_result = cache_manager.get(cache_key)
-        
-        if cached_result:
-            return cached_result
-        
-        # Build query
-        query = (db.labels.is_active == True)
+        category = request.args.get('category')
+        is_system = request.args.get('is_system')
+        search = request.args.get('search', '').strip()
+
+        query = dal.labels.is_active == True  # noqa: E712
+
         if category:
-            query &= (db.labels.category == category)
-        if is_system is not None:
-            query &= (db.labels.is_system == (is_system.lower() == 'true'))
-        
-        # Execute query with thread pool
-        def fetch_labels():
-            labels = db(query).select(
-                orderby=db.labels.category | db.labels.name,
-                limitby=(0, 1000)  # Limit for performance
-            )
-            
-            label_list = []
-            for label in labels:
-                label_info = LabelInfo(
-                    id=label.id,
-                    name=label.name,
-                    category=label.category,
-                    description=label.description or "",
-                    color=label.color or "#000000",
-                    is_system=label.is_system,
-                    created_by=label.created_by,
-                    created_at=label.created_at,
-                    is_active=label.is_active
-                )
-                label_list.append(asdict(label_info))
-            
-            return label_list
-        
-        future = executor.submit(fetch_labels)
-        labels = future.result(timeout=REQUEST_TIMEOUT)
-        
-        result = {
-            "success": True,
-            "labels": labels,
-            "total": len(labels)
-        }
-        
-        cache_manager.set(cache_key, result)
-        return result
-        
-    except Exception as e:
-        logger.error(f"Error listing labels: {str(e)}")
-        return {
-            "success": False,
-            "error": f"Error listing labels: {str(e)}"
-        }
+            if category not in ENTITY_TYPES:
+                return error_response(f"Invalid category. Must be one of: {ENTITY_TYPES}", 400)
+            query &= dal.labels.category == category
 
-@action("labels", method=["POST"])
-def create_label():
-    """Create a new label with validation"""
+        if is_system is not None:
+            query &= dal.labels.is_system == (is_system.lower() == 'true')
+
+        if search:
+            query &= dal.labels.name.contains(search)
+
+        labels = dal(query).select(orderby=dal.labels.category | dal.labels.name)
+
+        label_list = []
+        for label in labels:
+            label_info = LabelInfo(
+                id=label.id,
+                name=label.name,
+                category=label.category,
+                description=label.description or '',
+                color=label.color or '#6366f1',
+                icon=label.icon,
+                is_system=label.is_system,
+                created_by=label.created_by,
+                created_at=label.created_at.isoformat() if label.created_at else '',
+                is_active=label.is_active
+            )
+            label_list.append(asdict(label_info))
+
+        return success_response({
+            'labels': label_list,
+            'total': len(label_list),
+            'supported_types': ENTITY_TYPES
+        })
+
+    except Exception as e:
+        logger.error(f"Error listing labels: {e}")
+        return error_response(f"Error listing labels: {str(e)}", 500)
+
+
+@api_bp.route('/labels', methods=['POST'])
+@async_endpoint
+async def create_label():
+    """
+    Create a new label.
+    Body: name, category, description?, color?, icon?, created_by
+    """
     try:
-        data = request.json
+        data = await request.get_json()
         if not data:
-            raise HTTP(400, "No data provided")
-        
-        name = data.get("name", "").strip()
-        category = data.get("category", "").strip()
-        description = data.get("description", "").strip()
-        color = data.get("color", "#000000").strip()
-        created_by = data.get("created_by", "").strip()
-        
+            return error_response("No data provided", 400)
+
+        name = data.get('name', '').strip()
+        category = data.get('category', '').strip()
+        description = data.get('description', '').strip()
+        color = data.get('color', '#6366f1').strip()
+        icon = data.get('icon', '').strip() or None
+        created_by = data.get('created_by', '').strip()
+
         if not all([name, category, created_by]):
-            raise HTTP(400, "Missing required fields: name, category, created_by")
-        
-        if category not in ["user", "module", "community", "entityGroup"]:
-            raise HTTP(400, "Invalid category. Must be: user, module, community, entityGroup")
-        
+            return error_response("Missing required fields: name, category, created_by", 400)
+
+        if category not in ENTITY_TYPES:
+            return error_response(f"Invalid category. Must be one of: {ENTITY_TYPES}", 400)
+
         # Check if label already exists
-        existing = db(
-            (db.labels.name == name) &
-            (db.labels.category == category) &
-            (db.labels.is_active == True)
+        existing = dal(
+            (dal.labels.name == name) &
+            (dal.labels.category == category) &
+            (dal.labels.is_active == True)  # noqa: E712
         ).select().first()
-        
+
         if existing:
-            raise HTTP(409, f"Label '{name}' already exists in category '{category}'")
-        
+            return error_response(f"Label '{name}' already exists in category '{category}'", 409)
+
         # Create label
-        label_id = db.labels.insert(
+        label_id = dal.labels.insert(
             name=name,
             category=category,
             description=description,
             color=color,
+            icon=icon,
             created_by=created_by
         )
-        
-        db.commit()
-        
-        # Clear related caches
-        cache_manager.delete(f"labels:{category}:None:None")
-        cache_manager.delete(f"labels:None:None:None")
-        
-        return {
-            "success": True,
-            "message": f"Label '{name}' created successfully",
-            "label_id": label_id
-        }
-        
-    except Exception as e:
-        logger.error(f"Error creating label: {str(e)}")
-        raise HTTP(500, f"Error creating label: {str(e)}")
+        dal.commit()
 
-@action("labels/apply", method=["POST"])
-def apply_label():
-    """Apply label to entity with bulk operation support"""
+        logger.audit(
+            f"Label created: {name}",
+            user=created_by,
+            action="create_label",
+            result="SUCCESS"
+        )
+
+        return success_response({
+            'message': f"Label '{name}' created successfully",
+            'label_id': label_id
+        }, 201)
+
+    except Exception as e:
+        logger.error(f"Error creating label: {e}")
+        return error_response(f"Error creating label: {str(e)}", 500)
+
+
+@api_bp.route('/labels/<int:label_id>', methods=['GET'])
+@async_endpoint
+async def get_label(label_id: int):
+    """Get a specific label by ID"""
     try:
-        data = request.json
-        if not data:
-            raise HTTP(400, "No data provided")
-        
-        # Support both single and bulk operations
-        if isinstance(data, list):
-            return apply_labels_bulk(data)
-        
-        entity_id = data.get("entity_id")
-        entity_type = data.get("entity_type")
-        label_id = data.get("label_id")
-        applied_by = data.get("applied_by")
-        expires_at = data.get("expires_at")
-        metadata = data.get("metadata", {})
-        
-        if not all([entity_id, entity_type, label_id, applied_by]):
-            raise HTTP(400, "Missing required fields")
-        
-        # Validate entity type
-        if entity_type not in ["user", "module", "community", "entityGroup"]:
-            raise HTTP(400, "Invalid entity_type")
-        
-        # Check if label exists
-        label = db(db.labels.id == label_id).select().first()
+        label = dal(dal.labels.id == label_id).select().first()
         if not label:
-            raise HTTP(404, "Label not found")
-        
-        # Check if entity_type is a community and validate label limit
-        if entity_type == "community":
-            current_labels = db(
-                (db.entity_labels.entity_id == entity_id) &
-                (db.entity_labels.entity_type == entity_type) &
-                (db.entity_labels.is_active == True)
-            ).count()
-            
-            if current_labels >= 5:
-                raise HTTP(400, "Community can have maximum 5 labels")
-        
-        # Check if entity_type is a user and validate label limit per community
-        if entity_type == "user":
-            # Extract community from applied_by or entity context
-            community_id = data.get("community_id")
-            if community_id:
-                current_user_labels = db(
-                    (db.entity_labels.entity_id == entity_id) &
-                    (db.entity_labels.entity_type == entity_type) &
-                    (db.entity_labels.applied_by == applied_by) &
-                    (db.entity_labels.is_active == True)
-                ).count()
-                
-                if current_user_labels >= 5:
-                    raise HTTP(400, "User can have maximum 5 labels per community")
-        
+            return error_response("Label not found", 404)
+
+        label_info = LabelInfo(
+            id=label.id,
+            name=label.name,
+            category=label.category,
+            description=label.description or '',
+            color=label.color or '#6366f1',
+            icon=label.icon,
+            is_system=label.is_system,
+            created_by=label.created_by,
+            created_at=label.created_at.isoformat() if label.created_at else '',
+            is_active=label.is_active
+        )
+
+        return success_response({'label': asdict(label_info)})
+
+    except Exception as e:
+        logger.error(f"Error getting label: {e}")
+        return error_response(f"Error getting label: {str(e)}", 500)
+
+
+@api_bp.route('/labels/<int:label_id>', methods=['PUT'])
+@async_endpoint
+async def update_label(label_id: int):
+    """Update an existing label"""
+    try:
+        data = await request.get_json()
+        if not data:
+            return error_response("No data provided", 400)
+
+        label = dal(dal.labels.id == label_id).select().first()
+        if not label:
+            return error_response("Label not found", 404)
+
+        if label.is_system:
+            return error_response("Cannot modify system labels", 403)
+
+        update_data = {}
+        if 'name' in data:
+            update_data['name'] = data['name'].strip()
+        if 'description' in data:
+            update_data['description'] = data['description'].strip()
+        if 'color' in data:
+            update_data['color'] = data['color'].strip()
+        if 'icon' in data:
+            update_data['icon'] = data['icon'].strip() or None
+
+        if update_data:
+            dal(dal.labels.id == label_id).update(**update_data)
+            dal.commit()
+
+        return success_response({'message': 'Label updated successfully'})
+
+    except Exception as e:
+        logger.error(f"Error updating label: {e}")
+        return error_response(f"Error updating label: {str(e)}", 500)
+
+
+@api_bp.route('/labels/<int:label_id>', methods=['DELETE'])
+@async_endpoint
+async def delete_label(label_id: int):
+    """Soft delete a label"""
+    try:
+        label = dal(dal.labels.id == label_id).select().first()
+        if not label:
+            return error_response("Label not found", 404)
+
+        if label.is_system:
+            return error_response("Cannot delete system labels", 403)
+
+        # Soft delete label and all assignments
+        dal(dal.labels.id == label_id).update(is_active=False)
+        dal(dal.entity_labels.label_id == label_id).update(is_active=False)
+        dal.commit()
+
+        return success_response({'message': 'Label deleted successfully'})
+
+    except Exception as e:
+        logger.error(f"Error deleting label: {e}")
+        return error_response(f"Error deleting label: {str(e)}", 500)
+
+
+# ============================================================================
+# Entity Label Assignment Endpoints
+# ============================================================================
+
+@api_bp.route('/labels/apply', methods=['POST'])
+@async_endpoint
+async def apply_label():
+    """
+    Apply a label to any entity.
+    Body: entity_id, entity_type, label_id, applied_by, community_id?, expires_at?, metadata?
+    """
+    try:
+        data = await request.get_json()
+        if not data:
+            return error_response("No data provided", 400)
+
+        # Support bulk operations
+        if isinstance(data, list):
+            return await apply_labels_bulk(data)
+
+        entity_id = str(data.get('entity_id', '')).strip()
+        entity_type = data.get('entity_type', '').strip()
+        label_id = data.get('label_id')
+        applied_by = data.get('applied_by', '').strip()
+        community_id = data.get('community_id', '').strip() or None
+        expires_at = data.get('expires_at')
+        metadata = data.get('metadata', {})
+
+        if not all([entity_id, entity_type, label_id, applied_by]):
+            return error_response("Missing required fields: entity_id, entity_type, label_id, applied_by", 400)
+
+        if entity_type not in ENTITY_TYPES:
+            return error_response(f"Invalid entity_type. Must be one of: {ENTITY_TYPES}", 400)
+
+        # Check if label exists
+        label = dal(dal.labels.id == label_id).select().first()
+        if not label:
+            return error_response("Label not found", 404)
+
+        # Check label limit for entity type
+        limit = LABEL_LIMITS.get(entity_type, LABEL_LIMITS['default'])
+        current_count = dal(
+            (dal.entity_labels.entity_id == entity_id) &
+            (dal.entity_labels.entity_type == entity_type) &
+            (dal.entity_labels.is_active == True)  # noqa: E712
+        ).count()
+
+        if current_count >= limit:
+            return error_response(f"{entity_type} can have maximum {limit} labels", 400)
+
         # Parse expires_at if provided
         expires_datetime = None
         if expires_at:
             try:
                 expires_datetime = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
             except ValueError:
-                raise HTTP(400, "Invalid expires_at format")
-        
+                return error_response("Invalid expires_at format. Use ISO 8601", 400)
+
         # Check if label is already applied
-        existing = db(
-            (db.entity_labels.entity_id == entity_id) &
-            (db.entity_labels.entity_type == entity_type) &
-            (db.entity_labels.label_id == label_id) &
-            (db.entity_labels.is_active == True)
+        existing = dal(
+            (dal.entity_labels.entity_id == entity_id) &
+            (dal.entity_labels.entity_type == entity_type) &
+            (dal.entity_labels.label_id == label_id) &
+            (dal.entity_labels.is_active == True)  # noqa: E712
         ).select().first()
-        
+
         if existing:
-            raise HTTP(409, "Label already applied to this entity")
-        
+            return error_response("Label already applied to this entity", 409)
+
         # Apply label
-        entity_label_id = db.entity_labels.insert(
+        entity_label_id = dal.entity_labels.insert(
             entity_id=entity_id,
             entity_type=entity_type,
             label_id=label_id,
+            community_id=community_id,
             applied_by=applied_by,
             expires_at=expires_datetime,
             metadata=metadata
         )
-        
-        db.commit()
-        
-        # Clear related caches
-        cache_manager.delete(f"entity_labels:{entity_type}:{entity_id}")
-        
-        # Trigger auto-role assignment if applicable
-        if entity_type == "user":
-            task_queue.put({
-                'type': 'auto_assign_roles',
-                'data': {
-                    'user_id': entity_id,
-                    'label_id': label_id,
-                    'applied_by': applied_by
-                }
-            })
-        
-        return {
-            "success": True,
-            "message": f"Label applied successfully",
-            "entity_label_id": entity_label_id
-        }
-        
-    except Exception as e:
-        logger.error(f"Error applying label: {str(e)}")
-        raise HTTP(500, f"Error applying label: {str(e)}")
+        dal.commit()
 
-def apply_labels_bulk(label_applications: List[Dict]) -> Dict:
-    """Apply multiple labels in bulk for performance"""
-    try:
-        if len(label_applications) > BULK_OPERATION_SIZE:
-            raise HTTP(400, f"Bulk operation limited to {BULK_OPERATION_SIZE} items")
-        
-        results = []
-        failed_applications = []
-        
-        def process_batch(batch):
-            batch_results = []
-            for app in batch:
-                try:
-                    # Validate required fields
-                    if not all(key in app for key in ["entity_id", "entity_type", "label_id", "applied_by"]):
-                        batch_results.append({
-                            "success": False,
-                            "error": "Missing required fields",
-                            "application": app
-                        })
-                        continue
-                    
-                    # Check if label exists
-                    label = db(db.labels.id == app["label_id"]).select().first()
-                    if not label:
-                        batch_results.append({
-                            "success": False,
-                            "error": "Label not found",
-                            "application": app
-                        })
-                        continue
-                    
-                    # Check if already applied
-                    existing = db(
-                        (db.entity_labels.entity_id == app["entity_id"]) &
-                        (db.entity_labels.entity_type == app["entity_type"]) &
-                        (db.entity_labels.label_id == app["label_id"]) &
-                        (db.entity_labels.is_active == True)
-                    ).select().first()
-                    
-                    if existing:
-                        batch_results.append({
-                            "success": False,
-                            "error": "Label already applied",
-                            "application": app
-                        })
-                        continue
-                    
-                    # Apply label
-                    entity_label_id = db.entity_labels.insert(
-                        entity_id=app["entity_id"],
-                        entity_type=app["entity_type"],
-                        label_id=app["label_id"],
-                        applied_by=app["applied_by"],
-                        expires_at=app.get("expires_at"),
-                        metadata=app.get("metadata", {})
-                    )
-                    
-                    batch_results.append({
-                        "success": True,
-                        "entity_label_id": entity_label_id,
-                        "application": app
-                    })
-                    
-                except Exception as e:
-                    batch_results.append({
-                        "success": False,
-                        "error": str(e),
-                        "application": app
-                    })
-            
-            return batch_results
-        
-        # Process in batches using thread pool
-        batch_size = 100
-        futures = []
-        
-        for i in range(0, len(label_applications), batch_size):
-            batch = label_applications[i:i + batch_size]
-            future = executor.submit(process_batch, batch)
-            futures.append(future)
-        
-        # Collect results
-        for future in as_completed(futures):
-            batch_results = future.result()
-            results.extend(batch_results)
-        
-        db.commit()
-        
-        # Count successes and failures
-        successful = sum(1 for r in results if r["success"])
-        failed = len(results) - successful
-        
-        return {
-            "success": True,
-            "message": f"Bulk operation completed: {successful} successful, {failed} failed",
-            "results": results,
-            "summary": {
-                "total": len(label_applications),
-                "successful": successful,
-                "failed": failed
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Error in bulk label application: {str(e)}")
-        return {
-            "success": False,
-            "error": f"Error in bulk label application: {str(e)}"
-        }
-
-@action("labels/search", method=["GET"])
-def search_by_labels():
-    """Search entities by labels with high-performance caching"""
-    try:
-        entity_type = request.query.get("entity_type", "").strip()
-        label_names = request.query.get("labels", "").strip()
-        community_id = request.query.get("community_id")
-        limit = min(int(request.query.get("limit", "100")), 1000)
-        
-        if not entity_type or not label_names:
-            raise HTTP(400, "Missing required parameters: entity_type, labels")
-        
-        if entity_type not in ["user", "module", "community", "entityGroup"]:
-            raise HTTP(400, "Invalid entity_type")
-        
-        label_list = [label.strip() for label in label_names.split(",")]
-        
-        # Create cache key
-        cache_key = f"search:{entity_type}:{':'.join(sorted(label_list))}:{community_id}:{limit}"
-        cached_result = cache_manager.get(cache_key)
-        
-        if cached_result:
-            return cached_result
-        
-        def execute_search():
-            # Get label IDs
-            label_ids = db(
-                (db.labels.name.belongs(label_list)) &
-                (db.labels.category == entity_type) &
-                (db.labels.is_active == True)
-            ).select(db.labels.id)
-            
-            if not label_ids:
-                return []
-            
-            label_id_list = [label.id for label in label_ids]
-            
-            # Find entities with these labels
-            query = (
-                (db.entity_labels.label_id.belongs(label_id_list)) &
-                (db.entity_labels.entity_type == entity_type) &
-                (db.entity_labels.is_active == True)
-            )
-            
-            # Group by entity to find entities with multiple matching labels
-            entity_labels = db(query).select(
-                db.entity_labels.entity_id,
-                db.entity_labels.label_id,
-                db.labels.name,
-                db.labels.color,
-                left=db.labels.on(db.labels.id == db.entity_labels.label_id)
-            )
-            
-            # Group results by entity
-            entity_results = defaultdict(list)
-            for el in entity_labels:
-                entity_results[el.entity_labels.entity_id].append({
-                    "label_id": el.entity_labels.label_id,
-                    "label_name": el.labels.name,
-                    "label_color": el.labels.color
-                })
-            
-            # Filter entities that have all requested labels if multiple labels specified
-            if len(label_list) > 1:
-                filtered_results = {}
-                for entity_id, labels in entity_results.items():
-                    label_names_found = {label["label_name"] for label in labels}
-                    if all(label_name in label_names_found for label_name in label_list):
-                        filtered_results[entity_id] = labels
-                entity_results = filtered_results
-            
-            # Convert to list and limit results
-            results = []
-            for entity_id, labels in list(entity_results.items())[:limit]:
-                results.append({
-                    "entity_id": entity_id,
-                    "entity_type": entity_type,
-                    "labels": labels,
-                    "match_count": len(labels)
-                })
-            
-            return results
-        
-        future = executor.submit(execute_search)
-        results = future.result(timeout=REQUEST_TIMEOUT)
-        
-        response_data = {
-            "success": True,
-            "entity_type": entity_type,
-            "searched_labels": label_list,
-            "results": results,
-            "total": len(results)
-        }
-        
-        cache_manager.set(cache_key, response_data)
-        return response_data
-        
-    except Exception as e:
-        logger.error(f"Error searching by labels: {str(e)}")
-        return {
-            "success": False,
-            "error": f"Error searching by labels: {str(e)}"
-        }
-
-@action("identity/verify", method=["POST"])
-def initiate_verification():
-    """Initiate user identity verification"""
-    try:
-        data = request.json
-        if not data:
-            raise HTTP(400, "No data provided")
-        
-        user_id = data.get("user_id")
-        platform = data.get("platform")
-        platform_username = data.get("platform_username")
-        
-        if not all([user_id, platform, platform_username]):
-            raise HTTP(400, "Missing required fields: user_id, platform, platform_username")
-        
-        if platform not in ["twitch", "discord", "slack"]:
-            raise HTTP(400, "Invalid platform")
-        
-        # Generate verification code
-        verification_code = secrets.token_urlsafe(32)
-        verification_expires = datetime.utcnow() + timedelta(minutes=30)
-        
-        # Check if identity already exists
-        existing = db(
-            (db.user_identities.user_id == user_id) &
-            (db.user_identities.platform == platform) &
-            (db.user_identities.is_active == True)
-        ).select().first()
-        
-        if existing:
-            if existing.is_verified:
-                raise HTTP(409, "Identity already verified")
-            else:
-                # Update existing unverified identity
-                db.user_identities[existing.id] = dict(
-                    platform_username=platform_username,
-                    verification_code=verification_code,
-                    verification_expires=verification_expires
-                )
-        else:
-            # Create new identity
-            db.user_identities.insert(
-                user_id=user_id,
-                platform=platform,
-                platform_id="",  # Will be set during verification
-                platform_username=platform_username,
-                verification_code=verification_code,
-                verification_expires=verification_expires
-            )
-        
-        db.commit()
-        
-        return {
-            "success": True,
-            "message": f"Verification initiated for {platform_username} on {platform}",
-            "verification_code": verification_code,
-            "expires_at": verification_expires.isoformat(),
-            "instructions": get_verification_instructions(platform, verification_code)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error initiating verification: {str(e)}")
-        raise HTTP(500, f"Error initiating verification: {str(e)}")
-
-@action("identity/confirm", method=["POST"])
-def confirm_verification():
-    """Confirm user identity verification"""
-    try:
-        data = request.json
-        if not data:
-            raise HTTP(400, "No data provided")
-        
-        verification_code = data.get("verification_code")
-        platform_id = data.get("platform_id")
-        
-        if not all([verification_code, platform_id]):
-            raise HTTP(400, "Missing required fields: verification_code, platform_id")
-        
-        # Find pending verification
-        identity = db(
-            (db.user_identities.verification_code == verification_code) &
-            (db.user_identities.verification_expires > datetime.utcnow()) &
-            (db.user_identities.is_verified == False) &
-            (db.user_identities.is_active == True)
-        ).select().first()
-        
-        if not identity:
-            raise HTTP(404, "Invalid or expired verification code")
-        
-        # Update identity as verified
-        db.user_identities[identity.id] = dict(
-            platform_id=platform_id,
-            is_verified=True,
-            verified_at=datetime.utcnow(),
-            verification_method="code",
-            verification_code=None,
-            verification_expires=None
+        logger.audit(
+            f"Label applied: {label.name} to {entity_type}:{entity_id}",
+            user=applied_by,
+            action="apply_label",
+            result="SUCCESS"
         )
-        
-        db.commit()
-        
-        # Clear related caches
-        cache_manager.delete(f"user_identity:{identity.user_id}")
-        
-        return {
-            "success": True,
-            "message": f"Identity verified successfully for {identity.platform_username} on {identity.platform}",
-            "user_id": identity.user_id,
-            "platform": identity.platform,
-            "platform_id": platform_id
-        }
-        
-    except Exception as e:
-        logger.error(f"Error confirming verification: {str(e)}")
-        raise HTTP(500, f"Error confirming verification: {str(e)}")
 
-@action("entitygroups/assign", method=["POST"])
-def assign_entity_group():
-    """Assign user to entity group with auto-role support"""
+        return success_response({
+            'message': 'Label applied successfully',
+            'entity_label_id': entity_label_id
+        }, 201)
+
+    except Exception as e:
+        logger.error(f"Error applying label: {e}")
+        return error_response(f"Error applying label: {str(e)}", 500)
+
+
+async def apply_labels_bulk(label_applications: List[Dict]) -> tuple:
+    """Apply multiple labels in bulk"""
     try:
-        data = request.json
-        if not data:
-            raise HTTP(400, "No data provided")
-        
-        # Support bulk operations
-        if isinstance(data, list):
-            return assign_entity_groups_bulk(data)
-        
-        entity_group_id = data.get("entity_group_id")
-        user_id = data.get("user_id")
-        platform_id = data.get("platform_id")
-        assigned_by = data.get("assigned_by")
-        assigned_reason = data.get("assigned_reason", "manual")
-        expires_at = data.get("expires_at")
-        
-        if not all([entity_group_id, user_id, platform_id, assigned_by]):
-            raise HTTP(400, "Missing required fields")
-        
-        # Check if entity group exists
-        entity_group = db(db.entity_groups.id == entity_group_id).select().first()
-        if not entity_group:
-            raise HTTP(404, "Entity group not found")
-        
-        # Check if user is already in group
-        existing = db(
-            (db.entity_group_members.entity_group_id == entity_group_id) &
-            (db.entity_group_members.user_id == user_id) &
-            (db.entity_group_members.is_active == True)
-        ).select().first()
-        
-        if existing:
-            raise HTTP(409, "User already in entity group")
-        
-        # Parse expires_at if provided
-        expires_datetime = None
-        if expires_at:
+        if len(label_applications) > 1000:
+            return error_response("Bulk operation limited to 1000 items", 400)
+
+        results = []
+        successful = 0
+        failed = 0
+
+        for app in label_applications:
             try:
-                expires_datetime = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
-            except ValueError:
-                raise HTTP(400, "Invalid expires_at format")
-        
-        # Add user to group
-        member_id = db.entity_group_members.insert(
-            entity_group_id=entity_group_id,
-            user_id=user_id,
-            platform_id=platform_id,
-            assigned_by=assigned_by,
-            assigned_reason=assigned_reason,
-            expires_at=expires_datetime
-        )
-        
-        db.commit()
-        
-        # Execute platform-specific role assignment
-        if entity_group.platform == "discord":
-            assign_discord_role(entity_group, user_id, platform_id)
-        elif entity_group.platform == "twitch":
-            assign_twitch_role(entity_group, user_id, platform_id)
-        
-        return {
-            "success": True,
-            "message": "User assigned to entity group successfully",
-            "member_id": member_id
-        }
-        
+                entity_id = str(app.get('entity_id', '')).strip()
+                entity_type = app.get('entity_type', '').strip()
+                label_id = app.get('label_id')
+                applied_by = app.get('applied_by', '').strip()
+
+                if not all([entity_id, entity_type, label_id, applied_by]):
+                    results.append({'success': False, 'error': 'Missing required fields', 'input': app})
+                    failed += 1
+                    continue
+
+                if entity_type not in ENTITY_TYPES:
+                    results.append({'success': False, 'error': 'Invalid entity_type', 'input': app})
+                    failed += 1
+                    continue
+
+                # Check existing
+                existing = dal(
+                    (dal.entity_labels.entity_id == entity_id) &
+                    (dal.entity_labels.entity_type == entity_type) &
+                    (dal.entity_labels.label_id == label_id) &
+                    (dal.entity_labels.is_active == True)  # noqa: E712
+                ).select().first()
+
+                if existing:
+                    results.append({'success': False, 'error': 'Label already applied', 'input': app})
+                    failed += 1
+                    continue
+
+                # Apply
+                entity_label_id = dal.entity_labels.insert(
+                    entity_id=entity_id,
+                    entity_type=entity_type,
+                    label_id=label_id,
+                    community_id=app.get('community_id'),
+                    applied_by=applied_by,
+                    expires_at=app.get('expires_at'),
+                    metadata=app.get('metadata', {})
+                )
+
+                results.append({'success': True, 'entity_label_id': entity_label_id, 'input': app})
+                successful += 1
+
+            except Exception as e:
+                results.append({'success': False, 'error': str(e), 'input': app})
+                failed += 1
+
+        dal.commit()
+
+        return success_response({
+            'message': f"Bulk operation completed: {successful} successful, {failed} failed",
+            'results': results,
+            'summary': {'total': len(label_applications), 'successful': successful, 'failed': failed}
+        })
+
     except Exception as e:
-        logger.error(f"Error assigning entity group: {str(e)}")
-        raise HTTP(500, f"Error assigning entity group: {str(e)}")
+        logger.error(f"Error in bulk label application: {e}")
+        return error_response(f"Error in bulk label application: {str(e)}", 500)
 
-def assign_entity_groups_bulk(assignments: List[Dict]) -> Dict:
-    """Assign multiple users to entity groups in bulk"""
+
+@api_bp.route('/labels/remove', methods=['POST'])
+@async_endpoint
+async def remove_label():
+    """
+    Remove a label from an entity.
+    Body: entity_id, entity_type, label_id
+    """
     try:
-        if len(assignments) > BULK_OPERATION_SIZE:
-            raise HTTP(400, f"Bulk operation limited to {BULK_OPERATION_SIZE} items")
-        
-        results = []
-        
-        def process_batch(batch):
-            batch_results = []
-            for assignment in batch:
-                try:
-                    # Validate required fields
-                    if not all(key in assignment for key in ["entity_group_id", "user_id", "platform_id", "assigned_by"]):
-                        batch_results.append({
-                            "success": False,
-                            "error": "Missing required fields",
-                            "assignment": assignment
-                        })
-                        continue
-                    
-                    # Check if entity group exists
-                    entity_group = db(db.entity_groups.id == assignment["entity_group_id"]).select().first()
-                    if not entity_group:
-                        batch_results.append({
-                            "success": False,
-                            "error": "Entity group not found",
-                            "assignment": assignment
-                        })
-                        continue
-                    
-                    # Check if user is already in group
-                    existing = db(
-                        (db.entity_group_members.entity_group_id == assignment["entity_group_id"]) &
-                        (db.entity_group_members.user_id == assignment["user_id"]) &
-                        (db.entity_group_members.is_active == True)
-                    ).select().first()
-                    
-                    if existing:
-                        batch_results.append({
-                            "success": False,
-                            "error": "User already in entity group",
-                            "assignment": assignment
-                        })
-                        continue
-                    
-                    # Add user to group
-                    member_id = db.entity_group_members.insert(
-                        entity_group_id=assignment["entity_group_id"],
-                        user_id=assignment["user_id"],
-                        platform_id=assignment["platform_id"],
-                        assigned_by=assignment["assigned_by"],
-                        assigned_reason=assignment.get("assigned_reason", "bulk"),
-                        expires_at=assignment.get("expires_at")
-                    )
-                    
-                    batch_results.append({
-                        "success": True,
-                        "member_id": member_id,
-                        "assignment": assignment
-                    })
-                    
-                except Exception as e:
-                    batch_results.append({
-                        "success": False,
-                        "error": str(e),
-                        "assignment": assignment
-                    })
-            
-            return batch_results
-        
-        # Process in batches using thread pool
-        batch_size = 100
-        futures = []
-        
-        for i in range(0, len(assignments), batch_size):
-            batch = assignments[i:i + batch_size]
-            future = executor.submit(process_batch, batch)
-            futures.append(future)
-        
-        # Collect results
-        for future in as_completed(futures):
-            batch_results = future.result()
-            results.extend(batch_results)
-        
-        db.commit()
-        
-        # Count successes and failures
-        successful = sum(1 for r in results if r["success"])
-        failed = len(results) - successful
-        
-        return {
-            "success": True,
-            "message": f"Bulk assignment completed: {successful} successful, {failed} failed",
-            "results": results,
-            "summary": {
-                "total": len(assignments),
-                "successful": successful,
-                "failed": failed
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Error in bulk entity group assignment: {str(e)}")
-        return {
-            "success": False,
-            "error": f"Error in bulk entity group assignment: {str(e)}"
-        }
+        data = await request.get_json()
+        if not data:
+            return error_response("No data provided", 400)
 
-def process_auto_assign_roles(data: Dict):
-    """Process automatic role assignment based on labels"""
-    try:
-        user_id = data["user_id"]
-        label_id = data["label_id"]
-        applied_by = data["applied_by"]
-        
-        # Get user's verified identities
-        identities = db(
-            (db.user_identities.user_id == user_id) &
-            (db.user_identities.is_verified == True) &
-            (db.user_identities.is_active == True)
-        ).select()
-        
-        # Get entity groups with auto-assignment rules
-        entity_groups = db(
-            (db.entity_groups.is_auto_assign == True) &
-            (db.entity_groups.is_active == True)
-        ).select()
-        
-        for entity_group in entity_groups:
-            if not entity_group.auto_assign_rules:
-                continue
-            
-            rules = entity_group.auto_assign_rules
-            
-            # Check if the label matches any auto-assign rule
-            for rule in rules:
-                if rule.get("label_id") == label_id:
-                    # Find matching identity for this platform
-                    matching_identity = None
-                    for identity in identities:
-                        if identity.platform == entity_group.platform:
-                            matching_identity = identity
-                            break
-                    
-                    if matching_identity:
-                        # Check if user is already in the group
-                        existing = db(
-                            (db.entity_group_members.entity_group_id == entity_group.id) &
-                            (db.entity_group_members.user_id == user_id) &
-                            (db.entity_group_members.is_active == True)
-                        ).select().first()
-                        
-                        if not existing:
-                            # Add user to group
-                            db.entity_group_members.insert(
-                                entity_group_id=entity_group.id,
-                                user_id=user_id,
-                                platform_id=matching_identity.platform_id,
-                                assigned_by="system",
-                                assigned_reason="auto_label"
-                            )
-                            
-                            # Execute platform-specific role assignment
-                            if entity_group.platform == "discord":
-                                assign_discord_role(entity_group, user_id, matching_identity.platform_id)
-                            elif entity_group.platform == "twitch":
-                                assign_twitch_role(entity_group, user_id, matching_identity.platform_id)
-        
-        db.commit()
-        
-    except Exception as e:
-        logger.error(f"Error processing auto-assign roles: {str(e)}")
+        entity_id = str(data.get('entity_id', '')).strip()
+        entity_type = data.get('entity_type', '').strip()
+        label_id = data.get('label_id')
 
-def assign_discord_role(entity_group, user_id: str, platform_id: str):
-    """Assign Discord role to user"""
-    try:
-        # This would integrate with Discord API
-        # For now, we'll log the action
-        logger.info(f"Discord role assignment: {entity_group.group_name} to user {platform_id}")
-        
-        # TODO: Implement actual Discord API integration
-        # - Get bot token for the server
-        # - Use Discord API to assign role
-        # - Handle rate limiting and errors
-        
-    except Exception as e:
-        logger.error(f"Error assigning Discord role: {str(e)}")
+        if not all([entity_id, entity_type, label_id]):
+            return error_response("Missing required fields: entity_id, entity_type, label_id", 400)
 
-def assign_twitch_role(entity_group, user_id: str, platform_id: str):
-    """Assign Twitch role to user"""
-    try:
-        # This would integrate with Twitch API
-        # For now, we'll log the action
-        logger.info(f"Twitch role assignment: {entity_group.group_name} to user {platform_id}")
-        
-        # TODO: Implement actual Twitch API integration
-        # - Get channel access token
-        # - Use Twitch API to assign VIP/mod status
-        # - Handle rate limiting and errors
-        
-    except Exception as e:
-        logger.error(f"Error assigning Twitch role: {str(e)}")
-
-def get_verification_instructions(platform: str, verification_code: str) -> str:
-    """Get platform-specific verification instructions"""
-    instructions = {
-        "twitch": f"To verify your Twitch identity, type the following in any chat where WaddleBot is active: !verify {verification_code}",
-        "discord": f"To verify your Discord identity, use the /verify command in any server where WaddleBot is active: /verify {verification_code}",
-        "slack": f"To verify your Slack identity, use the /verify command in any channel where WaddleBot is active: /verify {verification_code}"
-    }
-    
-    return instructions.get(platform, f"Use verification code: {verification_code}")
-
-def cleanup_expired_items():
-    """Clean up expired labels and verifications"""
-    try:
-        now = datetime.utcnow()
-        
-        # Remove expired labels
-        expired_labels = db(
-            (db.entity_labels.expires_at < now) &
-            (db.entity_labels.is_active == True)
-        ).update(is_active=False)
-        
-        # Remove expired verifications
-        expired_verifications = db(
-            (db.user_identities.verification_expires < now) &
-            (db.user_identities.is_verified == False)
-        ).delete()
-        
-        # Remove expired entity group memberships
-        expired_memberships = db(
-            (db.entity_group_members.expires_at < now) &
-            (db.entity_group_members.is_active == True)
-        ).update(is_active=False)
-        
-        # Remove expired search cache
-        expired_cache = db(
-            db.label_search_cache.expires_at < now
-        ).delete()
-        
-        db.commit()
-        
-        logger.info(f"Cleanup completed: {expired_labels} labels, {expired_verifications} verifications, {expired_memberships} memberships, {expired_cache} cache entries")
-        
-    except Exception as e:
-        logger.error(f"Error during cleanup: {str(e)}")
-
-def update_search_cache(data: Dict):
-    """Update search cache with new results"""
-    try:
-        search_key = data["search_key"]
-        entity_type = data["entity_type"]
-        results = data["results"]
-        ttl = data.get("ttl", CACHE_TTL)
-        
-        expires_at = datetime.utcnow() + timedelta(seconds=ttl)
-        
-        # Update or insert cache entry
-        existing = db(
-            db.label_search_cache.search_key == search_key
+        # Find and deactivate the assignment
+        assignment = dal(
+            (dal.entity_labels.entity_id == entity_id) &
+            (dal.entity_labels.entity_type == entity_type) &
+            (dal.entity_labels.label_id == label_id) &
+            (dal.entity_labels.is_active == True)  # noqa: E712
         ).select().first()
-        
-        if existing:
-            db.label_search_cache[existing.id] = dict(
-                results=results,
-                expires_at=expires_at
-            )
-        else:
-            db.label_search_cache.insert(
-                search_key=search_key,
-                entity_type=entity_type,
-                results=results,
-                expires_at=expires_at
-            )
-        
-        db.commit()
-        
+
+        if not assignment:
+            return error_response("Label assignment not found", 404)
+
+        dal(dal.entity_labels.id == assignment.id).update(is_active=False)
+        dal.commit()
+
+        return success_response({'message': 'Label removed successfully'})
+
     except Exception as e:
-        logger.error(f"Error updating search cache: {str(e)}")
+        logger.error(f"Error removing label: {e}")
+        return error_response(f"Error removing label: {str(e)}", 500)
 
-# Schedule periodic cleanup
-def schedule_cleanup():
-    """Schedule periodic cleanup of expired items"""
-    while True:
-        try:
-            time.sleep(3600)  # Run every hour
-            task_queue.put({'type': 'cleanup_expired', 'data': {}})
-        except Exception as e:
-            logger.error(f"Error scheduling cleanup: {str(e)}")
 
-cleanup_thread = threading.Thread(target=schedule_cleanup, daemon=True)
-cleanup_thread.start()
+@api_bp.route('/entity/<entity_type>/<entity_id>/labels', methods=['GET'])
+@async_endpoint
+async def get_entity_labels(entity_type: str, entity_id: str):
+    """
+    Get all labels for a specific entity.
+    """
+    try:
+        if entity_type not in ENTITY_TYPES:
+            return error_response(f"Invalid entity_type. Must be one of: {ENTITY_TYPES}", 400)
 
-if __name__ == "__main__":
-    from py4web import start
-    start(port=8012, host="0.0.0.0")
+        # Join entity_labels with labels to get label details
+        query = (
+            (dal.entity_labels.entity_id == entity_id) &
+            (dal.entity_labels.entity_type == entity_type) &
+            (dal.entity_labels.is_active == True)  # noqa: E712
+        )
+
+        entity_labels = dal(query).select(
+            dal.entity_labels.ALL,
+            dal.labels.name,
+            dal.labels.color,
+            dal.labels.icon,
+            dal.labels.description,
+            left=dal.labels.on(dal.labels.id == dal.entity_labels.label_id)
+        )
+
+        label_list = []
+        for el in entity_labels:
+            label_info = EntityLabelInfo(
+                id=el.entity_labels.id,
+                entity_id=el.entity_labels.entity_id,
+                entity_type=el.entity_labels.entity_type,
+                label_id=el.entity_labels.label_id,
+                label_name=el.labels.name,
+                label_color=el.labels.color or '#6366f1',
+                label_icon=el.labels.icon,
+                applied_by=el.entity_labels.applied_by,
+                applied_at=el.entity_labels.applied_at.isoformat() if el.entity_labels.applied_at else '',
+                expires_at=el.entity_labels.expires_at.isoformat() if el.entity_labels.expires_at else None,
+                metadata=el.entity_labels.metadata or {}
+            )
+            label_list.append(asdict(label_info))
+
+        return success_response({
+            'entity_id': entity_id,
+            'entity_type': entity_type,
+            'labels': label_list,
+            'total': len(label_list),
+            'limit': LABEL_LIMITS.get(entity_type, LABEL_LIMITS['default'])
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting entity labels: {e}")
+        return error_response(f"Error getting entity labels: {str(e)}", 500)
+
+
+# ============================================================================
+# Search Endpoints
+# ============================================================================
+
+@api_bp.route('/labels/search', methods=['GET'])
+@async_endpoint
+async def search_by_labels():
+    """
+    Search entities by labels.
+    Query params: entity_type, labels (comma-separated), community_id?, match_all?
+    """
+    try:
+        entity_type = request.args.get('entity_type', '').strip()
+        label_names = request.args.get('labels', '').strip()
+        community_id = request.args.get('community_id')
+        match_all = request.args.get('match_all', 'false').lower() == 'true'
+        limit = min(int(request.args.get('limit', '100')), 1000)
+
+        if not entity_type or not label_names:
+            return error_response("Missing required parameters: entity_type, labels", 400)
+
+        if entity_type not in ENTITY_TYPES:
+            return error_response(f"Invalid entity_type. Must be one of: {ENTITY_TYPES}", 400)
+
+        label_list = [l.strip() for l in label_names.split(',') if l.strip()]
+
+        # Get label IDs
+        label_rows = dal(
+            (dal.labels.name.belongs(label_list)) &
+            (dal.labels.is_active == True)  # noqa: E712
+        ).select(dal.labels.id, dal.labels.name)
+
+        if not label_rows:
+            return success_response({
+                'entity_type': entity_type,
+                'searched_labels': label_list,
+                'results': [],
+                'total': 0
+            })
+
+        label_ids = [r.id for r in label_rows]
+
+        # Find entities with these labels
+        query = (
+            (dal.entity_labels.label_id.belongs(label_ids)) &
+            (dal.entity_labels.entity_type == entity_type) &
+            (dal.entity_labels.is_active == True)  # noqa: E712
+        )
+
+        if community_id:
+            query &= dal.entity_labels.community_id == community_id
+
+        entity_labels = dal(query).select(
+            dal.entity_labels.entity_id,
+            dal.entity_labels.label_id,
+            dal.labels.name,
+            dal.labels.color,
+            left=dal.labels.on(dal.labels.id == dal.entity_labels.label_id)
+        )
+
+        # Group by entity
+        entity_results = {}
+        for el in entity_labels:
+            eid = el.entity_labels.entity_id
+            if eid not in entity_results:
+                entity_results[eid] = []
+            entity_results[eid].append({
+                'label_id': el.entity_labels.label_id,
+                'label_name': el.labels.name,
+                'label_color': el.labels.color
+            })
+
+        # Filter for match_all if requested
+        if match_all and len(label_list) > 1:
+            filtered = {}
+            for eid, labels in entity_results.items():
+                found_names = {l['label_name'] for l in labels}
+                if all(ln in found_names for ln in label_list):
+                    filtered[eid] = labels
+            entity_results = filtered
+
+        # Build results list
+        results = []
+        for eid, labels in list(entity_results.items())[:limit]:
+            results.append({
+                'entity_id': eid,
+                'entity_type': entity_type,
+                'labels': labels,
+                'match_count': len(labels)
+            })
+
+        return success_response({
+            'entity_type': entity_type,
+            'searched_labels': label_list,
+            'match_all': match_all,
+            'results': results,
+            'total': len(results)
+        })
+
+    except Exception as e:
+        logger.error(f"Error searching by labels: {e}")
+        return error_response(f"Error searching by labels: {str(e)}", 500)
+
+
+@api_bp.route('/status')
+@async_endpoint
+async def status():
+    """Status endpoint"""
+    return success_response({
+        'status': 'operational',
+        'module': Config.MODULE_NAME,
+        'version': Config.MODULE_VERSION,
+        'supported_entity_types': ENTITY_TYPES,
+        'label_limits': LABEL_LIMITS
+    })
+
+
+app.register_blueprint(api_bp)
+
+if __name__ == '__main__':
+    import hypercorn.asyncio
+    from hypercorn.config import Config as HyperConfig
+    hyper_config = HyperConfig()
+    hyper_config.bind = [f"0.0.0.0:{Config.MODULE_PORT}"]
+    asyncio.run(hypercorn.asyncio.serve(app, hyper_config))

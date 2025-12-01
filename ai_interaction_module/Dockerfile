@@ -1,37 +1,27 @@
-FROM python:3.12-slim
+# Build from parent directory: docker build -f ai_interaction_module_flask/Dockerfile -t waddlebot/ai-interaction:latest .
 
-# Set working directory
+FROM python:3.13-slim
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Copy shared library
+COPY libs/flask_core /app/libs/flask_core
 
-# Copy requirements first for better caching
-COPY ai_interaction_module/requirements.txt .
+# Install shared library
+RUN cd /app/libs/flask_core && pip install --no-cache-dir .
+
+# Copy module files
+COPY ai_interaction_module_flask/requirements.txt /app/
+COPY ai_interaction_module_flask /app/
+
+# Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY ai_interaction_module/ .
-COPY libs/ ./libs/
-
-# Create non-root user
-RUN useradd -m -u 1000 waddlebot && \
-    chown -R waddlebot:waddlebot /app
-USER waddlebot
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Create log directory
+RUN mkdir -p /var/log/waddlebotlog
 
 # Expose port
-EXPOSE 8000
+EXPOSE 8005
 
-# Set environment variables
-ENV PYTHONPATH=/app
-ENV PY4WEB_APPS_FOLDER=/app
-ENV PY4WEB_PASSWORD_FILE=/dev/null
-
-# Run the application
-CMD ["python", "-m", "py4web", "run", "apps", "--host", "0.0.0.0", "--port", "8000", "--number_workers", "4"]
+# Run with Hypercorn
+CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8005", "--workers", "4"]

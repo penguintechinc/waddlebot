@@ -1,32 +1,27 @@
-FROM python:3.12-slim
+# Build from parent directory: docker build -f labels_core_module_flask/Dockerfile -t waddlebot/labels-core:latest .
+
+FROM python:3.13-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Copy shared library
+COPY libs/flask_core /app/libs/flask_core
 
-# Copy requirements and install Python dependencies
-COPY labels_core_module/requirements.txt .
+# Install shared library
+RUN cd /app/libs/flask_core && pip install --no-cache-dir .
+
+# Copy module files
+COPY labels_core_module_flask/requirements.txt /app/
+COPY labels_core_module_flask /app/
+
+# Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY labels_core_module/ .
-
-# Create non-root user
-RUN groupadd -r waddlebot && useradd -r -g waddlebot waddlebot
-RUN chown -R waddlebot:waddlebot /app
-USER waddlebot
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8012/health || exit 1
+# Create log directory
+RUN mkdir -p /var/log/waddlebotlog
 
 # Expose port
-EXPOSE 8012
+EXPOSE 8023
 
-# Run the application
-CMD ["python", "-m", "py4web", "run", "apps", "--watch=off", "--port=8012", "--host=0.0.0.0"]
+# Run with Hypercorn
+CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8023", "--workers", "4"]

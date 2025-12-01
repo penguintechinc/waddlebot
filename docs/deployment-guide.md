@@ -53,7 +53,7 @@ MODULE_VERSION=1.0.0
 # Core Modules
 MODULE_NAME_ROUTER=router
 MODULE_NAME_MARKETPLACE=marketplace
-MODULE_NAME_PORTAL=portal
+MODULE_NAME_HUB=hub
 
 # Collector Modules
 MODULE_NAME_TWITCH=twitch

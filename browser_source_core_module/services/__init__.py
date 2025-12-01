@@ -1,1 +1,1 @@
-# Services package for Browser Source Core module
+"""Services for browser_source_core_module_flask"""

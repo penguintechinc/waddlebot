@@ -1,5 +1,1 @@
-"""
-Community module services
-"""
-
-from .community_command_service import CommunityCommandService
+"""Services for community_module_flask"""

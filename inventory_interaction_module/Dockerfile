@@ -1,41 +1,27 @@
-FROM python:3.12-slim
+# Build from parent directory: docker build -f inventory_interaction_module_flask/Dockerfile -t waddlebot/inventory-interaction:latest .
 
-# Set working directory
+FROM python:3.13-slim
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+# Copy shared library
+COPY libs/flask_core /app/libs/flask_core
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Install shared library
+RUN cd /app/libs/flask_core && pip install --no-cache-dir .
 
-# Install Python dependencies
+# Copy module files
+COPY inventory_interaction_module_flask/requirements.txt /app/
+COPY inventory_interaction_module_flask /app/
+
+# Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
-
-# Create non-root user
-RUN groupadd -r waddlebot && useradd -r -g waddlebot waddlebot
-RUN chown -R waddlebot:waddlebot /app
-USER waddlebot
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8024/health || exit 1
+# Create log directory
+RUN mkdir -p /var/log/waddlebotlog
 
 # Expose port
 EXPOSE 8024
 
-# Environment variables
-ENV PYTHONPATH=/app
-ENV MODULE_NAME=inventory_interaction_module
-ENV MODULE_VERSION=1.0.0
-ENV MODULE_PORT=8024
-
-# Run the application
-CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8024"]
+# Run with Hypercorn
+CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8024", "--workers", "4"]

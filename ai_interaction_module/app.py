@@ -1,142 +1,227 @@
-#!/usr/bin/env python3
+"""
+WaddleBot AI Interaction Module (Quart)
+========================================
+
+AI-powered chat interactions with multiple provider support:
+- Ollama: Direct connection with configurable host:port and TLS
+- WaddleAI: Centralized proxy for OpenAI, Claude, MCP, and other providers
+
+Converted from py4web to Quart for better async performance.
+"""
+
 import os
 import sys
-from py4web import action, request, response, Field, HTTP
-from py4web.core import Fixture
-import json
-import asyncio
-import logging
-import traceback
-from concurrent.futures import ThreadPoolExecutor
+import asyncio  # noqa: E402
+from datetime import datetime  # noqa: E402
 
-# Add the parent directory to the path to import libs
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add libs to path for flask_core imports
+sys.path.insert(  # noqa: E402
+    0,
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'libs')
+)
 
-from config import Config
-from services.ai_service import AIService
-from services.router_service import RouterService
+from quart import Quart, Blueprint, request  # noqa: E402
 
-# Import API controller
-import controllers.api
+from flask_core import (  # noqa: E402
+    setup_aaa_logging,
+    async_endpoint,
+    auth_required,
+    success_response,
+    error_response,
+    create_health_blueprint
+)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from config import Config  # noqa: E402
+from services.ai_service import AIService  # noqa: E402
+from services.router_service import RouterService  # noqa: E402
+
+# Initialize Quart app
+app = Quart(__name__)
+
+# Register health/metrics endpoints
+health_bp = create_health_blueprint(Config.MODULE_NAME, Config.MODULE_VERSION)
+app.register_blueprint(health_bp)
+
+ai_bp = Blueprint('ai', __name__, url_prefix='/api/v1/ai')
+
+# Setup logging
+logger = setup_aaa_logging(
+    module_name=Config.MODULE_NAME,
+    version=Config.MODULE_VERSION,
+    log_level=Config.LOG_LEVEL
+)
 
 # Initialize services
-ai_service = AIService()
-router_service = RouterService()
-executor = ThreadPoolExecutor(max_workers=Config.MAX_CONCURRENT_REQUESTS)
+ai_service = None
+router_service = None
 
-class AuthFixture(Fixture):
-    """Simple auth fixture for API endpoints"""
-    def on_request(self, context):
-        # For now, allow all requests - can add auth later
-        pass
 
-auth = AuthFixture()
+@app.before_serving
+async def startup():
+    """Initialize services on startup"""
+    global ai_service, router_service
 
-@action('index')
-@action.uses('index.html')
-def index():
-    """Health check endpoint"""
-    return dict(
-        module=Config.MODULE_NAME,
-        version=Config.MODULE_VERSION,
-        status="healthy",
-        ai_provider=Config.AI_PROVIDER,
-        ai_host=Config.AI_HOST,
-        model=Config.AI_MODEL
-    )
+    logger.system("Starting AI interaction module", action="startup")
 
-@action('health')
-def health():
-    """Health check for container orchestration"""
     try:
-        # Test AI provider connection
-        health_status = ai_service.health_check()
-        if health_status:
-            response.status = 200
-            return {"status": "healthy", "ai_provider": Config.AI_PROVIDER, "connection": "connected"}
+        # Initialize AI service
+        ai_service = AIService.create()
+        logger.system(  # noqa: E501
+            f"Initialized AI service with provider: {Config.AI_PROVIDER}"
+        )
+
+        # Initialize router service
+        router_service = RouterService()
+        logger.system("Initialized router service")
+
+        # Health check
+        is_healthy = await ai_service.health_check()
+        if is_healthy:
+            logger.system("AI provider health check passed", result="SUCCESS")
         else:
-            response.status = 503
-            return {"status": "unhealthy", "ai_provider": Config.AI_PROVIDER, "connection": "disconnected"}
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        response.status = 503
-        return {"status": "unhealthy", "error": str(e)}
+            logger.error("AI provider health check failed", result="FAILED")
 
-@action('interaction', method=['POST'])
-@action.uses(auth)
-def interaction():
-    """Main interaction endpoint for processing messages and events"""
+    except Exception as e:
+        logger.error(f"Startup failed: {e}", action="startup", result="ERROR")
+        raise
+
+
+@app.after_serving
+async def shutdown():
+    """Cleanup on shutdown"""
+    logger.system("Shutting down AI interaction module", action="shutdown")
+
+
+# Module info endpoint
+@app.route('/', methods=['GET'])
+@app.route('/index', methods=['GET'])
+async def index():
+    """Module information and status"""
+    return success_response({
+        "module": Config.MODULE_NAME,
+        "version": Config.MODULE_VERSION,
+        "provider": Config.AI_PROVIDER,
+        "model": Config.AI_MODEL,
+        "status": "operational",
+        "endpoints": [
+            "/health",
+            "/api/v1/ai/interaction",
+            "/api/v1/ai/chat/completions",
+            "/api/v1/ai/models",
+            "/api/v1/ai/config",
+            "/api/v1/ai/test"
+        ]
+    })
+
+
+# Main interaction endpoint
+@ai_bp.route('/interaction', methods=['POST'])
+@async_endpoint
+async def interaction():
+    """
+    Main interaction endpoint for processing messages and events.
+
+    Expected JSON:
+    {
+        "session_id": "sess_123",
+        "message_type": "chatMessage",
+        "message_content": "Hello!",
+        "user_id": "user123",
+        "entity_id": "twitch:channel:456",
+        "platform": "twitch",
+        "username": "john_doe",
+        "display_name": "John Doe"
+    }
+    """
     try:
-        data = request.json
-        if not data:
-            raise HTTP(400, "No JSON data provided")
-        
-        # Extract required fields
+        data = await request.get_json()
+
+        # Validate required fields
         session_id = data.get('session_id')
+        if not session_id:
+            return error_response("session_id is required", status_code=400)
+
         message_type = data.get('message_type', 'chatMessage')
         message_content = data.get('message_content', '')
         user_id = data.get('user_id')
         entity_id = data.get('entity_id')
         platform = data.get('platform')
-        
-        if not session_id:
-            raise HTTP(400, "session_id is required")
-        
-        logger.info(f"Processing {message_type} from user {user_id} on {platform}")
-        
-        # Process asynchronously
-        future = executor.submit(
-            process_interaction_sync,
-            session_id, message_type, message_content, user_id, entity_id, platform, data
+        username = data.get('username', user_id)
+
+        logger.audit(
+            action="process_interaction",
+            user=username,
+            community=entity_id,
+            result="STARTED",
+            message_type=message_type
         )
-        
+
+        # Process interaction asynchronously (don't wait for result)
+        asyncio.create_task(
+            process_interaction(
+                session_id, message_type, message_content,
+                user_id, entity_id, platform, username, data
+            )
+        )
+
         # Return immediate response
-        return {
-            "success": True,
+        return success_response({
             "message": "Processing request",
             "session_id": session_id
-        }
-        
-    except Exception as e:
-        logger.error(f"Error in interaction endpoint: {str(e)}\n{traceback.format_exc()}")
-        raise HTTP(500, f"Internal server error: {str(e)}")
+        })
 
-def process_interaction_sync(session_id, message_type, message_content, user_id, entity_id, platform, full_data):
-    """Synchronous wrapper for async processing"""
+    except Exception as e:
+        logger.error(f"Interaction endpoint error: {e}")
+        return error_response(str(e), status_code=500)
+
+
+async def process_interaction(
+    session_id: str,
+    message_type: str,
+    message_content: str,
+    user_id: str,
+    entity_id: str,
+    platform: str,
+    username: str,
+    full_data: dict
+):
+    """Process interaction asynchronously"""
+    start_time = datetime.utcnow()
+
     try:
         # Determine if we should respond
         should_respond = False
         response_context = {}
-        
+
         if message_type == 'chatMessage':
             # Check for greeting patterns
-            greeting_patterns = ['o7', 'hi', 'hello', 'hey', 'howdy', 'greetings', 'sup', 'hiya', 'morning', 'evening', 'afternoon']
-            farewell_patterns = ['!lurk', 'bye', 'goodbye', 'later', 'cya', 'see ya', 'take care', 'gotta go', 'gtg', 'peace out', 'catch you later']
-            
+            greeting_patterns = [  # noqa: E501
+                'o7', 'hi', 'hello', 'hey', 'howdy', 'greetings', 'sup', 'hiya'
+            ]
+            farewell_patterns = [  # noqa: E501
+                '!lurk', 'bye', 'goodbye', 'later', 'cya'
+            ]
+
             message_lower = message_content.lower().strip()
-            
-            # Check for greetings
+
+            # Check greetings
             for pattern in greeting_patterns:
-                if pattern in message_lower or message_lower == pattern:
+                if pattern in message_lower:
                     should_respond = True
                     response_context['trigger_type'] = 'greeting'
                     response_context['trigger'] = pattern
                     break
-            
-            # Check for farewells
+
+            # Check farewells
             if not should_respond:
                 for pattern in farewell_patterns:
-                    if pattern in message_lower or message_lower == pattern:
+                    if pattern in message_lower:
                         should_respond = True
                         response_context['trigger_type'] = 'farewell'
                         response_context['trigger'] = pattern
                         break
-            
-            # Check for question triggers
+
+            # Check question triggers
             if not should_respond:
                 for trigger in Config.QUESTION_TRIGGERS:
                     if trigger in message_content:
@@ -144,24 +229,37 @@ def process_interaction_sync(session_id, message_type, message_content, user_id,
                         response_context['trigger_type'] = 'question'
                         response_context['trigger'] = trigger
                         break
-        elif message_type in Config.EVENT_RESPONSE_TYPES and Config.RESPOND_TO_EVENTS:
+
+        elif (message_type in Config.EVENT_RESPONSE_TYPES and  # noqa: E501
+              Config.RESPOND_TO_EVENTS):
             should_respond = True
             response_context['trigger_type'] = 'event'
             response_context['event_type'] = message_type
-        
+
         if not should_respond:
-            logger.info(f"No response needed for {message_type}: {message_content}")
+            logger.audit(
+                action="process_interaction",
+                user=username,
+                community=entity_id,
+                result="NO_RESPONSE_NEEDED",
+                message_type=message_type
+            )
             return
-        
-        # Generate response using AI service
-        ai_response = ai_service.generate_response(
+
+        # Generate AI response
+        ai_response = await ai_service.generate_response(
             message_content=message_content,
             message_type=message_type,
             user_id=user_id,
             platform=platform,
             context=response_context
         )
-        
+
+        # Calculate processing time
+        processing_time = int(  # noqa: E501
+            (datetime.utcnow() - start_time).total_seconds() * 1000
+        )
+
         if ai_response:
             # Send response back to router
             response_data = {
@@ -172,66 +270,164 @@ def process_interaction_sync(session_id, message_type, message_content, user_id,
                 "response_data": {
                     "message": f"{Config.RESPONSE_PREFIX}{ai_response}"
                 },
-                "processing_time_ms": 0  # Could track this if needed
+                "processing_time_ms": processing_time
             }
-            
-            router_service.submit_response(response_data)
-            logger.info(f"Sent AI response for session {session_id}")
+
+            await router_service.submit_response(response_data)
+
+            logger.audit(
+                action="process_interaction",
+                user=username,
+                community=entity_id,
+                result="SUCCESS",
+                execution_time=processing_time
+            )
         else:
-            logger.warning(f"No AI response generated for session {session_id}")
-            
+            logger.error(
+                "No AI response generated",
+                user=username,
+                community=entity_id,
+                action="generate_response"
+            )
+
     except Exception as e:
-        logger.error(f"Error processing interaction: {str(e)}\n{traceback.format_exc()}")
-        
-        # Send error response back to router
-        error_response = {
+        logger.error(
+            f"Error processing interaction: {e}",
+            user=username,
+            community=entity_id,
+            action="process_interaction"
+        )
+
+        # Send error response to router
+        error_response_data = {
             "session_id": session_id,
             "module_name": Config.MODULE_NAME,
             "success": False,
             "error_message": str(e),
-            "processing_time_ms": 0
+            "processing_time_ms": int(  # noqa: E501
+                (datetime.utcnow() - start_time).total_seconds() * 1000
+            )
         }
-        
-        try:
-            router_service.submit_response(error_response)
-        except Exception as submit_error:
-            logger.error(f"Failed to submit error response: {str(submit_error)}")
 
-@action('configure', method=['POST'])
-@action.uses(auth)
-def configure():
-    """Configure module settings"""
+        try:
+            await router_service.submit_response(error_response_data)
+        except Exception as submit_error:
+            logger.error(  # noqa: E501
+                f"Failed to submit error response: {submit_error}"
+            )
+
+
+# OpenAI-compatible chat completions endpoint
+@ai_bp.route('/chat/completions', methods=['POST'])
+@auth_required
+@async_endpoint
+async def chat_completions():
+    """
+    OpenAI-compatible chat completions endpoint.
+
+    Compatible with OpenAI API format for easy integration.
+    """
     try:
-        data = request.json
-        if not data:
-            raise HTTP(400, "No JSON data provided")
-        
-        # Update configuration dynamically
-        if 'provider' in data:
-            Config.AI_PROVIDER = data['provider']
-            # Reinitialize AI service with new provider
-            global ai_service
-            ai_service = AIService()
-        if 'model' in data:
-            Config.AI_MODEL = data['model']
-            ai_service.update_model(data['model'])
-        if 'temperature' in data:
-            Config.AI_TEMPERATURE = float(data['temperature'])
-        if 'max_tokens' in data:
-            Config.AI_MAX_TOKENS = int(data['max_tokens'])
-        if 'system_prompt' in data:
-            Config.SYSTEM_PROMPT = data['system_prompt']
-        if 'question_triggers' in data:
-            Config.QUESTION_TRIGGERS = data['question_triggers']
-        if 'respond_to_events' in data:
-            Config.RESPOND_TO_EVENTS = bool(data['respond_to_events'])
-        if 'event_response_types' in data:
-            Config.EVENT_RESPONSE_TYPES = data['event_response_types']
-        
-        return {
-            "success": True,
-            "message": "Configuration updated",
-            "config": {
+        data = await request.get_json()
+
+        messages = data.get('messages', [])
+        model = data.get('model', Config.AI_MODEL)
+        # Note: temperature and max_tokens from request not currently used
+        # but kept for OpenAI API compatibility
+        _ = data.get('temperature', Config.AI_TEMPERATURE)  # noqa: F841
+        _ = data.get('max_tokens', Config.AI_MAX_TOKENS)  # noqa: F841
+
+        if not messages:
+            return error_response(  # noqa: E501
+                "messages array is required", status_code=400
+            )
+
+        # Extract last user message
+        user_message = ""
+        for msg in reversed(messages):
+            if msg.get('role') == 'user':
+                user_message = msg.get('content', '')
+                break
+
+        # Build context from messages
+        context = {
+            'conversation_history': messages[:-1] if len(messages) > 1 else [],
+            'trigger_type': 'api_request'
+        }
+
+        # Generate response
+        ai_response = await ai_service.generate_response(
+            message_content=user_message,
+            message_type='chatMessage',
+            user_id=request.current_user['user_id'],
+            platform='api',
+            context=context
+        )
+
+        if ai_response:
+            # OpenAI-compatible response format
+            user_id = request.current_user['user_id']
+            return success_response({
+                "id": f"chatcmpl-{user_id}",
+                "object": "chat.completion",
+                "created": int(datetime.utcnow().timestamp()),
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": ai_response
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": len(user_message.split()),
+                    "completion_tokens": len(ai_response.split()),
+                    "total_tokens": (  # noqa: E501
+                        len(user_message.split()) +
+                        len(ai_response.split())
+                    )
+                }
+            })
+        else:
+            return error_response(  # noqa: E501
+                "Failed to generate response", status_code=500
+            )
+
+    except Exception as e:
+        logger.error(f"Chat completions error: {e}")
+        return error_response(str(e), status_code=500)
+
+
+# Get available models
+@ai_bp.route('/models', methods=['GET'])
+@async_endpoint
+async def get_models():
+    """Get list of available AI models"""
+    try:
+        models = await ai_service.get_available_models()
+
+        return success_response({
+            "provider": Config.AI_PROVIDER,
+            "models": models,
+            "current_model": Config.AI_MODEL
+        })
+
+    except Exception as e:
+        logger.error(f"Get models error: {e}")
+        return error_response(str(e), status_code=500)
+
+
+# Get/Update configuration
+@ai_bp.route('/config', methods=['GET', 'PUT'])
+@auth_required
+@async_endpoint
+async def config():
+    """Get or update AI module configuration"""
+    try:
+        if request.method == 'GET':
+            # Return current configuration
+            return success_response({
                 "provider": Config.AI_PROVIDER,
                 "model": Config.AI_MODEL,
                 "temperature": Config.AI_TEMPERATURE,
@@ -240,41 +436,87 @@ def configure():
                 "question_triggers": Config.QUESTION_TRIGGERS,
                 "respond_to_events": Config.RESPOND_TO_EVENTS,
                 "event_response_types": Config.EVENT_RESPONSE_TYPES
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Error in configure endpoint: {str(e)}")
-        raise HTTP(500, f"Configuration error: {str(e)}")
+            })
 
-@action('test', method=['POST'])
-@action.uses(auth)
-def test():
-    """Test endpoint for debugging"""
+        else:  # PUT
+            data = await request.get_json()
+
+            # Update configuration
+            if 'model' in data:
+                Config.AI_MODEL = data['model']
+            if 'temperature' in data:
+                Config.AI_TEMPERATURE = float(data['temperature'])
+            if 'max_tokens' in data:
+                Config.AI_MAX_TOKENS = int(data['max_tokens'])
+            if 'system_prompt' in data:
+                Config.SYSTEM_PROMPT = data['system_prompt']
+            if 'question_triggers' in data:
+                Config.QUESTION_TRIGGERS = data['question_triggers']
+            if 'respond_to_events' in data:
+                Config.RESPOND_TO_EVENTS = bool(data['respond_to_events'])
+            if 'event_response_types' in data:
+                Config.EVENT_RESPONSE_TYPES = data['event_response_types']
+
+            logger.audit(
+                action="update_config",
+                user=request.current_user['username'],
+                community="system",
+                result="SUCCESS"
+            )
+
+            return success_response({
+                "message": "Configuration updated successfully",
+                "config": {
+                    "provider": Config.AI_PROVIDER,
+                    "model": Config.AI_MODEL,
+                    "temperature": Config.AI_TEMPERATURE,
+                    "max_tokens": Config.AI_MAX_TOKENS
+                }
+            })
+
+    except Exception as e:
+        logger.error(f"Config endpoint error: {e}")
+        return error_response(str(e), status_code=500)
+
+
+# Test endpoint
+@ai_bp.route('/test', methods=['POST'])
+@auth_required
+@async_endpoint
+async def test():
+    """Test AI generation with custom input"""
     try:
-        data = request.json
+        data = await request.get_json()
         test_message = data.get('message', 'What is the weather like?')
-        
-        response_text = ai_service.generate_response(
+
+        response_text = await ai_service.generate_response(
             message_content=test_message,
             message_type='chatMessage',
-            user_id='test_user',
+            user_id=request.current_user['user_id'],
             platform='test',
-            context={'trigger_type': 'question', 'trigger': '?'}
+            context={'trigger_type': 'test'}
         )
-        
-        return {
-            "success": True,
+
+        return success_response({
             "input": test_message,
             "output": response_text,
             "provider": Config.AI_PROVIDER,
             "model": Config.AI_MODEL
-        }
-        
-    except Exception as e:
-        logger.error(f"Error in test endpoint: {str(e)}")
-        raise HTTP(500, f"Test error: {str(e)}")
+        })
 
-if __name__ == "__main__":
-    import py4web
-    py4web.main()
+    except Exception as e:
+        logger.error(f"Test endpoint error: {e}")
+        return error_response(str(e), status_code=500)
+
+
+# Register blueprint
+app.register_blueprint(ai_bp)
+
+
+if __name__ == '__main__':
+    import hypercorn.asyncio
+    from hypercorn.config import Config as HyperConfig
+
+    hyper_config = HyperConfig()
+    hyper_config.bind = [f"0.0.0.0:{Config.MODULE_PORT}"]
+    asyncio.run(hypercorn.asyncio.serve(app, hyper_config))

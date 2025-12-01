@@ -1,147 +1,51 @@
 """
-Community module py4web application
+Community management - Quart Application
 """
-
-from py4web import action, request, response, HTTP
+import asyncio
 import os
-import logging
-import json
+import sys
 
-from .models import db
-from .services.community_command_service import CommunityCommandService
+from quart import Quart, Blueprint
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from flask_core import (  # noqa: E402
+    setup_aaa_logging, init_database, async_endpoint, success_response,
+    create_health_blueprint
+)
+from config import Config  # noqa: E402
 
-# Initialize community command service
-community_service = CommunityCommandService()
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'libs'))
 
-# Health check endpoint
-@action("health", method=["GET"])
-def health():
-    """Health check endpoint"""
-    try:
-        # Test database connection
-        db.executesql("SELECT 1")
-        return {"status": "healthy", "module": "community", "version": "1.0.0"}
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        raise HTTP(500, f"Health check failed: {str(e)}")
+app = Quart(__name__)
 
-# Main community command endpoint
-@action("community", method=["POST"])
-def handle_community_command():
-    """Handle community command requests"""
-    try:
-        command_data = request.json
-        if not command_data:
-            raise HTTP(400, "No command data provided")
-        
-        # Validate required fields
-        required_fields = ["user_id", "entity_id", "message_content", "session_id"]
-        missing_fields = [field for field in required_fields if field not in command_data]
-        if missing_fields:
-            raise HTTP(400, f"Missing required fields: {', '.join(missing_fields)}")
-        
-        # Parse command
-        user_id = command_data["user_id"]
-        entity_id = command_data["entity_id"]
-        message_content = command_data["message_content"]
-        session_id = command_data["session_id"]
-        execution_id = command_data.get("execution_id", "")
-        
-        # Process the community command
-        result = community_service.process_command(
-            user_id=user_id,
-            entity_id=entity_id,
-            message_content=message_content,
-            session_id=session_id,
-            execution_id=execution_id
-        )
-        
-        if result["success"]:
-            # Return appropriate response type based on result
-            if result["response_type"] == "form":
-                return {
-                    "success": True,
-                    "response_action": "form",
-                    "session_id": session_id,
-                    "execution_id": execution_id,
-                    "module_name": "community",
-                    "form_title": result["form_title"],
-                    "form_description": result["form_description"],
-                    "form_fields": result["form_fields"],
-                    "form_submit_url": result["form_submit_url"],
-                    "form_submit_method": result.get("form_submit_method", "POST"),
-                    "form_callback_url": result.get("form_callback_url", "")
-                }
-            else:
-                return {
-                    "success": True,
-                    "response_action": "chat",
-                    "session_id": session_id,
-                    "execution_id": execution_id,
-                    "module_name": "community",
-                    "chat_message": result["message"]
-                }
-        else:
-            return {
-                "success": False,
-                "response_action": "chat",
-                "session_id": session_id,
-                "execution_id": execution_id,
-                "module_name": "community",
-                "chat_message": result["message"],
-                "error_message": result.get("error", "")
-            }
-            
-    except Exception as e:
-        logger.error(f"Error handling community command: {str(e)}")
-        return {
-            "success": False,
-            "response_action": "chat",
-            "session_id": command_data.get("session_id", ""),
-            "execution_id": command_data.get("execution_id", ""),
-            "module_name": "community",
-            "chat_message": "An error occurred while processing your command.",
-            "error_message": str(e)
-        }
+# Register health/metrics endpoints
+health_bp = create_health_blueprint(Config.MODULE_NAME, Config.MODULE_VERSION)
+app.register_blueprint(health_bp)
 
-# Form submission endpoint
-@action("community/form", method=["POST"])
-def handle_form_submission():
-    """Handle form submissions from community commands"""
-    try:
-        form_data = request.json
-        if not form_data:
-            raise HTTP(400, "No form data provided")
-        
-        # Process form submission
-        result = community_service.process_form_submission(form_data)
-        
-        if result["success"]:
-            return {
-                "success": True,
-                "response_action": "chat",
-                "module_name": "community",
-                "chat_message": result["message"]
-            }
-        else:
-            return {
-                "success": False,
-                "response_action": "chat",
-                "module_name": "community",
-                "chat_message": result["message"],
-                "error_message": result.get("error", "")
-            }
-            
-    except Exception as e:
-        logger.error(f"Error handling form submission: {str(e)}")
-        return {
-            "success": False,
-            "response_action": "chat",
-            "module_name": "community",
-            "chat_message": "An error occurred while processing your form submission.",
-            "error_message": str(e)
-        }
+api_bp = Blueprint('api', __name__, url_prefix='/api/v1')
+logger = setup_aaa_logging(Config.MODULE_NAME, Config.MODULE_VERSION)
+
+dal = None
+
+
+@app.before_serving
+async def startup():
+    global dal
+    logger.system("Starting community_module", action="startup")
+    dal = init_database(Config.DATABASE_URL)
+    app.config['dal'] = dal
+    logger.system("community_module started", result="SUCCESS")
+
+
+@api_bp.route('/status')
+@async_endpoint
+async def status():
+    return success_response({"status": "operational", "module": Config.MODULE_NAME})
+
+app.register_blueprint(api_bp)
+
+if __name__ == '__main__':
+    import hypercorn.asyncio
+    from hypercorn.config import Config as HyperConfig
+    config = HyperConfig()
+    config.bind = [f"0.0.0.0:{Config.MODULE_PORT}"]
+    asyncio.run(hypercorn.asyncio.serve(app, config))

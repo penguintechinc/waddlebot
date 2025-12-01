@@ -1,45 +1,27 @@
-FROM python:3.12-slim
+# Build from parent directory: docker build -f identity_core_module_flask/Dockerfile -t waddlebot/identity-core:latest .
 
-# Set working directory
+FROM python:3.13-slim
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Copy shared library
+COPY libs/flask_core /app/libs/flask_core
 
-# Create non-root user
-RUN groupadd -r waddlebot && useradd -r -g waddlebot waddlebot
+# Install shared library
+RUN cd /app/libs/flask_core && pip install --no-cache-dir .
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Copy module files
+COPY identity_core_module_flask/requirements.txt /app/
+COPY identity_core_module_flask /app/
 
-# Install Python dependencies
+# Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
-
 # Create log directory
-RUN mkdir -p /var/log/waddlebotlog && chown -R waddlebot:waddlebot /var/log/waddlebotlog
-
-# Set proper permissions
-RUN chown -R waddlebot:waddlebot /app
-
-# Switch to non-root user
-USER waddlebot
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8050/health', timeout=5)"
+RUN mkdir -p /var/log/waddlebotlog
 
 # Expose port
 EXPOSE 8050
 
-# Set environment variables
-ENV PYTHONPATH=/app
-ENV PY4WEB_APPS_FOLDER=/app
-
-# Run the application
-CMD ["python", "-m", "py4web", "run", "apps", "--host", "0.0.0.0", "--port", "8050", "--number_workers", "4"]
+# Run with Hypercorn
+CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8050", "--workers", "4"]
