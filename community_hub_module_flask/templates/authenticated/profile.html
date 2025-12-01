@@ -1,0 +1,67 @@
+{% extends "layout.html" %}
+
+{% block title %}Profile - WaddleBot{% endblock %}
+
+{% block content %}
+<section class="section">
+    <div class="container">
+        <div class="columns">
+            <div class="column is-4">
+                <div class="box has-text-centered">
+                    {% if user.avatar_url %}
+                    <figure class="image is-128x128 is-inline-block mb-4">
+                        <img class="is-rounded" src="{{ user.avatar_url }}">
+                    </figure>
+                    {% else %}
+                    <span class="icon is-large mb-4">
+                        <i class="fas fa-user-circle fa-5x has-text-grey"></i>
+                    </span>
+                    {% endif %}
+                    <h2 class="title is-4">{{ user.user_name }}</h2>
+                    <p class="subtitle is-6 has-text-grey">
+                        <i class="fab fa-{{ user.platform }} mr-1"></i>{{ user.platform | title }}
+                    </p>
+                </div>
+            </div>
+
+            <div class="column is-8">
+                <div class="box">
+                    <h3 class="title is-5">Your Communities</h3>
+
+                    {% if communities %}
+                    {% for community in communities %}
+                    <div class="media">
+                        <div class="media-content">
+                            <p><strong>{{ community.name }}</strong></p>
+                            <p class="is-size-7 has-text-grey">
+                                Joined {{ community.joined_at | time_since if community.joined_at else 'recently' }}
+                            </p>
+
+                            {% if community.recent_activity %}
+                            <div class="mt-2">
+                                <p class="is-size-7 has-text-grey">Recent activity:</p>
+                                {% for activity in community.recent_activity[:3] %}
+                                <span class="tag is-light is-small mr-1">
+                                    {{ activity.event_label }} ({{ activity.relative_time }})
+                                </span>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                        <div class="media-right">
+                            <a class="button is-small is-primary"
+                               href="{{ url_for('authenticated.community_hub', community_id=community.id) }}">
+                                View Hub
+                            </a>
+                        </div>
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <p class="has-text-grey">You're not a member of any communities yet.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}

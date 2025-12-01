@@ -22,6 +22,7 @@ hiredis>=2.3.2  # Optional C parser for better performance
 
 # HTTP Client (async)
 httpx>=0.26.0  # For async HTTP requests
+requests>=2.31.0  # Required by authlib for OAuth1 support
 
 # Data Validation
 pydantic>=2.5.0

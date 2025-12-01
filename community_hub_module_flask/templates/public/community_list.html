@@ -1,0 +1,81 @@
+{% extends "layout.html" %}
+
+{% block title %}Browse Communities - WaddleBot{% endblock %}
+
+{% block content %}
+<section class="section">
+    <div class="container">
+        <h1 class="title">Browse Communities</h1>
+        <p class="subtitle">Discover WaddleBot communities across platforms</p>
+
+        {% if communities %}
+        <div class="columns is-multiline">
+            {% for comm in communities %}
+            <div class="column is-4">
+                <div class="card">
+                    <div class="card-content">
+                        <p class="title is-5">{{ comm.name }}</p>
+                        <p class="content">
+                            {{ comm.description | truncate(150) if comm.description else 'A WaddleBot community' }}
+                        </p>
+                        <div class="level is-mobile">
+                            <div class="level-left">
+                                <span class="tag is-light">
+                                    <i class="fas fa-users mr-1"></i>{{ comm.member_count }} members
+                                </span>
+                            </div>
+                            <div class="level-right">
+                                <a class="button is-small is-primary"
+                                   href="{{ url_for('public.community_view', community_id=comm.id) }}">
+                                    View Hub
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Pagination -->
+        {% if total_pages > 1 %}
+        <nav class="pagination is-centered mt-5" role="navigation" aria-label="pagination">
+            {% if page > 1 %}
+            <a class="pagination-previous"
+               href="{{ url_for('public.community_list', page=page-1, per_page=per_page) }}">
+                Previous
+            </a>
+            {% else %}
+            <a class="pagination-previous" disabled>Previous</a>
+            {% endif %}
+
+            {% if page < total_pages %}
+            <a class="pagination-next"
+               href="{{ url_for('public.community_list', page=page+1, per_page=per_page) }}">
+                Next
+            </a>
+            {% else %}
+            <a class="pagination-next" disabled>Next</a>
+            {% endif %}
+
+            <ul class="pagination-list">
+                {% for p in range(1, total_pages + 1) %}
+                <li>
+                    <a class="pagination-link {% if p == page %}is-current{% endif %}"
+                       href="{{ url_for('public.community_list', page=p, per_page=per_page) }}">
+                        {{ p }}
+                    </a>
+                </li>
+                {% endfor %}
+            </ul>
+        </nav>
+        {% endif %}
+
+        {% else %}
+        <div class="box has-text-centered">
+            <p class="has-text-grey">No communities found.</p>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

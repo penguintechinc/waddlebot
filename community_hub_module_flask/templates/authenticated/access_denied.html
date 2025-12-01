@@ -1,0 +1,20 @@
+{% extends "layout.html" %}
+
+{% block title %}Access Denied - WaddleBot{% endblock %}
+
+{% block content %}
+<section class="hero is-medium is-warning">
+    <div class="hero-body">
+        <div class="container has-text-centered">
+            <span class="icon is-large mb-4">
+                <i class="fas fa-lock fa-3x"></i>
+            </span>
+            <h1 class="title">Access Denied</h1>
+            <p class="subtitle">You don't have permission to view this content.</p>
+            <a class="button is-dark" href="{{ url_for('authenticated.dashboard') }}">
+                <i class="fas fa-arrow-left mr-2"></i> Back to Dashboard
+            </a>
+        </div>
+    </div>
+</section>
+{% endblock %}

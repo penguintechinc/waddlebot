@@ -1,0 +1,108 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ community.name }} - WaddleBot{% endblock %}
+
+{% block content %}
+<section class="hero is-medium is-primary">
+    <div class="hero-body">
+        <div class="container">
+            <h1 class="title is-1">{{ community.name }}</h1>
+            {% if community.description %}
+            <h2 class="subtitle">{{ community.description }}</h2>
+            {% endif %}
+
+            <div class="level mt-4">
+                <div class="level-left">
+                    <div class="level-item">
+                        <span class="tag is-large is-light">
+                            <i class="fas fa-users mr-2"></i>{{ community.member_count }} members
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Platform Stats -->
+            <div class="columns mt-4">
+                {% if community.platform_stats.discord.servers > 0 %}
+                <div class="column is-narrow">
+                    <span class="tag is-medium discord-tag">
+                        <i class="fab fa-discord mr-1"></i>
+                        {{ community.platform_stats.discord.servers }} Discord
+                    </span>
+                </div>
+                {% endif %}
+                {% if community.platform_stats.twitch.channels > 0 %}
+                <div class="column is-narrow">
+                    <span class="tag is-medium twitch-tag">
+                        <i class="fab fa-twitch mr-1"></i>
+                        {{ community.platform_stats.twitch.channels }} Twitch
+                    </span>
+                </div>
+                {% endif %}
+                {% if community.platform_stats.slack.workspaces > 0 %}
+                <div class="column is-narrow">
+                    <span class="tag is-medium slack-tag">
+                        <i class="fab fa-slack mr-1"></i>
+                        {{ community.platform_stats.slack.workspaces }} Slack
+                    </span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Live Streams -->
+{% if live_streams %}
+<section class="section">
+    <div class="container">
+        <h2 class="title is-4">
+            <span class="live-indicator"></span> Live Now
+        </h2>
+        <div class="columns is-multiline">
+            {% for stream in live_streams %}
+            <div class="column is-4">
+                <div class="card stream-card">
+                    {% if stream.thumbnail_url %}
+                    <div class="card-image">
+                        <figure class="image is-16by9">
+                            <img src="{{ stream.thumbnail_url }}" alt="{{ stream.channel_name }}">
+                        </figure>
+                        <span class="viewer-count tag is-dark">
+                            <i class="fas fa-eye mr-1"></i>{{ stream.viewer_count }}
+                        </span>
+                    </div>
+                    {% endif %}
+                    <div class="card-content">
+                        <p class="title is-6">{{ stream.channel_name }}</p>
+                        {% if stream.game %}
+                        <span class="tag is-info is-light">{{ stream.game }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endif %}
+
+<!-- Login CTA -->
+<section class="section has-background-light">
+    <div class="container">
+        <div class="box has-text-centered">
+            <h3 class="title is-4">Want to see more?</h3>
+            <p class="subtitle">Login to view member lists, activity feeds, leaderboards, and more!</p>
+            {% if not session.get('user') %}
+            <a class="button is-primary is-medium" href="{{ url_for('auth.login', next=url_for('authenticated.community_hub', community_id=community.id)) }}">
+                <i class="fas fa-sign-in-alt mr-2"></i> Login to Access Full Hub
+            </a>
+            {% else %}
+            <a class="button is-primary is-medium" href="{{ url_for('authenticated.community_hub', community_id=community.id) }}">
+                <i class="fas fa-th-large mr-2"></i> Enter Full Hub
+            </a>
+            {% endif %}
+        </div>
+    </div>
+</section>
+{% endblock %}

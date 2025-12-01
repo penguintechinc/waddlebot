@@ -1,0 +1,29 @@
+{% extends "layout.html" %}
+
+{% block title %}Logout - WaddleBot{% endblock %}
+
+{% block content %}
+<section class="section">
+    <div class="container">
+        <div class="columns is-centered">
+            <div class="column is-6">
+                <div class="box has-text-centered">
+                    <h1 class="title">Logout</h1>
+                    <p class="subtitle has-text-grey">
+                        Are you sure you want to logout, {{ user.user_name }}?
+                    </p>
+
+                    <form action="{{ url_for('auth.logout') }}" method="POST">
+                        <button type="submit" class="button is-danger is-medium">
+                            <i class="fas fa-sign-out-alt mr-2"></i> Yes, Logout
+                        </button>
+                        <a class="button is-light is-medium" href="{{ url_for('authenticated.dashboard') }}">
+                            Cancel
+                        </a>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}

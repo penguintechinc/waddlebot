@@ -1,0 +1,226 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ community.name }} Hub - WaddleBot{% endblock %}
+
+{% block content %}
+<section class="hero is-primary">
+    <div class="hero-body">
+        <div class="container">
+            <h1 class="title">{{ community.name }}</h1>
+            <p class="subtitle">Community Hub</p>
+            <span class="tag is-light">{{ community.user_role | title }}</span>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <!-- Live Streams -->
+        {% if live_streams %}
+        <div class="box">
+            <h2 class="title is-5">
+                <span class="live-indicator"></span> Live Now
+            </h2>
+            <div class="columns is-multiline" id="live-streams-container">
+                {% for stream in live_streams %}
+                <div class="column is-4">
+                    <div class="card stream-card is-small">
+                        {% if stream.thumbnail_url %}
+                        <div class="card-image">
+                            <figure class="image is-16by9">
+                                <img src="{{ stream.thumbnail_url }}" alt="{{ stream.channel_name }}">
+                            </figure>
+                            <span class="viewer-count tag is-dark is-small">
+                                {{ stream.viewer_count }}
+                            </span>
+                        </div>
+                        {% endif %}
+                        <div class="card-content is-small">
+                            <p class="is-size-6"><strong>{{ stream.channel_name }}</strong></p>
+                            {% if stream.game %}
+                            <span class="tag is-info is-light is-small">{{ stream.game }}</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="columns">
+            <!-- Leaderboard -->
+            <div class="column is-6">
+                <div class="box">
+                    <h2 class="title is-5">
+                        <i class="fas fa-trophy mr-2"></i> Leaderboard
+                    </h2>
+                    {% if leaderboard %}
+                    <table class="table is-fullwidth is-striped">
+                        <tbody>
+                            {% for entry in leaderboard %}
+                            <tr>
+                                <td>
+                                    {% if entry.rank == 1 %}
+                                    <span class="icon has-text-warning"><i class="fas fa-medal"></i></span>
+                                    {% elif entry.rank == 2 %}
+                                    <span class="icon has-text-grey-light"><i class="fas fa-medal"></i></span>
+                                    {% elif entry.rank == 3 %}
+                                    <span class="icon" style="color: #cd7f32;"><i class="fas fa-medal"></i></span>
+                                    {% else %}
+                                    {{ entry.rank }}.
+                                    {% endif %}
+                                </td>
+                                <td>{{ entry.user_id }}</td>
+                                <td class="has-text-right">
+                                    <strong>{{ entry.score | format_number }}</strong> pts
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <p class="has-text-grey">No reputation data yet.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Upcoming Events -->
+            <div class="column is-6">
+                <div class="box">
+                    <h2 class="title is-5">
+                        <i class="fas fa-calendar mr-2"></i> Upcoming Events
+                    </h2>
+                    {% if dashboard_data.events %}
+                    <div class="content">
+                        {% for event in dashboard_data.events %}
+                        <div class="mb-3">
+                            <strong>{{ event.title }}</strong>
+                            <br>
+                            <span class="is-size-7 has-text-grey">
+                                {{ event.event_date }}
+                            </span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="has-text-grey">No upcoming events.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="columns">
+            <!-- Inventory (if authorized) -->
+            <div class="column is-6">
+                <div class="box">
+                    <h2 class="title is-5">
+                        <i class="fas fa-box mr-2"></i> Community Inventory
+                    </h2>
+                    {% if dashboard_data.inventory.authorized %}
+                        {% if dashboard_data.inventory.items %}
+                        <div class="content">
+                            {% for item in dashboard_data.inventory.items[:5] %}
+                            <div class="level is-mobile mb-2">
+                                <div class="level-left">
+                                    <span>{{ item.name }}</span>
+                                </div>
+                                <div class="level-right">
+                                    {% if item.is_checked_out %}
+                                    <span class="tag is-warning">Checked Out</span>
+                                    {% else %}
+                                    <span class="tag is-success">Available</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <p class="has-text-grey">No inventory items.</p>
+                        {% endif %}
+                    {% else %}
+                    <p class="has-text-grey">
+                        <i class="fas fa-lock mr-1"></i>
+                        Requires inventory:view permission
+                    </p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Recent Quotes (if authorized) -->
+            <div class="column is-6">
+                <div class="box">
+                    <h2 class="title is-5">
+                        <i class="fas fa-quote-left mr-2"></i> Recent Quotes
+                    </h2>
+                    {% if dashboard_data.quotes.authorized %}
+                        {% if dashboard_data.quotes.memories %}
+                        <div class="content">
+                            {% for quote in dashboard_data.quotes.memories %}
+                            <blockquote class="mb-3">
+                                "{{ quote.content | truncate(100) }}"
+                                <br>
+                                <cite class="is-size-7">- {{ quote.author or 'Unknown' }}</cite>
+                            </blockquote>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <p class="has-text-grey">No quotes yet.</p>
+                        {% endif %}
+                    {% else %}
+                    <p class="has-text-grey">
+                        <i class="fas fa-lock mr-1"></i>
+                        Requires memories:view permission
+                    </p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Activity Feed -->
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-stream mr-2"></i> Activity Feed
+            </h2>
+            <div id="activity-feed">
+                {% if activities %}
+                {% for activity in activities %}
+                <div class="activity-item level is-mobile">
+                    <div class="level-left">
+                        <div>
+                            <span class="tag is-{{ activity.platform }}-color is-small mr-2">
+                                {{ activity.platform }}
+                            </span>
+                            <strong>{{ activity.user_name }}</strong>
+                            {{ activity.event_label }}
+                            <span class="has-text-grey is-size-7 ml-2">
+                                {{ activity.relative_time }}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="level-right">
+                        <span class="tag is-light">+{{ activity.points }} pts</span>
+                    </div>
+                </div>
+                {% endfor %}
+                {% else %}
+                <p class="has-text-grey">No recent activity.</p>
+                {% endif %}
+            </div>
+            <a class="button is-small is-link is-light mt-3"
+               href="{{ url_for('authenticated.activity_feed', community_id=community.id) }}">
+                View Full Activity Feed
+            </a>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/live-updates.js') }}"></script>
+<script src="{{ url_for('static', filename='js/activity-feed.js') }}"></script>
+<script>
+    initLiveUpdates({{ polling_interval_live * 1000 }});
+    initActivityFeed({{ community.id }}, {{ polling_interval_activity * 1000 }});
+</script>
+{% endblock %}

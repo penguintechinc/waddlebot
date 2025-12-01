@@ -294,6 +294,13 @@ class AsyncDAL:
         return getattr(self.dal, name)
 
 
+def _convert_uri_for_pydal(uri: str) -> str:
+    """Convert postgresql:// to postgres:// for PyDAL compatibility."""
+    if uri and uri.startswith('postgresql://'):
+        return uri.replace('postgresql://', 'postgres://', 1)
+    return uri
+
+
 def init_database(
     uri: str,
     pool_size: int = 10,
@@ -314,10 +321,14 @@ def init_database(
     Returns:
         Configured AsyncDAL instance
     """
+    # Convert postgresql:// to postgres:// for PyDAL compatibility
+    converted_uri = _convert_uri_for_pydal(uri)
+    converted_replica = _convert_uri_for_pydal(read_replica_uri) if read_replica_uri else None
+
     return AsyncDAL(
-        uri=uri,
+        uri=converted_uri,
         pool_size=pool_size,
         folder=folder,
         migrate=migrate,
-        read_replica_uri=read_replica_uri
+        read_replica_uri=converted_replica
     )

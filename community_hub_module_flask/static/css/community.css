@@ -1,0 +1,230 @@
+/* WaddleBot Community Hub Styles */
+
+/* Platform Colors */
+:root {
+    --discord-color: #5865F2;
+    --twitch-color: #9146FF;
+    --slack-color: #4A154B;
+}
+
+/* Platform Backgrounds */
+.discord-bg {
+    background-color: var(--discord-color) !important;
+    color: white !important;
+}
+
+.twitch-bg {
+    background-color: var(--twitch-color) !important;
+    color: white !important;
+}
+
+.slack-bg {
+    background-color: var(--slack-color) !important;
+    color: white !important;
+}
+
+/* Platform Tags */
+.discord-tag {
+    background-color: var(--discord-color);
+    color: white;
+}
+
+.twitch-tag {
+    background-color: var(--twitch-color);
+    color: white;
+}
+
+.slack-tag {
+    background-color: var(--slack-color);
+    color: white;
+}
+
+/* Platform badges */
+.platform-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    color: white;
+    font-size: 12px;
+}
+
+/* Platform Stats */
+.platform-stat {
+    text-align: center;
+    min-width: 150px;
+}
+
+.platform-stat .icon {
+    display: block;
+    margin-bottom: 0.5rem;
+}
+
+/* Live Indicator */
+.live-indicator {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    background-color: #ff0000;
+    border-radius: 50%;
+    margin-right: 8px;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.7);
+    }
+    70% {
+        box-shadow: 0 0 0 10px rgba(255, 0, 0, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(255, 0, 0, 0);
+    }
+}
+
+/* Stream Cards */
+.stream-card {
+    position: relative;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.stream-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.15);
+}
+
+.stream-card .card-image {
+    position: relative;
+}
+
+.stream-card .viewer-count {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+}
+
+.stream-card.is-small .card-content {
+    padding: 0.75rem;
+}
+
+/* Twitch Link */
+.twitch-link {
+    background-color: var(--twitch-color);
+    color: white !important;
+}
+
+.twitch-link:hover {
+    background-color: #7c3aed;
+    color: white !important;
+}
+
+/* OAuth Buttons */
+.oauth-button {
+    width: 100%;
+    margin-bottom: 1rem;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.oauth-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* User Avatar */
+.user-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+/* Activity Feed */
+.activity-item {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid #f5f5f5;
+}
+
+.activity-item:last-child {
+    border-bottom: none;
+}
+
+.activity-item .platform-badge {
+    margin-right: 0.5rem;
+}
+
+/* Platform color tags for activity */
+.is-discord-color {
+    background-color: var(--discord-color);
+    color: white;
+}
+
+.is-twitch-color {
+    background-color: var(--twitch-color);
+    color: white;
+}
+
+.is-slack-color {
+    background-color: var(--slack-color);
+    color: white;
+}
+
+/* Hero adjustments */
+.hero.is-primary {
+    background: linear-gradient(135deg, #00d1b2 0%, #00a89d 100%);
+}
+
+/* Footer */
+.footer {
+    padding: 2rem 1.5rem;
+    background-color: #fafafa;
+}
+
+/* Responsive adjustments */
+@media screen and (max-width: 768px) {
+    .platform-stat {
+        min-width: 100px;
+    }
+
+    .stream-card .card-content {
+        padding: 0.75rem;
+    }
+}
+
+/* Loading spinner */
+.loading-spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #00d1b2;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Fade in animation */
+.fade-in {
+    animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* New activity highlight */
+.activity-item.new {
+    animation: highlight 2s ease-out;
+}
+
+@keyframes highlight {
+    from { background-color: #fffde7; }
+    to { background-color: transparent; }
+}

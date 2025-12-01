@@ -1,0 +1,43 @@
+{% extends "layout.html" %}
+
+{% block title %}Login - WaddleBot Community Hub{% endblock %}
+
+{% block content %}
+<section class="hero is-medium">
+    <div class="hero-body">
+        <div class="container">
+            <div class="columns is-centered">
+                <div class="column is-6">
+                    <div class="box">
+                        <h1 class="title has-text-centered">Login</h1>
+                        <p class="subtitle has-text-centered has-text-grey">
+                            Choose your platform to continue
+                        </p>
+
+                        <div class="buttons is-centered mt-5">
+                            {% for platform_id, platform in platforms.items() %}
+                            <a href="{{ url_for('auth.oauth_start', platform=platform_id, next=next_url) }}"
+                               class="button is-large oauth-button"
+                               style="background-color: {{ platform.color }}; color: white;">
+                                <span class="icon">
+                                    <i class="fab fa-{{ platform_id }}"></i>
+                                </span>
+                                <span>Continue with {{ platform.name }}</span>
+                            </a>
+                            {% endfor %}
+                        </div>
+
+                        <hr>
+
+                        <p class="has-text-centered has-text-grey is-size-7">
+                            By logging in, you agree to our Terms of Service and Privacy Policy.
+                            <br>
+                            Your platform credentials are never stored by WaddleBot.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}

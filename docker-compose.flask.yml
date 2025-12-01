@@ -1,5 +1,3 @@
-version: '3.8'
-
 # WaddleBot Flask/Quart Docker Compose
 # Secure network isolation: internal services not exposed to host
 
@@ -62,7 +60,7 @@ services:
   # =============================================================================
 
   kong:
-    image: kong:3.4-alpine
+    image: kong:3.9
     container_name: waddlebot-kong
     environment:
       KONG_DATABASE: "off"
@@ -164,6 +162,44 @@ services:
       - router
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  community-hub:
+    build:
+      context: .
+      dockerfile: community_hub_module_flask/Dockerfile
+    container_name: waddlebot-community-hub
+    environment:
+      MODULE_NAME: community-hub
+      MODULE_PORT: 8060
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      ROUTER_API_URL: http://router:8000
+      IDENTITY_API_URL: http://identity-core:8050
+      INVENTORY_API_URL: http://inventory-interaction:8024
+      REPUTATION_API_URL: http://reputation:8021
+      CALENDAR_API_URL: http://calendar-interaction:8030
+      MEMORIES_API_URL: http://memories-interaction:8031
+      LABELS_API_URL: http://labels-core:8023
+      SHOUTOUT_API_URL: http://shoutout-interaction:8011
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-waddlebot_redis}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      BASE_DOMAIN: ${BASE_DOMAIN:-waddlebot.io}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8060:8060"  # Community Hub WebUI (public)
+    networks:
+      - waddlebot-public
+      - waddlebot-internal
+    depends_on:
+      - router
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8060/health"]
       interval: 30s
       timeout: 10s
       retries: 3
