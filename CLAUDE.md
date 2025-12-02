@@ -34,17 +34,6 @@ WaddleBot is a multi-platform chat bot system with a modular, microservices arch
 
 ## Architecture
 
-### Core Components
-- **Processing (Router)**: Flask/Quart-based API layer that handles event routing and action module execution
-- **Trigger (Receivers)**: Individual Docker containers that receive webhooks/events from platforms
-- **Action (Interactive/Pushing/Security)**: Docker containers that execute responses and actions
-- **Core Services**: Platform services for identity, labels, browser sources, reputation, and community management
-- **Database**: Default using PostgreSQL db server storing:
-  - `servers` table: owner, platform (twitch/discord/slack), channel, configuration
-  - Routes to action modules
-  - User logins, roles, permissions
-  - Module registrations and configurations
-
 ### Technology Stack
 - **Primary Framework**: Flask/Quart on Python 3.13
 - **Routing**: Hub module handles direct routing (Kong removed)
@@ -56,47 +45,12 @@ WaddleBot is a multi-platform chat bot system with a modular, microservices arch
 - **Authentication**: API Key authentication with role-based access control
 - **Future Migration**: Parts may migrate to Golang later
 
-## Current Implementation
-
-### Processing Module (Flask/Quart-based)
-- **router_module/**: High-performance command router with multi-threading, caching, and read replicas
-
-### Trigger Modules (Flask/Quart-based)
-#### Receiver Modules
-- **twitch_module/**: Complete Twitch collector with EventSub webhooks, OAuth, and API integration
-- **discord_module/**: Discord collector using py-cord library for bot events and slash commands
-- **slack_module/**: Slack collector using Slack SDK for events and slash commands
-
-### Action Modules (Flask/Quart-based)
-#### Interactive Modules
-- **ai_interaction_module/**: AI-powered interaction module supporting Ollama, OpenAI, and MCP providers for chat responses
-- **alias_interaction_module/**: Linux-style alias system for custom commands with variable substitution
-- **shoutout_interaction_module/**: Platform-specific user shoutouts with Twitch API integration and auto-shoutout functionality
-- **inventory_interaction_module/**: Multi-threaded inventory management system for tracking any item (IRL or in-game) with label support and comprehensive AAA logging
-- **calendar_interaction_module/**: Event management system with approval workflows, recurring events, and label-based auto-approval
-- **memories_interaction_module/**: Community memory management system for quotes, reminders, and URLs with label-based permissions
-- **youtube_music_interaction_module/**: YouTube Music integration with search, playback control, and media browser source output
-- **spotify_interaction_module/**: Spotify integration with OAuth authentication, search, playback control, and media browser source output
-
-### Core Modules (Flask/Quart-based)
-- **identity_core_module/**: Cross-platform identity linking and verification system built on Flask-Security-Too with comprehensive API key management
-- **labels_core_module/**: High-performance multi-threaded label management system for communities, users, modules, and entity groups with user identity verification
-- **browser_source_core_module/**: Multi-threaded browser source management system for OBS integration with ticker, media, and general display sources
-- **reputation_module/**: User reputation and activity tracking system
-- **community_module/**: Community management and configuration service
-
-### Admin Modules (Flask/Quart-based)
-- **hub_module/**: Community management portal with authentication, user dashboard, and direct routing (replaces Kong)
-
-### Archive (Deprecated/Legacy)
-- **marketplace_module/**: Community module marketplace (DEPRECATED - functionality moved to hub_module)
-- **kong_admin_broker/**: Kong super admin management (REMOVED - Kong no longer used)
-- **chat/**: Matterbridge-based chat integration (LEGACY)
-- **gateway/**: Flask-based API gateway (DEPRECATED - migrated to hub_module)
-- **listener/**: Legacy Twitch authentication and activity listeners (LEGACY)
-
-### Shared Libraries
-- **libs/flask_core/**: Shared Flask/Quart utilities (AsyncDAL, auth, datamodels, logging, API utils)
+### Core Components
+- **Processing (Router)**: Flask/Quart-based API layer that handles event routing and action module execution
+- **Trigger (Receivers)**: Individual Docker containers that receive webhooks/events from platforms
+- **Action (Interactive/Pushing/Security)**: Docker containers that execute responses and actions
+- **Core Services**: Platform services for identity, labels, browser sources, reputation, and community management
+- **Database**: PostgreSQL storing servers, routes, logins, roles, permissions, module registrations
 
 ### Trigger (Receiver) Architecture
 Each trigger/receiver module:
@@ -108,1634 +62,211 @@ Each trigger/receiver module:
 - Designed for handling 1000+ chat channels at a time
 - All configuration comes from environment variables passed through docker
 
-### Database Schema (Key Tables)
-```sql
--- Shared across all collectors
-servers (
-    id, owner, platform, channel, server_id, 
-    is_active, webhook_url, config, 
-    last_activity, created_at, updated_at
-)
+## Current Implementation
 
--- Module registration
-collector_modules (
-    module_name, module_version, platform, endpoint_url,
-    health_check_url, status, last_heartbeat, config,
-    created_at, updated_at
-)
-```
+### Processing Module
+- **router_module/**: High-performance command router with multi-threading, caching, and read replicas
 
-## Current State vs Vision
+### Trigger Modules (Receivers)
+- **twitch_module/**: Complete Twitch collector with EventSub webhooks, OAuth, and API integration
+- **discord_module/**: Discord collector using py-cord library for bot events and slash commands
+- **slack_module/**: Slack collector using Slack SDK for events and slash commands
 
-**Vision**: py4web-based core with collector modules reaching out to platforms
-**Current**: Mixed Flask/web2py implementation with some py4web components
+### Action Modules (Interactive)
+- **ai_interaction_module/**: AI-powered interaction supporting Ollama, OpenAI, and MCP providers
+- **alias_interaction_module/**: Linux-style alias system for custom commands
+- **shoutout_interaction_module/**: Platform-specific user shoutouts with Twitch API integration
+- **inventory_interaction_module/**: Multi-threaded inventory management system
+- **calendar_interaction_module/**: Event management with approval workflows and recurring events
+- **memories_interaction_module/**: Community memory management for quotes, reminders, URLs
+- **youtube_music_interaction_module/**: YouTube Music integration with browser source output
+- **spotify_interaction_module/**: Spotify integration with OAuth and playback control
 
-**Completed**: 
-- Twitch collector module in py4web with full Docker/Kubernetes support
-- PostgreSQL integration with servers table
-- Core API communication patterns
-- Webhook handling for Twitch EventSub
-- Authentication and token management
+### Core Modules
+- **identity_core_module/**: Cross-platform identity linking with Flask-Security-Too
+- **labels_core_module/**: High-performance label management system
+- **browser_source_core_module/**: OBS browser source integration with WebSocket
+- **reputation_module/**: User reputation and activity tracking
+- **community_module/**: Community management and configuration
 
-## Development Guidelines
+### Admin Modules
+- **hub_module/**: Community portal with authentication, dashboard, and direct routing
 
-### Code Patterns
-- **Native Library Usage**: Always prioritize native functionality of specified libraries (py4web, py-cord, etc.) over custom implementations
-- Follow existing WaddleBot dataclass patterns (see `listener/WaddleBot-Twitch-Activity-Listener/src/dataclasses/`)
-- Use environment variables for all configuration
-- Implement proper logging and error handling
-- Include database migrations
-- Follow security best practices (webhook signature verification, token management)
+### Shared Libraries
+- **libs/flask_core/**: Shared Flask/Quart utilities (AsyncDAL, auth, datamodels, logging, API utils)
 
-### Comprehensive Logging Requirements (ALL MODULES)
-All WaddleBot container modules MUST implement comprehensive Authentication, Authorization, and Auditing (AAA) logging:
-
-**Required Logging Outputs:**
-- **Console**: All logs output to stdout/stderr for container orchestration
-- **File Logging**: Structured logs to `/var/log/waddlebotlog/` with rotation (10MB, 5 backups)
-- **Syslog (Optional)**: Configurable syslog support for centralized logging
-
-**Log Categories:**
-- `AUTH`: Authentication events (login, logout, token refresh, failures)
-- `AUTHZ`: Authorization events (permission checks, access grants/denials)
-- `AUDIT`: User actions and system changes (CRUD operations, configuration changes)
-- `ERROR`: Error conditions and exceptions
-- `SYSTEM`: System events (startup, shutdown, health checks)
-
-**Required Log Structure:**
-```
-[timestamp] LEVEL module:version EVENT_TYPE community=X user=Y action=Z result=STATUS [additional_fields]
-```
-
-**Log Configuration (Environment Variables):**
-```bash
-LOG_LEVEL=INFO                    # DEBUG, INFO, WARNING, ERROR
-LOG_DIR=/var/log/waddlebotlog    # Log directory path
-ENABLE_SYSLOG=false              # Enable syslog output
-SYSLOG_HOST=localhost            # Syslog server host
-SYSLOG_PORT=514                  # Syslog server port
-SYSLOG_FACILITY=LOCAL0           # Syslog facility
-```
-
-**Implementation Requirements:**
-- Use structured logging with consistent field names
-- Include execution time for performance monitoring
-- Log all user actions with community context
-- Implement log rotation and retention policies
-- Thread-safe logging for concurrent operations
-- Decorator patterns for automatic audit logging
-- Comprehensive error context and stack traces
-
-### Performance Considerations
-- **Threading**: Utilize ThreadPoolExecutor for concurrent operations when dealing with thousands of entities
-  - RBAC service uses 10 worker threads for bulk operations
-  - Bulk permission checks, role assignments, and user management operations
-  - Concurrent processing for thousands of users/entities simultaneously
-- **Database**: Separate each module and router operations into dedicated tables for better locking performance
-  - Reduces contention on small number of tables
-  - Allows concurrent role assignments without blocking membership operations
-- **Bulk Operations**: Implement bulk processing methods for role assignments, permission checks, and user management
-  - `check_permissions_bulk()` - Check multiple permissions concurrently
-  - `assign_roles_bulk()` - Assign roles to multiple users concurrently
-  - `ensure_users_in_global_community_bulk()` - Batch user onboarding
-  - `get_user_roles_bulk()` - Retrieve roles for multiple users concurrently
-- **Caching**: Use Redis caching for frequently accessed permissions and roles
-- **Connection Pooling**: Leverage database connection pooling for high-concurrency scenarios
-
-### Activity Processing
-- Activities have point values: follow=10, sub=50, bits=variable, raid=30, subgift=60, ban=-10
-- Process through context API to get user identity
-- Send to reputation API for point tracking
-- Log all events and activities for audit
-
-### Docker/Kubernetes
-- Each collector is a separate container
-- Use proper health checks and readiness probes
-- Include resource limits and autoscaling
-- Secure with non-root users and read-only filesystems
-- Environment-based configuration
+### Archive (Deprecated/Legacy)
+- **marketplace_module/**: (DEPRECATED - moved to hub_module)
+- **kong_admin_broker/**: (REMOVED - Kong no longer used)
+- **chat/**: (LEGACY - Matterbridge integration)
+- **gateway/**: (DEPRECATED - migrated to hub_module)
+- **listener/**: (LEGACY - Twitch listeners)
 
 ## File Structure
 ```
 WaddleBot/
 ├── trigger/                          # Modules that START the workflow
 │   ├── receiver/                     # Webhook/event receivers
-│   │   ├── twitch_module_flask/     # Twitch EventSub webhooks, OAuth, API integration
-│   │   ├── discord_module_flask/    # Discord py-cord bot events and slash commands
-│   │   └── slack_module_flask/      # Slack SDK events and slash commands
-│   ├── poller/                       # Cron-based polling (future: IRC)
+│   │   ├── twitch_module_flask/     # Twitch EventSub webhooks, OAuth
+│   │   ├── discord_module_flask/    # Discord py-cord bot events
+│   │   └── slack_module_flask/      # Slack SDK events
+│   ├── poller/                       # Cron-based polling (future)
 │   └── cron/                         # Timed actions (future)
 ├── processing/                       # Main API server
-│   └── router_module_flask/         # High-performance command router with multi-threading
-│       ├── controllers/             # Router endpoints, health, metrics
-│       ├── models.py               # Commands, entities, executions tables
-│       ├── services/               # Command processor, cache, rate limiter
-│       ├── k8s/                    # Kubernetes deployment configs
-│       └── Dockerfile              # Container definition
+│   └── router_module_flask/         # High-performance command router
 ├── action/                           # Response/action modules
 │   ├── interactive/                 # Return responses to users
-│   │   ├── ai_interaction_module_flask/       # AI chat with Ollama/OpenAI/MCP
-│   │   ├── alias_interaction_module_flask/    # Linux-style alias system
-│   │   ├── shoutout_interaction_module_flask/ # Platform-specific shoutouts
-│   │   ├── inventory_interaction_module_flask/  # Inventory management
-│   │   ├── calendar_interaction_module_flask/   # Event management
-│   │   ├── memories_interaction_module_flask/   # Quotes, reminders, URLs
-│   │   ├── youtube_music_interaction_module_flask/  # YouTube Music integration
-│   │   └── spotify_interaction_module_flask/    # Spotify integration
+│   │   ├── ai_interaction_module_flask/
+│   │   ├── alias_interaction_module_flask/
+│   │   ├── shoutout_interaction_module_flask/
+│   │   ├── inventory_interaction_module_flask/
+│   │   ├── calendar_interaction_module_flask/
+│   │   ├── memories_interaction_module_flask/
+│   │   ├── youtube_music_interaction_module_flask/
+│   │   └── spotify_interaction_module_flask/
 │   ├── pushing/                     # Push to external systems (future)
 │   └── security/                    # Security/moderation (future)
 ├── core/                             # Core platform services
-│   ├── identity_core_module_flask/  # Cross-platform identity linking
-│   ├── labels_core_module_flask/    # Label management system
-│   ├── browser_source_core_module_flask/  # OBS browser source integration
-│   ├── reputation_module_flask/     # Reputation and activity tracking
-│   └── community_module_flask/      # Community management service
+│   ├── identity_core_module_flask/
+│   ├── labels_core_module_flask/
+│   ├── browser_source_core_module_flask/
+│   ├── reputation_module_flask/
+│   └── community_module_flask/
 ├── admin/                            # Administrative modules
-│   └── hub_module/                  # Community portal with direct routing
-│       ├── controllers/             # Portal endpoints, authentication
-│       ├── templates/               # HTML templates for portal UI
-│       ├── services/                # Auth, email, community data
-│       ├── k8s/                     # Kubernetes deployment configs
-│       └── Dockerfile               # Container definition
+│   └── hub_module/                  # Community portal
 ├── archive/                          # Legacy/deprecated modules
-│   ├── marketplace_module/          # (DEPRECATED - moved to hub_module)
-│   ├── kong_admin_broker/           # (REMOVED - Kong no longer used)
-│   ├── kong/                        # (REMOVED - Kong replaced by hub routing)
-│   ├── chat/                        # (LEGACY - Matterbridge integration)
-│   ├── gateway/                     # (DEPRECATED - migrated to hub_module)
-│   └── listener/                    # (LEGACY - Twitch listeners)
 ├── libs/                             # Shared libraries
 │   └── flask_core/                  # Shared Flask/Quart utilities
-│       ├── database.py              # AsyncDAL wrapper around PyDAL
-│       ├── auth.py                  # Flask-Security-Too + OAuth (Authlib)
-│       ├── datamodels.py            # Python 3.13 dataclasses with slots
-│       ├── logging_config.py        # AAA logging system
-│       ├── api_utils.py             # API decorators and helpers
-│       └── setup.py                 # Package installation
 ├── config/                           # Shared configurations
 │   ├── nginx/                       # Nginx reverse proxy configs
 │   └── postgres/                    # PostgreSQL database configs
-└── Premium/         # Premium mobile applications
-    ├── LICENSE        # Premium-only license
-    ├── Android/       # Native Android app (Kotlin/Jetpack Compose)
-    │   ├── app/src/main/java/com/waddlebot/premium/
-    │   │   ├── data/models/Models.kt      # Data models with subscription support
-    │   │   ├── data/repository/           # Repository layer
-    │   │   ├── presentation/              # UI screens and ViewModels
-    │   │   │   ├── license/               # License acceptance screens
-    │   │   │   ├── subscription/          # Subscription management
-    │   │   │   └── common/                # Shared components
-    │   │   └── ui/theme/                  # Material 3 theming
-    │   ├── build.gradle.kts               # Build configuration
-    │   ├── build.sh                       # Build script
-    │   ├── WaddleBot-Premium-debug.apk    # Compiled APK
-    │   └── .github/workflows/build.yml    # CI/CD pipeline
-    └── iOS/           # Native iOS app (Swift/SwiftUI)
-        ├── WaddleBotPremium/
-        │   ├── Models/Models.swift        # Data models with subscription support
-        │   ├── Services/                  # API services
-        │   ├── Views/                     # SwiftUI views
-        │   │   └── PremiumLicenseView.swift # License acceptance
-        │   └── Utils/                     # Utilities and extensions
-        └── WaddleBotPremium.xcodeproj     # Xcode project
+├── docs/                             # Documentation
+└── Premium/                          # Premium mobile applications
+    ├── Android/                      # Native Android app (Kotlin)
+    └── iOS/                          # Native iOS app (Swift)
 ```
+
+## Detailed Documentation
+
+For comprehensive details, see the documentation in the `docs/` folder:
+
+| Document | Description |
+|----------|-------------|
+| [docs/api-reference.md](docs/api-reference.md) | All API endpoints, authentication, rate limiting |
+| [docs/database-schema.md](docs/database-schema.md) | PostgreSQL schemas for all modules |
+| [docs/environment-variables.md](docs/environment-variables.md) | Environment variable reference for all modules |
+| [docs/module-details-core.md](docs/module-details-core.md) | Core, trigger, and hub module details |
+| [docs/module-details-action.md](docs/module-details-action.md) | Action module details (AI, music, etc.) |
+| [docs/event-processing.md](docs/event-processing.md) | Event flows, message types, execution |
+| [docs/shared-patterns.md](docs/shared-patterns.md) | Router, string matching, response system |
+| [docs/development-rules.md](docs/development-rules.md) | Development standards and quality requirements |
+| [docs/flask-conversion.md](docs/flask-conversion.md) | Flask/Quart conversion and CI/CD process |
+
+## Development Guidelines
+
+### Code Patterns
+- **Native Library Usage**: Always prioritize native functionality of specified libraries
+- Follow existing WaddleBot dataclass patterns
+- Use environment variables for all configuration
+- Implement proper logging and error handling
+- Follow security best practices (webhook signature verification, token management)
+
+### Comprehensive Logging (AAA)
+All modules MUST implement Authentication, Authorization, and Auditing logging:
+- **Console**: All logs to stdout/stderr for container orchestration
+- **File Logging**: Structured logs to `/var/log/waddlebotlog/` with rotation
+- **Log Categories**: AUTH, AUTHZ, AUDIT, ERROR, SYSTEM
+- **Log Structure**: `[timestamp] LEVEL module:version EVENT_TYPE community=X user=Y action=Z result=STATUS`
+
+### Performance Considerations
+- **Threading**: ThreadPoolExecutor for concurrent operations (10-20 workers)
+- **Database**: Separate tables per module for better locking performance
+- **Bulk Operations**: Implement bulk processing methods
+- **Caching**: Redis caching for frequently accessed data
+- **Connection Pooling**: Database connection pooling for high-concurrency
+
+### Docker/Kubernetes
+- Each module is a separate container
+- Use proper health checks and readiness probes
+- Include resource limits and autoscaling
+- Secure with non-root users and read-only filesystems
+- Environment-based configuration
+
+## Command Prefix Architecture
+
+- **`!` (Local Container Modules)**: Interaction modules in local containers
+  - Fast execution (container-to-container)
+  - Maintains state and connections
+  - Examples: `!help`, `!stats`, `!admin`
+
+- **`#` (Community Modules)**: Marketplace modules in Lambda/OpenWhisk
+  - Serverless execution for scalability
+  - Community-contributed
+  - Examples: `#weather`, `#translate`, `#game`
+
+## Critical Development Rules
+
+**NEVER take shortcuts - ALWAYS prioritize safety, stability, and feature completeness**
+
+### Core Principles
+- No quick fixes or partial solutions
+- Complete features with proper error handling
+- Security, data integrity, and fault tolerance are non-negotiable
+- No technical debt - address issues properly the first time
+
+### Git Workflow
+- **NEVER commit automatically** unless explicitly requested
+- **NEVER push to remote repositories** under any circumstances
+- **ONLY commit when explicitly asked**
+
+### Local State Management
+- **ALWAYS maintain local .PLAN and .TODO files** for crash recovery
+- Both files must be in .gitignore
+
+### Quality Requirements
+- **Linting**: flake8, black, isort, mypy, bandit (Python); ESLint, Prettier (JS); golangci-lint (Go)
+- **Security**: Dependabot alerts, Socket.dev, pip-audit, npm audit
+- **Builds**: All Python builds in Docker containers, never mark complete until build verified
+
+### File Size Limits
+- **Maximum**: 25,000 characters for ALL code and markdown files
+- **CLAUDE.md exception**: Maximum 39,000 characters
+- **Strategy**: Create detailed docs in `docs/` folder and link from CLAUDE.md
+
+For complete development rules, see [docs/development-rules.md](docs/development-rules.md).
 
 ## Integration Points
 
 ### Hub Module Direct Routing
+All WaddleBot APIs route through the Hub Module for centralized routing, authentication, and rate limiting.
 
-All WaddleBot APIs are routed through the Hub Module, which provides centralized routing, authentication, and rate limiting (Kong has been removed):
+**Key Services**:
+- Router Service: `http://router-service:8000`
+- AI Interaction: `http://ai-interaction:8005`
+- Identity Core: `http://identity-core:8050`
 
-**Services:**
-- **router-service**: Core routing and command processing (`http://router-service:8000`)
-- **ai-interaction**: AI services with multi-provider support (`http://ai-interaction:8005`)
-- **identity-core**: Cross-platform identity linking and verification (`http://identity-core:8050`)
-- **twitch-collector**: Twitch platform integration (`http://twitch-collector:8002`)
-- **discord-collector**: Discord platform integration (`http://discord-collector:8003`)
-- **slack-collector**: Slack platform integration (`http://slack-collector:8004`)
-- **youtube-music**: YouTube Music integration (`http://youtube-music:8025`)
-- **spotify-interaction**: Spotify integration (`http://spotify-interaction:8026`)
-- **browser-source**: Browser source management (`http://browser-source:8027`)
-- **reputation**: Reputation and activity tracking (`http://reputation:8028`)
-- **community**: Community management service (`http://community:8029`)
+**Authentication**: API Key via `X-API-Key` header with RBAC (roles: trigger, action, core, admin, user)
 
-**Hub Routes:**
-- `/router/*` → Router API (with authentication)
-- `/ai/*` → AI Interaction API (with authentication)
-- `/identity/*` → Identity Core API (with authentication)
-- `/auth/*` → User authentication API (with authentication)
-- `/webhooks/twitch/*` → Twitch webhooks (with authentication)
-- `/webhooks/discord/*` → Discord webhooks (with authentication)
-- `/webhooks/slack/*` → Slack webhooks (with authentication)
-- `/youtube/*` → YouTube Music API (with authentication)
-- `/spotify/*` → Spotify API (with authentication)
-- `/browser/*` → Browser Source API (with authentication)
-- `/reputation/*` → Reputation API (with authentication)
-- `/community/*` → Community API (with authentication)
-- `/health` → Health checks (no authentication)
+For complete API reference, see [docs/api-reference.md](docs/api-reference.md).
 
-**Authentication & Authorization:**
-- API Key authentication via `X-API-Key` header
-- Role-based access control (RBAC) via Flask-Security-Too
-- User roles: `trigger`, `action`, `core`, `admin`, `user`
-- Rate limiting per service and user role
-- CORS support for web applications
+## License & External Integrations
 
-**Rate Limiting:**
-- Router: 1000/min, 10000/hour
-- AI Interaction: 1000/min, 10000/hour
-- Trigger modules: 200/min, 2000/hour
-- Action modules: 500/min, 5000/hour
-- Core modules: 500/min, 5000/hour
+### PenguinTech License Server
+- **URL**: `https://license.penguintech.io`
+- **Key Format**: `PENG-XXXX-XXXX-XXXX-XXXX-ABCD`
+- **Note**: License enforcement only enabled when `RELEASE_MODE=true`
 
-### Router API Endpoints (Core Component)
-- `POST /router/events` - Single event processing from collectors (returns session_id)
-- `POST /router/events/batch` - Batch event processing (up to 100 events)
-- `GET /router/commands` - List available commands with filters
-- `GET /router/entities` - List registered entities
-- `GET /router/metrics` - Performance metrics and statistics (includes string matching stats)
-- `GET /router/health` - Health check with database connectivity
-- `GET /router/string-rules` - List string matching rules (with entity filtering)
-- `POST /router/string-rules` - Create new string matching rule
-- `PUT /router/string-rules/<id>` - Update existing string matching rule
-- `DELETE /router/string-rules/<id>` - Delete (deactivate) string matching rule
-- `POST /router/responses` - Submit response from interaction module or webhook (requires session_id)
-- `GET /router/responses/<execution_id>` - Get responses for specific execution
-- `GET /router/responses/recent` - Get recent module responses with filtering
+### WaddleAI Integration
+For advanced AI beyond built-in AI module, integrate with WaddleAI at `~/code/WaddleAI`.
 
-### Coordination API Endpoints (Horizontal Scaling)
-- `POST /router/coordination/claim` - Claim available entities for container
-- `POST /router/coordination/release` - Release claimed entities
-- `POST /router/coordination/checkin` - Container checkin to maintain claims (every 5 minutes)
-- `POST /router/coordination/heartbeat` - Send heartbeat and extend claims
-- `POST /router/coordination/status` - Update entity status (live, viewer count, etc.)
-- `POST /router/coordination/error` - Report error for entity
-- `POST /router/coordination/release-offline` - Release offline entities and claim new ones
-- `GET /router/coordination/stats` - Get coordination system statistics
-- `GET /router/coordination/entities` - List entities with filtering
-- `POST /router/coordination/populate` - Populate coordination table from servers
-
-### Marketplace API Endpoints 
-- `GET /marketplace` - Browse featured/popular modules
-- `GET /marketplace/browse` - Search and filter modules
-- `GET /marketplace/module/<id>` - Module details with versions/reviews
-- `POST /marketplace/install` - Install module for entity
-- `POST /marketplace/uninstall` - Remove module from entity
-- `GET /marketplace/entity/<id>/modules` - List entity's installed modules
-- `POST /marketplace/entity/<id>/toggle` - Enable/disable module
-
-### AI Interaction API Endpoints
-- `POST /api/ai/v1/chat/completions` - OpenAI-compatible chat completions
-- `POST /api/ai/v1/generate` - Simple text generation
-- `GET /api/ai/v1/models` - List available AI models
-- `GET /api/ai/v1/health` - AI service health check (no auth)
-- `GET /api/ai/v1/config` - Get AI configuration
-- `PUT /api/ai/v1/config` - Update AI configuration
-- `GET /api/ai/v1/providers` - List available AI providers
-
-
-### Browser Source API Endpoints
-- `POST /browser/source/display` - Receive display data from router and distribute to browser sources
-- `GET /browser/source/{token}/{source_type}` - Browser source display endpoint for OBS (no auth)
-- `GET /browser/source/admin/tokens` - Get community browser source tokens
-- `POST /browser/source/admin/tokens` - Generate new browser source tokens
-- `GET /browser/source/api/communities/{community_id}/urls` - Get browser source URLs for community
-- `POST /browser/source/admin/tokens/{token}/regenerate` - Regenerate browser source token
-- `DELETE /browser/source/admin/tokens/{token}` - Deactivate browser source token
-- `GET /browser/source/health` - Browser source health check (no auth)
-- `GET /browser/source/stats` - Get browser source statistics and connection info
-- `WebSocket /ws/{token}/{source_type}` - WebSocket endpoint for real-time browser source updates
-
-### Identity Core API Endpoints
-- `POST /identity/link` - Initiate cross-platform identity linking with verification
-- `POST /identity/verify` - Verify identity with whisper/DM code
-- `GET /identity/user/<user_id>` - Get user's linked platform identities
-- `GET /identity/platform/<platform>/<platform_id>` - Get WaddleBot user for platform user
-- `DELETE /identity/unlink` - Unlink a platform identity from user
-- `GET /identity/pending` - Get pending verification requests
-- `POST /identity/resend` - Resend verification code to platform
-- `POST /identity/api-keys` - Create user API key for programmatic access
-- `GET /identity/api-keys` - List user's active API keys
-- `DELETE /identity/api-keys/<key_id>` - Revoke user API key
-- `POST /identity/api-keys/<key_id>/regenerate` - Regenerate user API key
-- `POST /auth/register` - Register new WaddleBot user account (py4web Auth)
-- `POST /auth/login` - Login to WaddleBot user session (py4web Auth)
-- `POST /auth/logout` - Logout from WaddleBot user session (py4web Auth)
-- `GET /auth/profile` - Get authenticated user profile information
-- `PUT /auth/profile` - Update authenticated user profile
-- `GET /identity/stats` - Get identity module statistics and metrics
-- `GET /identity/health` - Identity module health check (no auth)
-
-### Legacy Core API Endpoints
-- `POST /api/modules/register` - Module registration
-- `POST /api/modules/heartbeat` - Health monitoring
-- `GET /api/servers?platform=twitch&active=true` - Get monitored servers
-- `POST /api/context` - User identity lookup
-- `POST /api/reputation` - Activity point submission
-- `POST /api/events` - Event forwarding
-- `POST /api/gateway/activate` - Gateway activation
-
-### Environment Variables
-
-#### Twitch Module
+### Version Management
+**Format**: `vMajor.Minor.Patch.build`
 ```bash
-# Twitch API
-TWITCH_APP_ID=your_app_id
-TWITCH_APP_SECRET=your_app_secret
-TWITCH_WEBHOOK_SECRET=webhook_secret
-TWITCH_WEBHOOK_CALLBACK_URL=https://domain.com/twitch/webhook
-TWITCH_REDIRECT_URI=https://domain.com/twitch/auth/callback
-
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-
-# Core API
-CORE_API_URL=http://core-api:8001
-CONTEXT_API_URL=http://core-api:8001/api/context
-REPUTATION_API_URL=http://core-api:8001/api/reputation
-GATEWAY_ACTIVATE_URL=http://core-api:8001/api/gateway/activate
-
-# Coordination System
-MAX_CLAIMS=5
-HEARTBEAT_INTERVAL=300
-CONTAINER_ID=twitch_container_1
-
-# Module Info
-MODULE_NAME=twitch
-MODULE_VERSION=1.0.0
+./scripts/version/update-version.sh          # Increment build
+./scripts/version/update-version.sh patch    # Increment patch
+./scripts/version/update-version.sh minor    # Increment minor
+./scripts/version/update-version.sh major    # Increment major
 ```
-
-#### Discord Module
-```bash
-# Discord Bot
-DISCORD_BOT_TOKEN=your_bot_token
-DISCORD_APPLICATION_ID=your_app_id
-DISCORD_PUBLIC_KEY=your_public_key
-DISCORD_COMMAND_PREFIX=!
-
-# Core API (same as above)
-CORE_API_URL=http://core-api:8001
-# ... other core API URLs
-
-# Module Info
-MODULE_NAME=discord
-MODULE_VERSION=1.0.0
-```
-
-#### Slack Module
-```bash
-# Slack App
-SLACK_BOT_TOKEN=xoxb-your-bot-token
-SLACK_APP_TOKEN=xapp-your-app-token
-SLACK_CLIENT_ID=your_client_id
-SLACK_CLIENT_SECRET=your_client_secret
-SLACK_SIGNING_SECRET=your_signing_secret
-SLACK_OAUTH_REDIRECT_URI=https://domain.com/slack/oauth/callback
-SLACK_SOCKET_MODE=false
-
-# Core API (same as above)
-CORE_API_URL=http://core-api:8001
-# ... other core API URLs
-
-# Module Info
-MODULE_NAME=slack
-MODULE_VERSION=1.0.0
-```
-
-#### AI Interaction Module
-```bash
-# AI Provider Configuration
-AI_PROVIDER=ollama  # 'ollama', 'openai', or 'mcp'
-AI_HOST=http://ollama:11434
-AI_PORT=11434
-AI_API_KEY=your_api_key
-
-# Model Configuration
-AI_MODEL=llama3.2
-AI_TEMPERATURE=0.7
-AI_MAX_TOKENS=500
-
-# OpenAI Specific Configuration
-OPENAI_API_KEY=sk-your-openai-key
-OPENAI_MODEL=gpt-3.5-turbo
-OPENAI_BASE_URL=https://api.openai.com/v1
-
-# MCP Configuration
-MCP_SERVER_URL=http://mcp-server:8080
-MCP_TIMEOUT=30
-
-# System Behavior
-SYSTEM_PROMPT="You are a helpful chatbot assistant. Provide friendly, concise, and helpful responses to users in chat."
-QUESTION_TRIGGERS=?
-RESPONSE_PREFIX="🤖 "
-RESPOND_TO_EVENTS=true
-EVENT_RESPONSE_TYPES=subscription,follow,donation
-
-# Performance Settings
-MAX_CONCURRENT_REQUESTS=10
-REQUEST_TIMEOUT=30
-ENABLE_CHAT_CONTEXT=true
-CONTEXT_HISTORY_LIMIT=5
-
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-
-# Core API Integration
-CORE_API_URL=http://router:8000
-ROUTER_API_URL=http://router:8000/router
-
-# Module Info
-MODULE_NAME=ai_interaction
-MODULE_VERSION=1.0.0
-```
-
-#### Router Module
-```bash
-# Database (Primary + Read Replica)
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-READ_REPLICA_URL=postgresql://user:pass@read-host:5432/waddlebot
-
-# Redis (Session Management)
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_PASSWORD=your_redis_password
-REDIS_DB=0
-SESSION_TTL=3600
-SESSION_PREFIX=waddlebot:session:
-
-# Performance Settings
-ROUTER_MAX_WORKERS=20
-ROUTER_MAX_CONCURRENT=100
-ROUTER_REQUEST_TIMEOUT=30
-ROUTER_DEFAULT_RATE_LIMIT=60
-
-# Caching
-ROUTER_COMMAND_CACHE_TTL=300
-ROUTER_ENTITY_CACHE_TTL=600
-
-# AWS Lambda
-AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=your_access_key
-AWS_SECRET_ACCESS_KEY=your_secret_key
-LAMBDA_FUNCTION_PREFIX=waddlebot-
-
-# OpenWhisk
-OPENWHISK_API_HOST=openwhisk.example.com
-OPENWHISK_AUTH_KEY=your_auth_key
-OPENWHISK_NAMESPACE=waddlebot
-
-# Module Info
-MODULE_NAME=router
-MODULE_VERSION=1.0.0
-```
-
-#### Hub Module
-```bash
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-
-# Hub Configuration
-HUB_URL=http://localhost:8000
-APP_NAME=WaddleBot Community Hub
-
-# Email Configuration (Flask Mailer)
-SMTP_HOST=smtp.company.com
-SMTP_PORT=587
-SMTP_USERNAME=hub@company.com
-SMTP_PASSWORD=smtp_password
-SMTP_TLS=true
-FROM_EMAIL=noreply@waddlebot.com
-
-# Browser Source Integration
-BROWSER_SOURCE_BASE_URL=http://browser-source-core:8027
-
-# Service URLs for Routing
-ROUTER_SERVICE_URL=http://router-service:8000
-AI_SERVICE_URL=http://ai-interaction:8005
-IDENTITY_SERVICE_URL=http://identity-core:8050
-TWITCH_SERVICE_URL=http://twitch-collector:8002
-DISCORD_SERVICE_URL=http://discord-collector:8003
-SLACK_SERVICE_URL=http://slack-collector:8004
-YOUTUBE_SERVICE_URL=http://youtube-music:8025
-SPOTIFY_SERVICE_URL=http://spotify-interaction:8026
-BROWSER_SOURCE_URL=http://browser-source:8027
-REPUTATION_SERVICE_URL=http://reputation:8028
-COMMUNITY_SERVICE_URL=http://community:8029
-
-# Rate Limiting
-RATE_LIMIT_ENABLED=true
-RATE_LIMIT_STORAGE_URL=redis://redis:6379/0
-
-# Module Info
-MODULE_NAME=hub_module
-MODULE_VERSION=1.0.0
-```
-
-#### Labels Core Module
-```bash
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-
-# Redis Configuration
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_DB=0
-REDIS_PASSWORD=your_redis_password
-
-# Core API Integration
-CORE_API_URL=http://router-service:8000
-ROUTER_API_URL=http://router-service:8000/router
-
-# Performance Settings
-MAX_WORKERS=20
-CACHE_TTL=300
-BULK_OPERATION_SIZE=1000
-REQUEST_TIMEOUT=30
-
-# Module Info
-MODULE_NAME=labels_core
-MODULE_VERSION=1.0.0
-```
-
-#### Inventory Interaction Module
-```bash
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-
-# Core API Integration
-CORE_API_URL=http://router-service:8000
-ROUTER_API_URL=http://router-service:8000/router
-
-# Performance Settings
-MAX_WORKERS=20
-MAX_LABELS_PER_ITEM=5
-CACHE_TTL=300
-REQUEST_TIMEOUT=30
-
-# AAA Logging Configuration
-LOG_LEVEL=INFO
-LOG_DIR=/var/log/waddlebotlog
-ENABLE_SYSLOG=false
-SYSLOG_HOST=localhost
-SYSLOG_PORT=514
-SYSLOG_FACILITY=LOCAL0
-
-# Module Info
-MODULE_NAME=inventory_interaction_module
-MODULE_VERSION=1.0.0
-MODULE_PORT=8024
-```
-
-#### Calendar Interaction Module
-```bash
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-
-# Core API Integration
-CORE_API_URL=http://router-service:8000
-ROUTER_API_URL=http://router-service:8000/router
-
-# Labels Core Integration (for event-autoapprove label)
-LABELS_API_URL=http://labels-core-service:8025
-
-# Module Info
-MODULE_NAME=calendar_interaction_module
-MODULE_VERSION=1.0.0
-MODULE_PORT=8030
-```
-
-#### Memories Interaction Module
-```bash
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-
-# Core API Integration
-CORE_API_URL=http://router-service:8000
-ROUTER_API_URL=http://router-service:8000/router
-
-# Labels Core Integration (for memories label permission)
-LABELS_API_URL=http://labels-core-service:8025
-
-# Module Info
-MODULE_NAME=memories_interaction_module
-MODULE_VERSION=1.0.0
-MODULE_PORT=8031
-```
-
-#### YouTube Music Interaction Module
-```bash
-# YouTube API Configuration
-YOUTUBE_API_KEY=your_youtube_api_key_here
-YOUTUBE_API_VERSION=v3
-YOUTUBE_MUSIC_CATEGORY_ID=10
-YOUTUBE_REGION_CODE=US
-
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-
-# Core API Integration
-CORE_API_URL=http://router-service:8000
-ROUTER_API_URL=http://router-service:8000/router
-
-# Browser Source Integration
-BROWSER_SOURCE_API_URL=http://browser-source:8027/browser/source
-
-# Performance Settings
-MAX_SEARCH_RESULTS=10
-CACHE_TTL=300
-REQUEST_TIMEOUT=30
-MAX_QUEUE_SIZE=50
-
-# Feature Flags
-ENABLE_PLAYLISTS=true
-ENABLE_QUEUE=true
-ENABLE_HISTORY=true
-ENABLE_AUTOPLAY=true
-
-# AAA Logging Configuration
-LOG_LEVEL=INFO
-LOG_DIR=/var/log/waddlebotlog
-ENABLE_SYSLOG=false
-
-# Module Info
-MODULE_NAME=youtube_music_interaction
-MODULE_VERSION=1.0.0
-MODULE_PORT=8025
-```
-
-#### Spotify Interaction Module
-```bash
-# Spotify API Configuration
-SPOTIFY_CLIENT_ID=your_spotify_client_id
-SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
-SPOTIFY_REDIRECT_URI=http://localhost:8026/spotify/auth/callback
-SPOTIFY_SCOPES=user-read-playback-state user-modify-playback-state user-read-currently-playing streaming
-
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-
-# Core API Integration
-CORE_API_URL=http://router-service:8000
-ROUTER_API_URL=http://router-service:8000/router
-
-# Browser Source Integration
-BROWSER_SOURCE_API_URL=http://browser-source:8027/browser/source
-
-# Performance Settings
-MAX_SEARCH_RESULTS=10
-CACHE_TTL=300
-REQUEST_TIMEOUT=30
-TOKEN_REFRESH_BUFFER=300
-
-# Feature Flags
-ENABLE_PLAYLISTS=true
-ENABLE_QUEUE=true
-ENABLE_HISTORY=true
-ENABLE_DEVICE_CONTROL=true
-
-# Media Display Settings
-MEDIA_DISPLAY_DURATION=30
-SHOW_ALBUM_ART=true
-SHOW_PROGRESS_BAR=true
-
-# AAA Logging Configuration
-LOG_LEVEL=INFO
-LOG_DIR=/var/log/waddlebotlog
-ENABLE_SYSLOG=false
-
-# Module Info
-MODULE_NAME=spotify_interaction
-MODULE_VERSION=1.0.0
-MODULE_PORT=8026
-```
-
-#### Browser Source Core Module
-```bash
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-
-# Core API Integration
-CORE_API_URL=http://router-service:8000
-ROUTER_API_URL=http://router-service:8000/router
-
-# WebSocket Configuration
-WEBSOCKET_HOST=0.0.0.0
-WEBSOCKET_PORT=8028
-MAX_CONNECTIONS=1000
-
-# Performance Settings
-MAX_WORKERS=50
-QUEUE_PROCESSING_INTERVAL=1
-CLEANUP_INTERVAL=300
-TICKER_QUEUE_SIZE=100
-
-# Browser Source Settings
-BASE_URL=http://localhost:8027
-TOKEN_LENGTH=32
-ACCESS_LOG_RETENTION_DAYS=30
-
-# Display Settings
-DEFAULT_TICKER_DURATION=10
-DEFAULT_MEDIA_DURATION=30
-MAX_TICKER_LENGTH=200
-
-# AAA Logging Configuration
-LOG_LEVEL=INFO
-LOG_DIR=/var/log/waddlebotlog
-ENABLE_SYSLOG=false
-
-# Module Info
-MODULE_NAME=browser_source_core
-MODULE_VERSION=1.0.0
-MODULE_PORT=8027
-```
-
-#### Identity Core Module
-```bash
-# Module Configuration
-MODULE_NAME=identity_core_module
-MODULE_VERSION=1.0.0
-MODULE_PORT=8050
-
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-
-# Redis Configuration
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_DB=0
-REDIS_PASSWORD=your_redis_password
-
-# Session and Security
-SECRET_KEY=waddlebot_identity_secret_key_change_me_in_production
-SESSION_TTL=3600
-
-# API Keys
-VALID_API_KEYS=system_key1,system_key2
-MAX_API_KEYS_PER_USER=5
-API_KEY_DEFAULT_EXPIRY_DAYS=365
-
-# Core API Integration
-CORE_API_URL=http://router-service:8000
-ROUTER_API_URL=http://router-service:8000/router
-
-# Platform APIs (for whisper/DM functionality)
-TWITCH_API_URL=http://twitch-collector:8002
-DISCORD_API_URL=http://discord-collector:8003
-SLACK_API_URL=http://slack-collector:8004
-
-# Verification Settings
-VERIFICATION_CODE_LENGTH=6
-VERIFICATION_TIMEOUT_MINUTES=10
-RESEND_COOLDOWN_SECONDS=60
-MAX_VERIFICATION_ATTEMPTS=5
-
-# Email Configuration (py4web Mailer)
-SMTP_HOST=smtp.company.com
-SMTP_PORT=587
-SMTP_USERNAME=identity@company.com
-SMTP_PASSWORD=smtp_password
-SMTP_TLS=true
-FROM_EMAIL=noreply@waddlebot.com
-
-# Performance Settings
-MAX_WORKERS=20
-CACHE_TTL=300
-REQUEST_TIMEOUT=30
-BULK_OPERATION_SIZE=100
-
-# Rate Limiting
-RATE_LIMIT_REQUESTS=60
-RATE_LIMIT_WINDOW=60
-
-# Logging Configuration
-LOG_LEVEL=INFO
-LOG_DIR=/var/log/waddlebotlog
-ENABLE_SYSLOG=false
-SYSLOG_HOST=localhost
-SYSLOG_PORT=514
-SYSLOG_FACILITY=LOCAL0
-
-# Feature Flags
-ENABLE_EMAIL_VERIFICATION=false
-ENABLE_TWO_FACTOR=false
-ENABLE_OAUTH_PROVIDERS=false
-```
-
-## System Components Details
-
-### Router Module (`router_module/`) - CORE COMPONENT
-- **High-Performance Processing**: Multi-threaded command processing with ThreadPoolExecutor
-- **Command Routing**: Parses `!` (local container) and `#` (community Lambda/OpenWhisk) prefixed commands
-- **Database Optimization**: Uses read replicas for command lookups, primary for writes
-- **Caching Layer**: In-memory caching with TTL for commands and entity permissions
-- **Rate Limiting**: Sliding window rate limiter with per-user/command/entity tracking
-- **Execution Engine**: Routes to local containers, AWS Lambda, OpenWhisk, or webhook endpoints
-- **Metrics & Monitoring**: Real-time performance metrics and health monitoring
-- **Batch Processing**: Supports up to 100 concurrent event processing
-
-### Marketplace Module (`marketplace_module/`) - CORE COMPONENT
-- **Module Management**: Browse, search, install, and manage community modules
-- **Permission System**: Entity-based permissions for module installation/management
-- **Version Control**: Multiple module versions with upgrade/downgrade support
-- **Review System**: User reviews and ratings for modules
-- **Router Integration**: Automatic command registration/removal with router
-- **Usage Analytics**: Track module usage and performance statistics
-- **Category System**: Hierarchical module categorization
-
-### Hub Module (`hub_module/`) - ADMINISTRATION COMPONENT
-- **Community Management Portal**: Web-based interface for community administrators
-- **Direct Routing**: Replaces Kong API Gateway with direct service routing
-- **User Authentication**: Flask-Security-Too for user authentication and session management
-- **Role-Based Access Control**: User roles for trigger, action, core, admin, and user permissions
-- **Rate Limiting**: Per-service and per-role rate limiting with Redis backend
-- **Dashboard**: Community statistics, user management, and module configuration
-- **Browser Source Management**: Display unique browser source URLs for OBS integration
-- **Email Service**: SMTP/sendmail support for notifications and password resets
-- **API Key Management**: Generate and manage API keys for programmatic access
-- **Audit Trail**: Comprehensive logging of all administrative actions
-- **Service Health Monitoring**: Monitor health status of all WaddleBot services
-
-### Identity Core Module (`identity_core_module/`) - CORE COMPONENT
-- **Flask-Security-Too Foundation**: Built on Flask-Security-Too authentication system with extended user fields
-- **Cross-Platform Linking**: Secure identity verification between Discord, Twitch, and Slack accounts
-- **Whisper/DM Verification**: Platform-specific verification via whispers and direct messages
-- **User API Key Management**: Self-service API key generation with same permissions as user identity
-- **Comprehensive Security**: SHA-256 hashed API keys, time-limited verification codes, rate limiting
-- **Multi-threaded Processing**: ThreadPoolExecutor for concurrent verification operations
-- **Redis Caching**: High-performance caching for identity lookups and session management
-- **Comprehensive AAA Logging**: Full Authentication, Authorization, and Auditing with structured output
-
-**Key Features:**
-- **Identity Linking Flow**: Users type `!identity link twitch username` → verification code sent via whisper → `!verify CODE` confirms link
-- **API Key System**: Users can create, regenerate, and revoke their own API keys for programmatic access
-- **Session Management**: Flask session-based authentication with configurable expiration
-- **Platform Integration**: Communicates with Twitch, Discord, and Slack collectors for whisper/DM delivery
-- **Database Schema**: Extended Flask-Security user table with WaddleBot-specific fields (display_name, primary_platform, reputation_score)
-- **Verification Security**: 6-character alphanumeric codes (excluding ambiguous characters) with 10-minute expiration
-- **Rate Limiting**: Sliding window rate limiting to prevent spam and abuse
-- **Health Monitoring**: Comprehensive health checks for all platform APIs and dependencies
-
-### Labels Core Module (`labels_core_module/`) - CORE COMPONENT
-- **High-Performance Architecture**: Multi-threaded processing with ThreadPoolExecutor (configurable max workers)
-- **Redis Caching**: High-performance caching layer with fallback to local cache
-- **Bulk Operations**: Support for up to 1000 items per batch operation for high-volume requests
-- **Label Management**: Track labels on communities, modules, users, and entityGroups (up to 5 labels per community, 5 per user per community)
-- **User Identity Verification**: Time-limited verification codes to link platform identities to bot identities
-- **Entity Group Management**: Auto-role assignment in Discord, Slack, and Twitch based on user labels
-- **Search Functionality**: Search modules, users, and entities by labels with caching
-- **Background Processing**: Asynchronous task queue for long-running operations
-- **Performance Monitoring**: Real-time metrics and health monitoring in health endpoint
-- **Database Optimization**: Proper indexing and connection pooling for thousands of requests per second
-
-### Trigger Modules (Receivers)
-
-#### Twitch Module (`trigger/receiver/twitch_module_flask/`)
-- **EventSub Webhooks**: Handles follow, subscribe, cheer, raid, gift subscription events
-- **OAuth Integration**: Complete OAuth flow with token management and refresh
-- **API Integration**: Twitch Helix API for user info and subscription management
-- **Activity Points**: follow=10, sub=50, bits=variable, raid=30, subgift=60, ban=-10
-
-#### Discord Module (`trigger/receiver/discord_module_flask/`)
-- **py-cord Integration**: Uses py-cord library for Discord bot functionality
-- **Event Handling**: Messages, reactions, member joins, voice states, server boosts
-- **Slash Commands**: Built-in slash command support with py-cord
-- **Voice Tracking**: Tracks voice channel participation with time-based points
-- **Activity Points**: message=5, reaction=2, member_join=10, voice_join=8, voice_time=1/min, boost=100
-
-#### Slack Module (`trigger/receiver/slack_module_flask/`)
-- **Event API**: Handles messages, reactions, file shares, channel joins
-- **Slash Commands**: Custom `/waddlebot` command with help, status, points subcommands
-- **Slack SDK**: Uses official Slack SDK for Python
-- **User Caching**: Caches user information for performance
-- **Activity Points**: message=5, file_share=15, reaction=3, member_join=10, app_mention=8
-
-### Action Modules (Interactive)
-
-#### AI Interaction Module (`action/interactive/ai_interaction_module_flask/`)
-- **Multi-Provider Support**: Unified interface supporting Ollama, OpenAI, and MCP (Model Context Protocol) providers
-- **Provider Configuration**: Environment variable `AI_PROVIDER` selects between 'ollama', 'openai', or 'mcp'
-- **Configurable System Prompt**: Default helpful chatbot assistant prompt, customizable via `SYSTEM_PROMPT` environment variable
-- **Conversation Context**: Optional conversation history tracking for contextual responses
-- **Event Response Support**: Responds to subscription, follow, donation, and other platform events
-- **Question Detection**: Configurable triggers (default: '?') to determine when to respond to chat messages
-- **Response Modes**: Supports chat responses with configurable prefix
-- **Health Monitoring**: Provider-specific health checks and failover capabilities
-- **Dynamic Configuration**: Runtime configuration updates for model, temperature, tokens, and provider settings
-
-**Provider Implementations**:
-- **Ollama Provider**: Uses LangChain with Ollama for local LLM hosting
-- **OpenAI Provider**: Direct OpenAI API integration with chat completions
-- **MCP Provider**: Model Context Protocol for standardized AI model communication
-
-**Configuration**:
-```bash
-# AI Provider Selection
-AI_PROVIDER=ollama  # 'ollama', 'openai', or 'mcp'
-AI_HOST=http://ollama:11434
-AI_PORT=11434
-AI_API_KEY=your_api_key
-
-# Model Configuration
-AI_MODEL=llama3.2
-AI_TEMPERATURE=0.7
-AI_MAX_TOKENS=500
-
-# OpenAI Specific
-OPENAI_API_KEY=sk-your-key
-OPENAI_MODEL=gpt-3.5-turbo
-OPENAI_BASE_URL=https://api.openai.com/v1
-
-# MCP Configuration
-MCP_SERVER_URL=http://mcp-server:8080
-MCP_TIMEOUT=30
-
-# System Behavior
-SYSTEM_PROMPT="You are a helpful chatbot assistant. Provide friendly, concise, and helpful responses to users in chat."
-QUESTION_TRIGGERS=?
-RESPONSE_PREFIX=> 
-RESPOND_TO_EVENTS=true
-EVENT_RESPONSE_TYPES=subscription,follow,donation
-```
-
-#### Alias Interaction Module (`action/interactive/alias_interaction_module_flask/`)
-- **Linux-Style Aliases**: Commands work like Linux bash aliases with `!alias add !user "!so user"`
-- **Variable Substitution**: Support for `{user}`, `{args}`, `{arg1}`, `{arg2}`, `{all_args}` placeholders
-- **Alias Management**: Add, remove, list aliases with proper permission checking
-- **Command Execution**: Routes aliased commands through the router system
-- **Usage Statistics**: Track alias usage and performance
-
-**Key Features**:
-- `!alias add <alias_name> <command>` - Create new alias
-- `!alias remove <alias_name>` - Remove existing alias
-- `!alias list` - List all configured aliases
-- Variable substitution in commands
-- Integration with router for command execution
-
-#### Shoutout Interaction Module (`action/interactive/shoutout_interaction_module_flask/`)
-- **Platform Integration**: Twitch API integration for user information and clips
-- **Auto-Shoutout**: Automatic shoutouts on follow/subscribe/raid events
-- **User Management**: Community managers can configure user-specific settings
-- **Twitch Features**: Pulls random clips for full-screen media display
-- **Custom Messages**: Personalized shoutout messages with additional links
-
-**Key Features**:
-- `!so <username>` or `!shoutout <username>` - Manual shoutout
-- Auto-shoutout on platform events with cooldown (1 hour)
-- Twitch API integration for user info and last game played
-- Random clip selection for full-screen OBS integration
-- Custom message and link management per user
-- Shoutout history and analytics
-
-**Twitch API Integration**:
-- User profile information lookup
-- Last game played detection
-- Random clip selection from past 7 days
-- Full-screen media response for OBS scenes
-
-#### Inventory Interaction Module (`action/interactive/inventory_interaction_module_flask/`)
-- **Multi-Threaded Architecture**: ThreadPoolExecutor for concurrent operations (20 workers)
-- **Item Management**: Track any item whether IRL or in-game with comprehensive CRUD operations
-- **Label System**: Support up to 5 labels per item for categorization and filtering
-- **Caching**: High-performance caching with thread-safe operations
-- **Comprehensive AAA Logging**: Full Authentication, Authorization, and Auditing logging system
-
-#### Calendar Interaction Module (`action/interactive/calendar_interaction_module_flask/`)
-- **Event Management**: Complete event lifecycle management with CRUD operations
-- **Approval Workflow**: Events require approval by community admins/moderators unless user has 'event-autoapprove' label
-- **Recurring Events**: Support for daily, weekly, monthly, and yearly recurring events
-- **Attendee Management**: Users can join/leave events with capacity limits
-- **Event Reminders**: Automatic reminder system (1 day, 1 hour, 15 minutes before)
-- **Label Integration**: Integrates with labels_core_module for permission checking
-
-#### Memories Interaction Module (`action/interactive/memories_interaction_module_flask/`)
-- **Multi-Type Memory System**: Supports quotes, URLs, and notes with different display formats
-- **Permission System**: Community managers, moderators, and users with 'memories' label can manage content
-- **Reminder System**: Personal reminders with natural language time parsing and automatic scheduling
-- **Search & Organization**: Full-text search, tagging system, and categorization
-- **Usage Tracking**: Tracks memory usage statistics and popularity
-- **Background Processing**: Automatic reminder processor with recurring reminder support
-
-**Key Features**:
-- `!memories add quote "Quote text" [author]` - Add a quote to community memories
-- `!memories add url "Title" "URL" [description]` - Add a URL with title and description
-- `!memories add note "Title" "Content" [tags]` - Add a note with optional tags
-- `!memories list [quote|url|note]` - List memories by type
-- `!memories search "search term"` - Search memories by content
-- `!memories get <memory_id>` - Get specific memory details
-- `!memories edit <memory_id> <field> "new_value"` - Edit memory fields
-- `!memories delete <memory_id>` - Delete memory (with permissions)
-- `!memories remind "reminder text" in "time"` - Set personal reminder
-- `!memories quotes` - Get random quote from community
-- `!memories urls` - List all community URLs
-
-**Database Schema**:
-```sql
-memories (
-    id, community_id, entity_id, memory_type, title, content, url,
-    author, context, tags, created_by, created_by_name, created_at,
-    updated_at, is_active, usage_count, last_used
-)
-
-reminders (
-    id, memory_id, community_id, entity_id, user_id, user_name,
-    reminder_text, remind_at, created_at, is_sent, sent_at,
-    is_recurring, recurring_pattern, recurring_end
-)
-
-memory_reactions (
-    id, memory_id, user_id, reaction_type, created_at
-)
-
-memory_categories (
-    id, community_id, name, description, color, icon, created_by, created_at
-)
-```
-
-**Calendar Module Key Features**:
-- `!calendar create "Event Title" "YYYY-MM-DD HH:MM" [description] [location] [max_attendees]` - Create new event
-- `!calendar list [pending|approved|rejected]` - List events by status
-- `!calendar join <event_id>` - Join an event
-- `!calendar leave <event_id>` - Leave an event
-- `!calendar approve <event_id>` - Approve pending event (admin/moderator only)
-- `!calendar reject <event_id> "reason"` - Reject pending event (admin/moderator only)
-- `!calendar cancel <event_id>` - Cancel event (creator only)
-
-**Database Schema**:
-```sql
-events (
-    id, community_id, entity_id, title, description, event_date, end_date,
-    location, max_attendees, created_by, created_by_name, status,
-    approved_by, approved_by_name, approved_at, rejection_reason,
-    attendees, tags, is_recurring, recurring_pattern, recurring_end_date,
-    notification_sent, created_at, updated_at
-)
-
-event_attendees (
-    id, event_id, user_id, user_name, status, joined_at
-)
-
-event_reminders (
-    id, event_id, reminder_time, reminder_type, message, sent, created_at
-)
-```
-
-**Inventory Module Key Features**:
-- `!inventory add <item_name> <description> [labels]` - Add new item to inventory
-- `!inventory checkout <item_name> <username>` - Check out item to user
-- `!inventory checkin <item_name>` - Check item back in
-- `!inventory delete <item_name>` - Remove item from inventory
-- `!inventory list [all|available|checkedout]` - List items with filtering
-- `!inventory search <query>` - Search items by name, description, or labels
-- `!inventory status <item_name>` - Get item status and checkout information
-- `!inventory stats` - Get inventory statistics and metrics
-- `!inventory labels <item_name> <add|remove> <label>` - Manage item labels
-
-**Database Schema**:
-```sql
-inventory_items (
-    id, community_id, item_name, description, labels,
-    is_checked_out, checked_out_to, checked_out_at, checked_in_at,
-    created_by, created_at, updated_at
-)
-
-inventory_activity (
-    id, community_id, item_id, action, performed_by,
-    details, created_at
-)
-```
-
-**Performance Features**:
-- Thread-safe caching with TTL for frequently accessed data
-- Bulk operations support for high-volume communities
-- Connection pooling for database operations
-- Background activity logging for audit trails
-- Health monitoring with comprehensive metrics
-
-#### YouTube Music Interaction Module (`action/interactive/youtube_music_interaction_module_flask/`)
-- **YouTube Data API v3 Integration**: Direct integration with YouTube API for music search and metadata
-- **Search and Playback**: Search YouTube Music tracks and queue for playback
-- **Media Browser Source Output**: Sends track information with album art to browser source for OBS
-- **Now Playing Tracking**: Stores current playing track information per community
-- **Search Result Caching**: Caches search results for quick access via number selection
-- **Playlist Management**: Support for community playlists and queue management
-- **Activity Logging**: Comprehensive tracking of all music commands and playback
-
-**Key Features**:
-- `!ytmusic search <query>` - Search YouTube Music
-- `!ytmusic play <url/number>` - Play track or search result
-- `!ytmusic current` - Show current playing track with ticker display
-- `!ytmusic stop` - Stop playback and clear now playing
-- Media browser source integration for OBS with track art and metadata
-- Search result numbering for quick selection
-- Playback history and analytics
-
-**Database Schema**:
-```sql
-youtube_now_playing (
-    community_id, video_id, title, artist, album, duration,
-    thumbnail_url, requested_by, started_at, updated_at
-)
-
-youtube_search_cache (
-    community_id, user_id, query, results, created_at
-)
-
-youtube_activity (
-    community_id, user_id, action, details, created_at
-)
-```
-
-#### Spotify Interaction Module (`action/interactive/spotify_interaction_module_flask/`)
-- **Spotify Web API Integration**: OAuth 2.0 authentication with full playback control
-- **Real-time Playback Control**: Play, pause, skip, volume control on user's Spotify devices
-- **Device Management**: List and control playback on multiple Spotify devices
-- **Media Browser Source Output**: Rich media display with album art, progress bars, and track info
-- **Token Management**: Automatic token refresh and secure storage
-- **Search and Queue**: Advanced search with playlist integration
-- **Multi-User Support**: Per-user authentication within communities
-
-**Key Features**:
-- `!spotify search <query>` - Search Spotify catalog
-- `!spotify play <uri/number>` - Play track on user's Spotify device
-- `!spotify current` - Show current playback with progress and device info
-- `!spotify pause/resume` - Control playback state
-- `!spotify skip` - Skip to next track
-- `!spotify devices` - List available Spotify devices
-- OAuth authentication flow with secure token management
-- Media browser source with real-time progress updates
-
-**Database Schema**:
-```sql
-spotify_tokens (
-    community_id, user_id, access_token, refresh_token,
-    expires_at, scope, created_at, updated_at
-)
-
-spotify_now_playing (
-    community_id, track_uri, track_name, artists, album,
-    duration_ms, album_art_url, is_playing, progress_ms,
-    requested_by, started_at, updated_at
-)
-
-spotify_search_cache (
-    community_id, user_id, query, results, created_at
-)
-```
-
-#### Browser Source Core Module (`core/browser_source_core_module_flask/`)
-- **Multi-threaded Architecture**: ThreadPoolExecutor for handling hundreds of concurrent browser sources
-- **WebSocket Communication**: Real-time updates to browser sources via WebSocket connections
-- **Three Source Types**: Ticker, Media, and General browser sources for different display needs
-- **Unique Community URLs**: Each community gets unique URLs for each source type with secure tokens
-- **OBS Integration**: Optimized for OBS Studio browser source plugin with auto-refresh and styling
-- **Router Integration**: Receives display data from interaction modules via router
-- **Portal Integration**: Community admins can view and manage browser source URLs
-
-**Browser Source Types**:
-- **Ticker Source**: Scrolling text messages at bottom of screen for notifications and alerts
-- **Media Source**: Rich media display for music, videos, images with metadata and progress
-- **General Source**: Custom HTML/CSS content for forms, announcements, and interactive elements
-
-**Key Features**:
-- Unique URLs per community: `/browser/source/{token}/ticker`, `/browser/source/{token}/media`, `/browser/source/{token}/general`
-- WebSocket real-time updates for immediate display changes
-- Queue management for ticker messages with priority and duration
-- Media attribution display with artist, song name, album art, and progress bars
-- Responsive design that works across different OBS scene sizes
-- Access logging and analytics for browser source usage
-- Token management with regeneration capabilities
-
-**Database Schema**:
-```sql
-browser_source_tokens (
-    community_id, source_type, token, is_active, created_at
-)
-
-browser_source_history (
-    community_id, source_type, content, session_id, created_at
-)
-
-browser_source_access_log (
-    community_id, source_type, ip_address, user_agent, accessed_at
-)
-```
-
-**Integration Flow**:
-1. **Module Response**: Interaction module sends response with browser source data
-2. **Router Processing**: Router routes browser source responses to browser source core module
-3. **WebSocket Distribution**: Browser source module distributes updates via WebSocket to connected sources
-4. **OBS Display**: Browser sources in OBS receive updates and display content in real-time
-5. **Portal Management**: Community admins can view URLs and manage settings through portal
-
-**Music Module Browser Source Integration**:
-- YouTube Music and Spotify modules send media responses to browser source core
-- Media browser source displays track information with album art and attribution
-- Real-time progress updates for Spotify playback
-- Automatic timeout and cleanup for media displays
-- Responsive design for different OBS scene layouts
-
-**Browser Source Implementation Details**:
-- **Transparent Backgrounds**: All browser source templates use `background: transparent;` for proper OBS compositing
-- **WebSocket Communication**: Real-time bidirectional communication between browser sources and core module
-- **Multi-threaded Processing**: ThreadPoolExecutor handles hundreds of concurrent connections
-- **Connection Management**: Automatic connection tracking, cleanup, and stale connection removal
-- **Queue System**: Priority-based message queuing for ticker with overflow protection
-- **Analytics Integration**: Comprehensive tracking of browser source usage and interactions
-- **Template System**: Modular HTML/CSS/JS templates for each source type
-- **Responsive Design**: Works across different OBS scene sizes and aspect ratios
-- **Security**: Token-based authentication with unique URLs per community and source type
-
-**Browser Source Templates**:
-- **Ticker Template**: Scrolling text with animations, priority queuing, and style variants
-- **Media Template**: Music display with album art, progress bars, and service indicators
-- **General Template**: Flexible content display with HTML, forms, announcements, and alerts
-- **CSS Framework**: Modern CSS with animations, transitions, and responsive design
-- **JavaScript**: WebSocket handling, automatic reconnection, and analytics tracking
-
-**OBS Integration Features**:
-- **Transparent Backgrounds**: Proper alpha channel support for overlay compositing
-- **Auto-refresh**: Automatic reconnection on connection loss
-- **Performance Optimized**: Minimal resource usage with efficient DOM updates
-- **Cross-browser**: Compatible with OBS browser source engine
-- **Responsive Layouts**: Adapts to different scene sizes and orientations
-
-## Shared Patterns
-
-### Database Schema (All Collectors)
-```sql
--- Platform-specific tokens/auth
-{platform}_tokens (team_id/guild_id/user_id, tokens, scopes, etc.)
-
--- Platform entities 
-{platform}_teams/guilds/channels (platform_id, name, config, etc.)
-
--- Event logging
-{platform}_events (event_id, type, platform_ids, event_data, processed)
-
--- Activity tracking
-{platform}_activities (event_id, activity_type, user, amount, context_sent)
-
--- Shared tables
-servers (owner, platform, channel, server_id, config)
-collector_modules (module_name, platform, endpoint_url, status)
-```
-
-### Router Database Schema
-```sql
--- Commands with execution routing
-commands (
-    id, command, prefix, description, location_url,
-    location,      -- 'internal' for !, 'community' for #
-    type,          -- 'container', 'lambda', 'openwhisk', 'webhook'
-    method, timeout, headers, auth_required, rate_limit,
-    is_active, module_type, module_id, version,
-    trigger_type,  -- 'command', 'event', 'both'
-    event_types,   -- JSON array of event types that trigger this module
-    priority,      -- Lower number = higher priority
-    execution_mode -- 'sequential', 'parallel'
-)
-
--- Entity mappings (platform:server:channel)
-entities (
-    id, entity_id, platform, server_id, channel_id,
-    owner, is_active, config
-)
-
--- Command permissions per entity
-command_permissions (
-    id, command_id, entity_id, is_enabled, config,
-    permissions, usage_count, last_used
-)
-
--- Command execution audit log
-command_executions (
-    id, execution_id, command_id, entity_id, user_id,
-    message_content, parameters, location_url,
-    request_payload, response_status, response_data,
-    execution_time_ms, error_message, retry_count, status
-)
-
--- Rate limiting tracking
-rate_limits (
-    id, command_id, entity_id, user_id, window_start,
-    request_count
-)
-
--- String matching for content moderation and auto-responses
-stringmatch (
-    id, string, match_type, case_sensitive, enabled_entity_ids,
-    action, command_to_execute, command_parameters, webhook_url,
-    warning_message, block_message, priority, is_active,
-    match_count, last_matched, created_by
-)
-
--- Module responses from interaction modules and webhooks
-module_responses (
-    id, execution_id, module_name, success, response_action,
-    response_data, media_type, media_url, ticker_text, ticker_duration,
-    chat_message, error_message, processing_time_ms, created_at
-)
-
--- Coordination table for dynamic server/channel assignment
-coordination (
-    id, platform, server_id, channel_id, entity_id, claimed_by,
-    claimed_at, status, is_live, live_since, viewer_count,
-    last_activity, last_check, last_checkin, claim_expires, 
-    heartbeat_interval, error_count, metadata, priority, 
-    max_containers, config, created_at, updated_at
-)
-```
-
-### Event Processing Flow
-1. **Message Reception**: Collector receives message/event from platform
-2. **Message Type Classification**: Determine message type (chatMessage, subscription, follow, donation, etc.)
-3. **Router Forwarding**: Send to router with entity context and message type
-4. **Session Creation**: Router generates session_id and stores entity mapping in Redis
-5. **Event-Based Processing**: Router processes differently based on message type:
-   - **chatMessage**: Check for commands and string matches
-   - **Non-chat events**: Process reputation and event-triggered modules directly
-6. **Command Processing** (for chatMessage only):
-   - **Command Detection**: Check for `!` (local container) or `#` (community module) prefix
-   - **Command Lookup**: Router queries commands table with read replica
-   - **String Matching Fallback**: If no command found, check message against string patterns for:
-     - **Content Moderation**: Warn or block inappropriate content
-     - **Auto-Responses**: Trigger commands based on message patterns
-     - **Custom Actions**: Execute community modules based on string matches
-7. **Permission Check**: Verify entity has command/module enabled
-8. **Rate Limiting**: Check user/command/entity rate limits
-9. **Multiple Module Execution**: 
-   - **Sequential Modules**: Execute in priority order, wait for completion
-   - **Parallel Modules**: Execute concurrently using ThreadPoolExecutor
-   - **Event-Triggered Modules**: Execute modules configured for specific event types
-10. **Execution Routing**: 
-    - `!` commands → Local container interaction modules
-    - `#` commands → Community Lambda/OpenWhisk functions
-    - String match actions → warn, block, execute commands, or send to webhooks
-    - Event triggers → Configured interaction modules
-11. **Reputation Processing**: Process reputation points for all message types
-12. **Module Response Processing**: Interaction modules respond back to router with:
-    - **Session ID**: Required session_id for tracking
-    - **Success Status**: Whether module executed properly
-    - **Response Action**: chat, media, ticker, general, or form
-    - **Response Data**: Content specific to action type
-13. **Browser Source Routing**: Router routes browser source responses to browser source core module:
-    - **Media Responses**: Music/video with album art and metadata
-    - **Ticker Responses**: Scrolling text with priority and styling
-    - **General Responses**: HTML content, forms, announcements, and alerts
-    - **WebSocket Distribution**: Browser source core distributes to connected OBS sources
-14. **Session Validation**: Router validates session_id matches entity_id
-15. **Response Handling**: Return result to collector for user response and OBS integration
-16. **Logging**: Record execution, performance metrics, usage stats, string match statistics, and module responses
-
-### Command Prefix Architecture
-- **`!` (Local Container Modules)**: Interaction modules running in local containers
-  - Fast execution (container-to-container communication)
-  - Full control over execution environment
-  - Can maintain state and persistent connections
-  - Examples: `!help`, `!stats`, `!admin`
-  
-- **`#` (Community Modules)**: Marketplace modules running in Lambda/OpenWhisk
-  - Serverless execution for scalability
-  - Community-contributed and marketplace-managed
-  - Stateless functions with cold start considerations
-  - Examples: `#weather`, `#translate`, `#game`
-
-### Activity Processing Flow (Legacy)
-1. **Event Reception**: Platform-specific webhook/event handler
-2. **Event Logging**: Store raw event in `{platform}_events`
-3. **Activity Extraction**: Determine activity type and point value
-4. **Context Lookup**: Get user identity from core via `identity_name`
-5. **Reputation Submission**: Send activity to core reputation API
-6. **Activity Logging**: Store processed activity in `{platform}_activities`
-
-### Router Architecture
-- **Multi-Threading**: ThreadPoolExecutor with configurable worker count
-- **Read Replicas**: Separate read connections for command lookups
-- **Caching**: In-memory cache with TTL for frequently accessed data
-- **Rate Limiting**: Sliding window algorithm with background cleanup
-- **Batch Processing**: Process up to 100 events concurrently
-- **Execution Engines**: Support for containers, Lambda, OpenWhisk, and webhooks
-- **String Matching**: Content moderation and auto-response system with pattern matching
-- **Metrics**: Real-time performance monitoring and health checks
-
-### Router Communication Protocol
-- **To Interaction Modules**: Router sends userID, community context, and user level for that community
-- **Module Installation**: 
-  - Marketplace modules are by default NOT added to communities
-  - Core interaction modules are added to communities by default
-  - Community owners can uninstall core interaction modules
-  - Community modules can replace core interaction modules
-- **Context Passing**: All module communications include full user context and permission level
-
-### Community Portal System
-- **Portal Access**: Community owners can generate portal access via `!community portal login add email@domain.com`
-- **Native py4web Features**:
-  - py4web Auth for user authentication and session management
-  - py4web Mailer for email sending (SMTP/sendmail support)
-  - py4web Forms for user input handling with validation
-  - py4web Grid for data display and pagination
-  - py4web Flash for user notifications
-  - py4web Fixtures for access control and authentication
-- **Dashboard Features**: 
-  - View community members with roles and reputation scores
-  - Monitor installed modules (core vs marketplace)
-  - Community statistics and activity metrics
-  - User management with numerical IDs and display names
-  - **Browser Source URLs**: Unique URLs for each community's browser sources (ticker, media, general)
-- **Browser Source Integration**:
-  - Three browser source types: ticker (scrolling text), media (music display), general (flexible HTML)
-  - Unique token-based URLs for each community and source type
-  - Copy-to-clipboard functionality for easy OBS integration
-  - Recommended OBS settings for each source type
-  - Security notice about URL privacy
-- **Authentication**: py4web Auth with custom WaddleBot user fields
-- **Email Configuration**: 
-  - SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, SMTP_TLS, SMTP_PORT environment variables
-  - Automatic fallback to sendmail if SMTP not configured
-- **Database Integration**: Uses py4web's auth_user table with custom fields for WaddleBot integration
-
-### String Matching System
-- **Pattern Matching**: Supports exact, contains, word boundary, and regex pattern matching
-- **Wildcard Support**: Use `"*"` as pattern to match all text (universal trigger)
-- **Content Moderation**: Automatic warning and blocking of inappropriate content
-- **Auto-Responses**: Trigger commands based on message patterns
-- **Webhook Integration**: Send matched content to external webhooks for processing
-- **Entity-Based Rules**: Configure different rules per platform/server/channel
-- **Priority System**: Lower number = higher priority for rule evaluation
-- **Performance Optimized**: Cached compiled regex patterns and rule lookups
-- **Usage Tracking**: Monitor rule effectiveness with match counts and timestamps
-- **Match Types**:
-  - `exact`: Exact string match (case sensitive/insensitive)
-  - `contains`: Substring search within message
-  - `word`: Word boundary matching (whole words only)
-  - `regex`: Full regular expression support with compiled pattern caching
-  - `*`: Universal wildcard - matches all text (useful for logging/analytics)
-- **Actions**:
-  - `warn`: Send warning message to user
-  - `block`: Block message and send notification
-  - `command`: Execute specified command with optional parameters
-  - `webhook`: Send message data to external webhook URL for processing
-
-### Module Response System
-- **Response Tracking**: Track responses from interaction modules and webhooks
-- **Session Management**: All responses must include session_id for tracking
-- **Response Actions**: Support for chat, media, ticker, and form responses
-- **Response Types**:
-  - `chat`: Text-based chat response back to user
-  - `media`: Rich media display for music/video with album art and metadata
-  - `ticker`: Scrolling text ticker for notifications and alerts
-  - `general`: Flexible content display for HTML, forms, announcements, and alerts
-  - `form`: Interactive form for user input with field definitions
-- **Form Response Structure**:
-  - `form_title`: Title of the form
-  - `form_description`: Description or instructions
-  - `form_fields`: Array of field definitions with name, type, label, required, options
-  - `form_submit_url`: URL to submit completed form
-  - `form_submit_method`: HTTP method for submission (default: POST)
-  - `form_callback_url`: URL to redirect after form submission
-  - **Field Types**: text, textarea, select, multiselect, radio, checkbox, number, email, url, date, time
-- **Browser Source Integration**:
-  - **Media Response**: Rich media display with album art, track info, and progress bars
-  - **Ticker Response**: Scrolling text overlay with priority queuing and animations
-  - **General Response**: Flexible content display for HTML, forms, announcements, and alerts
-  - **Form Response**: Interactive form overlay with field validation and submission
-  - **Transparent Backgrounds**: All browser sources use transparent backgrounds for OBS compositing
-  - **WebSocket Updates**: Real-time updates via WebSocket connections
-  - **Configurable Duration**: Set display duration for each response type
-  - **Responsive Design**: Adapts to different OBS scene sizes and layouts
-- **Success Tracking**: Monitor whether modules executed successfully
-- **Performance Metrics**: Track module processing times and response rates
-- **Error Handling**: Capture and log module errors for debugging
-
-### Coordination System (Horizontal Scaling)
-- **Dynamic Assignment**: Collector containers automatically claim available servers/channels
-- **Load Distribution**: Distributes workload across multiple container instances
-- **Live Stream Priority**: Prioritizes live streams/channels for higher engagement
-- **Configurable Limits**: Each container claims up to configurable number (default: 5)
-- **Platform Support**:
-  - **Discord/Slack**: Claims servers with multiple channels
-  - **Twitch**: Claims individual channels (no servers)
-  - **Universal**: Supports any platform with server/channel concept
-- **Claim Management**:
-  - **Atomic Claims**: Race-condition safe claiming using database locks
-  - **Expiration**: Claims expire after 30 minutes without heartbeat
-  - **Checkin System**: Containers must checkin every 5 minutes to maintain claims
-  - **Timeout**: Claims released if container misses checkin for 6+ minutes (1 minute grace period)
-  - **Cleanup**: Automatic cleanup of expired claims and missed checkins
-- **Status Tracking**:
-  - **Live Status**: Track whether streams/channels are live
-  - **Viewer Count**: Monitor audience size for prioritization
-  - **Activity**: Track last message/activity timestamp
-  - **Error Handling**: Track consecutive errors and mark entities as problematic
-- **Horizontal Scaling**:
-  - **Auto-Discovery**: New containers automatically find work
-  - **Load Balancing**: Prioritizes live channels and high-priority entities
-  - **Fault Tolerance**: Failed containers release claims for others to pick up
-  - **Resource Optimization**: Containers can adjust claim count based on load
-  - **Offline Management**: Containers automatically release offline entities and claim new ones
-  - **Continuous Monitoring**: 5-minute checkin cycle ensures active monitoring and claim maintenance
-
-### Message Types and Event Processing
-- **Message Types**: All events sent to router must include a message_type field
-- **Supported Message Types**:
-  - `chatMessage`: User chat messages that may contain commands
-  - `subscription`: User subscriptions/follows
-  - `follow`: User follows
-  - `donation`: User donations/tips
-  - `cheer`: Twitch bits/cheers
-  - `raid`: Twitch raids
-  - `host`: Twitch hosts
-  - `subgift`: Subscription gifts
-  - `resub`: Subscription renewals
-  - `reaction`: Message reactions
-  - `member_join`: User joins server/channel
-  - `member_leave`: User leaves server/channel
-  - `voice_join`: User joins voice channel
-  - `voice_leave`: User leaves voice channel
-  - `voice_time`: Voice channel time tracking
-  - `boost`: Discord server boosts
-  - `ban`: User bans
-  - `kick`: User kicks
-  - `timeout`: User timeouts
-  - `warn`: User warnings
-  - `file_share`: File uploads
-  - `app_mention`: Bot mentions
-  - `channel_join`: Channel joins
-
-### Multiple Module Execution
-- **Module Matching**: Multiple modules can be triggered by a single message/event
-- **Trigger Types**:
-  - `command`: Triggered by command prefix (default behavior)
-  - `event`: Triggered by specific event types
-  - `both`: Triggered by both commands and events
-- **Execution Modes**:
-  - `sequential`: Execute modules one at a time in priority order
-  - `parallel`: Execute modules concurrently using ThreadPoolExecutor
-- **Priority System**: Lower numbers = higher priority (executed first)
-- **Event Configuration**: Modules can specify which event types trigger them
-- **Permission Enforcement**: All modules check entity permissions before execution
-
-### Execution Engine Types
-- **Container**: Local container modules for `!` commands (fast, stateful)
-- **Lambda**: AWS Lambda functions for `#` commands (serverless, scalable)
-- **OpenWhisk**: Apache OpenWhisk functions for `#` commands (open source serverless)
-- **Webhook**: Generic HTTP endpoints for `#` commands (flexible integration)
-
-### Marketplace Integration
-- **Module Discovery**: Browse, search, and categorize community modules
-- **Installation Management**: Install/uninstall modules per entity
-- **Permission System**: Entity-based access control
-- **Router Sync**: Automatic command registration with router
-- **Version Control**: Support for multiple module versions
-- **Usage Analytics**: Track module performance and adoption
-- **Paid Subscription System**: Complete subscription management with payment blocking for expired subscriptions
-
-### Core API Integration
-All collectors follow the same pattern:
-- **Registration**: Register module with core on startup
-- **Heartbeat**: Send periodic health status
-- **Server List**: Pull monitored servers/channels from core
-- **Context API**: Lookup user identity for reputation tracking
-- **Event Forwarding**: Send processed events to router for command processing
-
-## CI/CD and Build System
-
-### GitHub Actions Workflows
-WaddleBot uses comprehensive GitHub Actions for automated building, testing, and deployment:
-
-**Main CI/CD Pipeline (`.github/workflows/ci-cd.yml`)**:
-- **Multi-Platform Builds**: Docker containers for linux/amd64 and linux/arm64
-- **Security Scanning**: Trivy vulnerability scanning and CodeQL analysis
-- **Comprehensive Testing**: Unit tests, integration tests, and code coverage reporting
-- **Container Registry**: Automated pushing to container registries
-- **Quality Gates**: All tests must pass before deployment
-
-**Container-Specific Pipeline (`.github/workflows/containers.yml`)**:
-- **Change Detection**: Only builds containers that have been modified
-- **Matrix Builds**: Parallel builds for all core, collector, and interaction modules
-- **Integration Testing**: Cross-module integration tests
-- **Performance Testing**: Load testing for high-volume modules
-
-**Android App Pipeline (`.github/workflows/android.yml`)**:
-- **Static Analysis**: Lint checking and code quality analysis
-- **Unit Testing**: JUnit tests with coverage reporting
-- **Instrumentation Testing**: UI and integration tests on Android emulator
-- **Build Artifacts**: APK and AAB generation for distribution
-- **Play Store Deployment**: Automated deployment to internal testing track
-
-**Desktop Bridge Pipeline (`.github/workflows/desktop-bridge.yml`)**:
-- **Cross-Platform Compilation**: Windows, macOS, and Linux builds
-- **Go Testing**: Comprehensive testing including benchmarks
-- **Release Management**: Automated release creation with checksums
-- **Binary Distribution**: Multi-platform binary artifacts
-
-**Required CI/CD Standards**:
-- All modules must have comprehensive unit tests (>90% coverage)
-- Integration tests for API endpoints and database operations
-- Dockerfile optimization with multi-stage builds and security scanning
-- Kubernetes deployment manifests with health checks and resource limits
-- Performance benchmarking for high-throughput modules
 
 ## Next Steps
 
@@ -1754,336 +285,8 @@ WaddleBot uses comprehensive GitHub Actions for automated building, testing, and
 - Rate limiting on ingress
 - HTTPS/TLS termination at ingress level
 
-## Critical Development Rules
+---
 
-### Development Philosophy: Safe, Stable, and Feature-Complete
+*This context should be referenced for all future development to maintain consistency with the overall WaddleBot architecture and patterns.*
 
-**NEVER take shortcuts or the "easy route" - ALWAYS prioritize safety, stability, and feature completeness**
-
-#### Core Principles
-- **No Quick Fixes**: Resist quick workarounds or partial solutions
-- **Complete Features**: Fully implemented with proper error handling and validation
-- **Safety First**: Security, data integrity, and fault tolerance are non-negotiable
-- **Stable Foundations**: Build on solid, tested components
-- **Future-Proof Design**: Consider long-term maintainability and scalability
-- **No Technical Debt**: Address issues properly the first time
-
-#### Red Flags (Never Do These)
-- Skipping input validation "just this once"
-- Hardcoding credentials or configuration
-- Ignoring error returns or exceptions
-- Commenting out failing tests to make CI pass
-- Deploying without proper testing
-- Using deprecated or unmaintained dependencies
-- Implementing partial features with "TODO" placeholders
-- Bypassing security checks for convenience
-- Assuming data is valid without verification
-- Leaving debug code or backdoors in production
-
-#### Quality Checklist Before Completion
-- All error cases handled properly
-- Unit tests cover all code paths
-- Integration tests verify component interactions
-- Security requirements fully implemented
-- Performance meets acceptable standards
-- Documentation complete and accurate
-- Code review standards met
-- No hardcoded secrets or credentials
-- Logging and monitoring in place
-- Build passes in containerized environment
-- No security vulnerabilities in dependencies
-- Edge cases and boundary conditions tested
-
-### Git Workflow
-- **NEVER commit automatically** unless explicitly requested by the user
-- **NEVER push to remote repositories** under any circumstances
-- **ONLY commit when explicitly asked** - never assume commit permission
-- Always use feature branches for development
-- Require pull request reviews for main branch
-- Automated testing must pass before merge
-
-### Local State Management (Crash Recovery)
-- **ALWAYS maintain local .PLAN and .TODO files** for crash recovery
-- **Keep .PLAN file updated** with current implementation plans and progress
-- **Keep .TODO file updated** with task lists and completion status
-- **Update these files in real-time** as work progresses
-- **Add to .gitignore**: Both .PLAN and .TODO files must be in .gitignore
-- **File format**: Use simple text format for easy recovery
-- **Automatic recovery**: Upon restart, check for existing files to resume work
-
-### Dependency Security Requirements
-- **ALWAYS check for Dependabot alerts** before every commit
-- **Monitor vulnerabilities via Socket.dev** for all dependencies
-- **Mandatory security scanning** before any dependency changes
-- **Fix all security alerts immediately** - no commits with outstanding vulnerabilities
-- **Regular security audits**: `pip-audit`, `npm audit`, `safety check`
-
-### Linting & Code Quality Requirements
-- **ALL code must pass linting** before commit - no exceptions
-- **Python**: flake8, black, isort, mypy (type checking), bandit (security)
-- **JavaScript/TypeScript**: ESLint, Prettier
-- **Go**: golangci-lint (includes staticcheck, gosec, etc.)
-- **Docker**: hadolint
-- **YAML**: yamllint
-- **Shell**: shellcheck
-- **CodeQL**: All code must pass CodeQL security analysis
-- **PEP Compliance**: Python code must follow PEP 8, PEP 257 (docstrings), PEP 484 (type hints)
-
-### Build & Deployment Requirements
-- **NEVER mark tasks as completed until successful build verification**
-- All Python builds MUST be executed within Docker containers
-- Use containerized builds for local development and CI/CD pipelines
-- Build failures must be resolved before task completion
-
-### Documentation Standards
-- **README.md**: Keep as overview and pointer to comprehensive docs/ folder
-- **docs/ folder**: Create comprehensive documentation for all aspects
-- **RELEASE_NOTES.md**: Maintain in docs/ folder, prepend new version releases to top
-- Update CLAUDE.md when adding significant context
-- **Build status badges**: Always include in README.md
-- **Company homepage**: Point to www.penguintech.io
-- **License**: All projects use Limited AGPL3 with preamble for fair use
-
-### File Size Limits
-- **Maximum file size**: 25,000 characters for ALL code and markdown files
-- **Split large files**: Decompose into modules, libraries, or separate documents
-- **CLAUDE.md exception**: Maximum 39,000 characters (only exception to 25K rule)
-- **High-level approach**: CLAUDE.md contains high-level context and references detailed docs
-- **Documentation strategy**: Create detailed documentation in `docs/` folder and link to them from CLAUDE.md
-- **Keep focused**: Critical context, architectural decisions, and workflow instructions only
-- **User approval required**: ALWAYS ask user permission before splitting CLAUDE.md files
-- **Use Task Agents**: Utilize task agents (subagents) to be more expedient and efficient when making changes to large files, updating or reviewing multiple files, or performing complex multi-step operations
-
-## PenguinTech License Server Integration
-
-All projects integrate with the centralized PenguinTech License Server at `https://license.penguintech.io` for feature gating and enterprise functionality.
-
-**IMPORTANT: License enforcement is ONLY enabled when project is marked as release-ready**
-- Development phase: All features available, no license checks
-- Release phase: License validation required, feature gating active
-
-**License Key Format**: `PENG-XXXX-XXXX-XXXX-XXXX-ABCD`
-
-**Core Endpoints**:
-- `POST /api/v2/validate` - Validate license
-- `POST /api/v2/features` - Check feature entitlements
-- `POST /api/v2/keepalive` - Report usage statistics
-
-**Environment Variables**:
-```bash
-# License configuration
-LICENSE_KEY=PENG-XXXX-XXXX-XXXX-XXXX-ABCD
-LICENSE_SERVER_URL=https://license.penguintech.io
-PRODUCT_NAME=waddlebot
-
-# Release mode (enables license enforcement)
-RELEASE_MODE=false  # Development (default)
-RELEASE_MODE=true   # Production (explicitly set)
-```
-
-## WaddleAI Integration
-
-For AI capabilities beyond the built-in AI Interaction Module, integrate with WaddleAI located at `~/code/WaddleAI`.
-
-**When to Use WaddleAI:**
-- Advanced natural language processing (NLP)
-- Custom machine learning model inference
-- AI-powered automation beyond chat responses
-- Intelligent data analysis and recommendations
-
-**Integration Pattern:**
-- WaddleAI runs as separate microservice container
-- Communicate via REST API or gRPC
-- Environment variable configuration for API endpoints
-- License-gate advanced AI features as enterprise functionality
-
-## Version Management System
-
-**Format**: `vMajor.Minor.Patch.build`
-- **Major**: Breaking changes, API changes, removed features
-- **Minor**: Significant new features and functionality additions
-- **Patch**: Minor updates, bug fixes, security patches
-- **Build**: Epoch64 timestamp of build time
-
-**Update Commands**:
-```bash
-./scripts/version/update-version.sh          # Increment build timestamp
-./scripts/version/update-version.sh patch    # Increment patch version
-./scripts/version/update-version.sh minor    # Increment minor version
-./scripts/version/update-version.sh major    # Increment major version
-```
-
-This context should be referenced for all future development to maintain consistency with the overall WaddleBot architecture and patterns.
-## Flask/Quart Conversion - Build & Test Process (2025-10-30)
-
-### Container Build Process
-
-All Flask module Docker builds follow the GitHub Actions workflow pattern defined in `.github/workflows/containers.yml`:
-
-**Build Context**: Repository root (`/home/penguin/code/WaddleBot`)
-**Dockerfile Location**: `{module_name}_flask/Dockerfile`
-**Build Command Pattern**:
-```bash
-docker build \
-  -f {module}_flask/Dockerfile \
-  -t waddlebot/{name}:latest \
-  --build-arg MODULE_NAME={name} \
-  --build-arg MODULE_PORT={port} \
-  .
-```
-
-**Key Points**:
-1. Build context is `.` (repo root) to access `libs/flask_core`
-2. Dockerfile is specified with `-f {module}_flask/Dockerfile`
-3. Shared library (`libs/flask_core`) is copied into container and installed first
-4. Module-specific `requirements.txt` does NOT include editable install (`-e ../libs/flask_core`)
-5. Build arguments pass module name and port
-
-### Module Structure - Flask Conversion
-
-All modules have been converted from py4web to Flask/Quart with `_flask` suffix:
-
-**Original py4web modules** → **New Flask/Quart modules**:
-- `router_module/` → `router_module_flask/`
-- `marketplace_module/` → `marketplace_module_flask/`
-- `portal_module/` → `portal_module_flask/`
-- `twitch_module/` → `twitch_module_flask/`
-- `discord_module/` → `discord_module_flask/`
-- `slack_module/` → `slack_module_flask/`
-- `ai_interaction_module/` → `ai_interaction_module_flask/`
-- `alias_interaction_module/` → `alias_interaction_module_flask/`
-- `shoutout_interaction_module/` → `shoutout_interaction_module_flask/`
-- `inventory_interaction_module/` → `inventory_interaction_module_flask/`
-- `calendar_interaction_module/` → `calendar_interaction_module_flask/`
-- `memories_interaction_module/` → `memories_interaction_module_flask/`
-- `youtube_music_interaction_module/` → `youtube_music_interaction_module_flask/`
-- `spotify_interaction_module/` → `spotify_interaction_module_flask/`
-- `labels_core_module/` → `labels_core_module_flask/`
-- `browser_source_core_module/` → `browser_source_core_module_flask/`
-- `identity_core_module/` → `identity_core_module_flask/`
-- `community_module/` → `community_module_flask/`
-- `reputation_module/` → `reputation_module_flask/`
-
-### Shared Library (Flask Core)
-
-**Location**: `/libs/flask_core/`
-**Installation**: Installed in Docker container via `pip install .` before module dependencies
-**Components**:
-- `database.py` - AsyncDAL wrapper around PyDAL
-- `auth.py` - Flask-Security-Too + OAuth (Authlib)
-- `datamodels.py` - Python 3.13 dataclasses with slots
-- `logging_config.py` - AAA logging system
-- `api_utils.py` - API decorators and helpers
-- `setup.py` - Package installation
-
-### Dockerfile Pattern (All Flask Modules)
-
-```dockerfile
-# Build from parent directory: docker build -f {module}_flask/Dockerfile -t waddlebot/{name}:latest .
-
-FROM python:3.13-slim
-
-WORKDIR /app
-
-# Copy shared library
-COPY libs/flask_core /app/libs/flask_core
-
-# Install shared library
-RUN cd /app/libs/flask_core && pip install --no-cache-dir .
-
-# Copy module files
-COPY {module}_flask/requirements.txt /app/
-COPY {module}_flask /app/
-
-# Install module dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Create log directory
-RUN mkdir -p /var/log/waddlebotlog
-
-# Expose port
-EXPOSE {port}
-
-# Run with Hypercorn
-CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:{port}", "--workers", "4"]
-```
-
-### Test Scripts
-
-**Python Compilation Test**: `test_all_modules.sh` (Python script variant used)
-- Tests all 66 Python files
-- Matches local testing to GitHub Actions validation
-
-**Container Build Test**: `test_build_all.sh`
-- Builds all 19 Flask module containers
-- Matches GitHub Actions workflow build process
-- Tests health endpoints after container start
-- Validates complete build pipeline
-
-### Running Tests Locally
-
-**Python Compile Test**:
-```bash
-python3 -c "
-import os, subprocess
-for root, dirs, files in os.walk('.'):
-    for f in files:
-        if f.endswith('.py'):
-            fpath = os.path.join(root, f)
-            result = subprocess.run(['python3', '-m', 'py_compile', fpath], capture_output=True)
-            if result.returncode == 0:
-                print(f'✓ {fpath}')
-"
-```
-
-**Container Build Test**:
-```bash
-chmod +x test_build_all.sh
-./test_build_all.sh
-```
-
-**Single Module Build** (example: AI module):
-```bash
-docker build -f ai_interaction_module_flask/Dockerfile -t waddlebot/ai-interaction:test .
-```
-
-### GitHub Actions Workflow Updates Needed
-
-The `.github/workflows/containers.yml` file needs updates to reflect Flask module names:
-
-1. **Change all module paths** from `{module}/` to `{module}_flask/`
-2. **Update detect-changes filters** to use `_flask` suffix
-3. **Update build matrix** `module` field to use `_flask` suffix
-4. **Add new modules** not in original workflow:
-   - `calendar_interaction_module_flask`
-   - `memories_interaction_module_flask`
-   - `youtube_music_interaction_module_flask`
-   - `spotify_interaction_module_flask`
-   - `browser_source_core_module_flask`
-   - `identity_core_module_flask`
-   - `community_module_flask`
-   - `reputation_module_flask`
-
-### Python 3.13 Features Used
-
-All Flask modules use Python 3.13 optimizations:
-- **Dataclasses with slots=True**: 40-50% memory reduction
-- **Structural pattern matching**: `match/case` statements
-- **Type aliases**: `type AsyncHandler = ...`
-- **TaskGroup**: Structured concurrency with `asyncio.TaskGroup`
-
-### Testing Status (2025-10-30)
-
-✅ **Python Compilation**: 66/66 files pass
-✅ **Docker Build**: AI module tested successfully
-⏳ **All Container Builds**: Pending full test run
-⏳ **Go Compilation**: Premium/Desktop needs `go mod download`
-
-### Next Steps for CI/CD
-
-1. Update `.github/workflows/containers.yml` with all Flask module names
-2. Run full container build test via `test_build_all.sh`
-3. Update `docker-compose.yml` to use new Flask module names
-4. Test Go compilation in Premium/Desktop (needs dependencies)
-5. Update deployment documentation with new module names
-
+*For detailed information, see the comprehensive documentation in the `docs/` folder.*

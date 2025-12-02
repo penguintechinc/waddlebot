@@ -3,6 +3,7 @@
  * Unified Community Portal and Admin Interface
  */
 import express from 'express';
+import { createServer } from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
@@ -15,6 +16,7 @@ import { checkConnection, closePool, query } from './config/database.js';
 import { logger } from './utils/logger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import routes from './routes/index.js';
+import { setupWebSocket } from './websocket/index.js';
 
 /**
  * Initialize database tables and default admin
@@ -144,6 +146,76 @@ async function initializeDatabase() {
       )
     `);
 
+    // Create hub_chat_messages table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS hub_chat_messages (
+        id SERIAL PRIMARY KEY,
+        community_id INTEGER NOT NULL,
+        channel_name VARCHAR(255),
+        sender_hub_user_id INTEGER,
+        sender_platform VARCHAR(50),
+        sender_username VARCHAR(255),
+        sender_avatar_url TEXT,
+        message_content TEXT NOT NULL,
+        message_type VARCHAR(50) DEFAULT 'text',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create index for chat messages
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_community
+      ON hub_chat_messages(community_id, created_at DESC)
+    `);
+
+    // Create hub_modules table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS hub_modules (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) UNIQUE NOT NULL,
+        display_name VARCHAR(255),
+        description TEXT,
+        version VARCHAR(50),
+        author VARCHAR(255),
+        category VARCHAR(100),
+        icon_url TEXT,
+        is_published BOOLEAN DEFAULT false,
+        is_core BOOLEAN DEFAULT false,
+        config_schema JSONB DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create hub_module_installations table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS hub_module_installations (
+        id SERIAL PRIMARY KEY,
+        community_id INTEGER NOT NULL,
+        module_id INTEGER REFERENCES hub_modules(id),
+        installed_by INTEGER,
+        config JSONB DEFAULT '{}',
+        is_enabled BOOLEAN DEFAULT true,
+        installed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(community_id, module_id)
+      )
+    `);
+
+    // Create hub_module_reviews table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS hub_module_reviews (
+        id SERIAL PRIMARY KEY,
+        module_id INTEGER REFERENCES hub_modules(id),
+        community_id INTEGER,
+        user_id INTEGER,
+        rating INTEGER CHECK (rating >= 1 AND rating <= 5),
+        review_text TEXT,
+        admin_notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     // Check if default admin exists
     const adminCheck = await query(
       'SELECT id FROM hub_admins WHERE username = $1',
@@ -253,9 +325,20 @@ app.use('/api/', notFoundHandler);
 // Global error handler
 app.use(errorHandler);
 
+// Create HTTP server for Express and Socket.io
+const httpServer = createServer(app);
+
 // Graceful shutdown
-async function shutdown(signal) {
+async function shutdown(signal, io) {
   logger.system(`${signal} received, shutting down gracefully`);
+
+  // Close Socket.io connections
+  if (io) {
+    io.close();
+  }
+
+  // Close HTTP server
+  httpServer.close();
 
   // Close database pool
   await closePool();
@@ -263,27 +346,33 @@ async function shutdown(signal) {
   process.exit(0);
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
-
 // Start server
 async function start() {
   // Initialize database tables and default admin
   await initializeDatabase();
 
-  const server = app.listen(config.port, config.host, () => {
+  // Setup WebSocket
+  const io = setupWebSocket(httpServer);
+
+  // Start HTTP server
+  httpServer.listen(config.port, config.host, () => {
     logger.system('Hub module started', {
       port: config.port,
       host: config.host,
       env: config.env,
+      websocket: 'enabled',
     });
   });
 
   // Handle server errors
-  server.on('error', (err) => {
+  httpServer.on('error', (err) => {
     logger.error('Server error', { error: err.message });
     process.exit(1);
   });
+
+  // Setup graceful shutdown handlers
+  process.on('SIGTERM', () => shutdown('SIGTERM', io));
+  process.on('SIGINT', () => shutdown('SIGINT', io));
 }
 
 start().catch((err) => {

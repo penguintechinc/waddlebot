@@ -1,0 +1,7 @@
+quart==0.19.4
+hypercorn==0.16.0
+grpcio==1.60.0
+grpcio-tools==1.60.0
+pydal==20231201.1
+aiohttp==3.9.1
+pyjwt==2.8.0

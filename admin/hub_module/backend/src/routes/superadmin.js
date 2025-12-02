@@ -22,4 +22,11 @@ router.put('/communities/:id', superadminController.updateCommunity);
 router.delete('/communities/:id', superadminController.deleteCommunity);
 router.post('/communities/:id/reassign', superadminController.reassignOwner);
 
+// Module registry management
+router.get('/marketplace/modules', superadminController.getAllModules);
+router.post('/marketplace/modules', superadminController.createModule);
+router.put('/marketplace/modules/:id', superadminController.updateModule);
+router.put('/marketplace/modules/:id/publish', superadminController.publishModule);
+router.delete('/marketplace/modules/:id', superadminController.deleteModule);
+
 export default router;

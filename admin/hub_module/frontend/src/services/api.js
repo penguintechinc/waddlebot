@@ -69,6 +69,8 @@ export const communityApi = {
   getModules: (id) => api.get(`/api/v1/communities/${id}/modules`),
   updateProfile: (id, data) => api.put(`/api/v1/communities/${id}/profile`, data),
   leave: (id) => api.post(`/api/v1/communities/${id}/leave`),
+  getChatHistory: (id, params) => api.get(`/api/v1/community/${id}/chat/history`, { params }),
+  getChatChannels: (id) => api.get(`/api/v1/community/${id}/chat/channels`),
 };
 
 export const adminApi = {
@@ -119,6 +121,22 @@ export const superAdminApi = {
   updateCommunity: (id, data) => api.put(`/api/v1/superadmin/communities/${id}`, data),
   deleteCommunity: (id) => api.delete(`/api/v1/superadmin/communities/${id}`),
   reassignOwner: (id, data) => api.post(`/api/v1/superadmin/communities/${id}/reassign`, data),
+  // Module registry
+  getAllModules: (params) => api.get('/api/v1/superadmin/marketplace/modules', { params }),
+  createModule: (data) => api.post('/api/v1/superadmin/marketplace/modules', data),
+  updateModule: (id, data) => api.put(`/api/v1/superadmin/marketplace/modules/${id}`, data),
+  publishModule: (id, isPublished) => api.put(`/api/v1/superadmin/marketplace/modules/${id}/publish`, { isPublished }),
+  deleteModule: (id) => api.delete(`/api/v1/superadmin/marketplace/modules/${id}`),
+};
+
+// Marketplace API
+export const marketplaceApi = {
+  browseModules: (communityId, params) => api.get(`/api/v1/admin/${communityId}/marketplace/modules`, { params }),
+  getModuleDetails: (communityId, moduleId) => api.get(`/api/v1/admin/${communityId}/marketplace/modules/${moduleId}`),
+  installModule: (communityId, moduleId) => api.post(`/api/v1/admin/${communityId}/marketplace/modules/${moduleId}/install`),
+  uninstallModule: (communityId, moduleId) => api.delete(`/api/v1/admin/${communityId}/marketplace/modules/${moduleId}`),
+  configureModule: (communityId, moduleId, data) => api.put(`/api/v1/admin/${communityId}/marketplace/modules/${moduleId}/config`, data),
+  addReview: (communityId, moduleId, data) => api.post(`/api/v1/admin/${communityId}/marketplace/modules/${moduleId}/review`, data),
 };
 
 // User Identity API
@@ -129,4 +147,12 @@ export const userApi = {
   getPrimaryIdentity: () => api.get('/api/v1/user/identities/primary'),
   setPrimaryIdentity: (platform) => api.put('/api/v1/user/identities/primary', { platform }),
   updateProfile: (data) => api.put('/api/v1/user/profile', data),
+};
+
+// Stream API
+export const streamApi = {
+  getLiveStreams: (communityId) => api.get(`/api/v1/communities/${communityId}/streams`),
+  getFeaturedStreams: (communityId) => api.get(`/api/v1/communities/${communityId}/streams/featured`),
+  getStreamDetails: (communityId, entityId) =>
+    api.get(`/api/v1/communities/${communityId}/streams/${entityId}`),
 };

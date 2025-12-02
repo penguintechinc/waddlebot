@@ -1,17 +1,26 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { communityApi } from '../../services/api';
+import { communityApi, streamApi } from '../../services/api';
+import LiveStreamGrid from '../../components/streams/LiveStreamGrid';
 
 function CommunityDashboard() {
   const { id } = useParams();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [streams, setStreams] = useState([]);
+  const [streamsLoading, setStreamsLoading] = useState(false);
+  const [streamsError, setStreamsError] = useState(null);
 
   useEffect(() => {
     async function fetchDashboard() {
       try {
         const response = await communityApi.getDashboard(id);
         setData(response.data);
+
+        // Set initial streams from dashboard data
+        if (response.data.liveStreams) {
+          setStreams(response.data.liveStreams);
+        }
       } catch (err) {
         console.error('Failed to fetch dashboard:', err);
       } finally {
@@ -20,6 +29,22 @@ function CommunityDashboard() {
     }
     fetchDashboard();
   }, [id]);
+
+  const refreshStreams = async () => {
+    setStreamsLoading(true);
+    setStreamsError(null);
+    try {
+      const response = await streamApi.getLiveStreams(id);
+      if (response.data.success) {
+        setStreams(response.data.streams);
+      }
+    } catch (err) {
+      console.error('Failed to refresh streams:', err);
+      setStreamsError(err.response?.data?.message || 'Failed to load streams');
+    } finally {
+      setStreamsLoading(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -58,6 +83,18 @@ function CommunityDashboard() {
           </Link>
         )}
       </div>
+
+      {/* Live Streams Section */}
+      {streams && streams.length > 0 && (
+        <div className="mb-8">
+          <LiveStreamGrid
+            streams={streams}
+            onRefresh={refreshStreams}
+            loading={streamsLoading}
+            error={streamsError}
+          />
+        </div>
+      )}
 
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Stats cards */}

@@ -8,6 +8,7 @@ import authRoutes from './auth.js';
 import userRoutes from './user.js';
 import communityRoutes from './community.js';
 import adminRoutes from './admin.js';
+import marketplaceRoutes from './marketplace.js';
 import platformRoutes from './platform.js';
 import superadminRoutes from './superadmin.js';
 
@@ -27,6 +28,9 @@ router.use('/community', communityRoutes);
 
 // Community admin routes (admin role required)
 router.use('/admin', adminRoutes);
+
+// Marketplace routes (admin role required)
+router.use('/admin', marketplaceRoutes);
 
 // Platform admin routes (platform-admin role required)
 router.use('/platform', platformRoutes);

@@ -80,6 +80,25 @@ services:
       - waddlebot-public
     restart: unless-stopped
 
+  # Apache OpenWhisk standalone for testing serverless actions
+  openwhisk:
+    image: openwhisk/standalone:nightly
+    container_name: waddlebot-openwhisk
+    ports:
+      - "3233:3233"   # OpenWhisk API
+    environment:
+      JAVA_OPTS: "-Xmx1g"
+    networks:
+      - waddlebot-internal
+      - waddlebot-public
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3233/api/v1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+    restart: unless-stopped
+
   # =============================================================================
   # CORE MODULES
   # =============================================================================
@@ -565,6 +584,202 @@ services:
       - router
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8021/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # =============================================================================
+  # PUSHING ACTION MODULES (Platform Integration)
+  # =============================================================================
+
+  discord-action:
+    build:
+      context: .
+      dockerfile: action/pushing/discord_action_module/Dockerfile
+    container_name: waddlebot-discord-action
+    environment:
+      MODULE_NAME: discord-action
+      GRPC_PORT: 50051
+      REST_PORT: 8070
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      - router
+      - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8070/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  slack-action:
+    build:
+      context: .
+      dockerfile: action/pushing/slack_action_module/Dockerfile
+    container_name: waddlebot-slack-action
+    environment:
+      MODULE_NAME: slack-action
+      GRPC_PORT: 50052
+      REST_PORT: 8071
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      - router
+      - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8071/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  twitch-action:
+    build:
+      context: .
+      dockerfile: action/pushing/twitch_action_module/Dockerfile
+    container_name: waddlebot-twitch-action
+    environment:
+      MODULE_NAME: twitch-action
+      GRPC_PORT: 50053
+      REST_PORT: 8072
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID}
+      TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET}
+      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      - router
+      - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8072/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  youtube-action:
+    build:
+      context: .
+      dockerfile: action/pushing/youtube_action_module/Dockerfile
+    container_name: waddlebot-youtube-action
+    environment:
+      MODULE_NAME: youtube-action
+      GRPC_PORT: 50054
+      REST_PORT: 8073
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET}
+      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      - router
+      - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8073/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # =============================================================================
+  # SERVERLESS PLATFORM ACTION MODULES
+  # =============================================================================
+
+  lambda-action:
+    build:
+      context: .
+      dockerfile: action/pushing/lambda_action_module/Dockerfile
+    container_name: waddlebot-lambda-action
+    environment:
+      MODULE_NAME: lambda-action
+      GRPC_PORT: 50060
+      REST_PORT: 8080
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_LAMBDA_ROLE_ARN: ${AWS_LAMBDA_ROLE_ARN:-}
+      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      - router
+      - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  gcp-functions-action:
+    build:
+      context: .
+      dockerfile: action/pushing/gcp_functions_action_module/Dockerfile
+    container_name: waddlebot-gcp-functions-action
+    environment:
+      MODULE_NAME: gcp-functions-action
+      GRPC_PORT: 50061
+      REST_PORT: 8081
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID}
+      GCP_REGION: ${GCP_REGION:-us-central1}
+      GCP_SERVICE_ACCOUNT_KEY: ${GCP_SERVICE_ACCOUNT_KEY:-}
+      GCP_SERVICE_ACCOUNT_EMAIL: ${GCP_SERVICE_ACCOUNT_EMAIL:-}
+      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      - router
+      - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  openwhisk-action:
+    build:
+      context: .
+      dockerfile: action/pushing/openwhisk_action_module/Dockerfile
+    container_name: waddlebot-openwhisk-action
+    environment:
+      MODULE_NAME: openwhisk-action
+      GRPC_PORT: 50062
+      REST_PORT: 8082
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      OPENWHISK_API_HOST: ${OPENWHISK_API_HOST:-http://openwhisk:3233}
+      OPENWHISK_AUTH_KEY: ${OPENWHISK_AUTH_KEY:-23bc46b1-71f6-4ed5-8c54-816aa4f8c502:123zO3xZCLrMN6v2BKK1dXYFpXlPkccOFqm12CdAsMgRU4VrNZ9lyGVCGuMDGIwP}
+      OPENWHISK_NAMESPACE: ${OPENWHISK_NAMESPACE:-guest}
+      OPENWHISK_INSECURE: ${OPENWHISK_INSECURE:-true}
+      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      - router
+      - postgres
+      - openwhisk
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
       interval: 30s
       timeout: 10s
       retries: 3

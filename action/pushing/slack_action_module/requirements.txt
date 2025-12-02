@@ -1,0 +1,8 @@
+quart==0.19.4
+pydal==20231128.1
+grpcio==1.60.0
+grpcio-tools==1.60.0
+slack-sdk==3.26.1
+pyjwt==2.8.0
+psycopg2-binary==2.9.9
+asyncio==3.4.3

@@ -20,12 +20,14 @@ import OAuthCallback from './pages/auth/OAuthCallback';
 import DashboardHome from './pages/dashboard/DashboardHome';
 import CommunityDashboard from './pages/dashboard/CommunityDashboard';
 import CommunitySettings from './pages/dashboard/CommunitySettings';
+import CommunityChat from './pages/dashboard/CommunityChat';
 import AccountSettings from './pages/dashboard/AccountSettings';
 
 // Admin pages
 import AdminHome from './pages/admin/AdminHome';
 import AdminMembers from './pages/admin/AdminMembers';
 import AdminModules from './pages/admin/AdminModules';
+import AdminMarketplace from './pages/admin/AdminMarketplace';
 import AdminBrowserSources from './pages/admin/AdminBrowserSources';
 import AdminDomains from './pages/admin/AdminDomains';
 
@@ -38,6 +40,7 @@ import PlatformCommunities from './pages/platform/PlatformCommunities';
 import SuperAdminDashboard from './pages/superadmin/SuperAdminDashboard';
 import SuperAdminCommunities from './pages/superadmin/SuperAdminCommunities';
 import SuperAdminCreateCommunity from './pages/superadmin/SuperAdminCreateCommunity';
+import SuperAdminModuleRegistry from './pages/superadmin/SuperAdminModuleRegistry';
 
 // Loading spinner
 function LoadingSpinner() {
@@ -96,6 +99,7 @@ function App() {
         <Route path="/dashboard/settings" element={<AccountSettings />} />
         <Route path="/dashboard/community/:id" element={<CommunityDashboard />} />
         <Route path="/dashboard/community/:id/settings" element={<CommunitySettings />} />
+        <Route path="/dashboard/community/:id/chat" element={<CommunityChat />} />
       </Route>
 
       {/* Admin routes (community admin) */}
@@ -109,6 +113,7 @@ function App() {
         <Route path="/admin/:communityId" element={<AdminHome />} />
         <Route path="/admin/:communityId/members" element={<AdminMembers />} />
         <Route path="/admin/:communityId/modules" element={<AdminModules />} />
+        <Route path="/admin/:communityId/marketplace" element={<AdminMarketplace />} />
         <Route path="/admin/:communityId/browser-sources" element={<AdminBrowserSources />} />
         <Route path="/admin/:communityId/domains" element={<AdminDomains />} />
       </Route>
@@ -137,6 +142,7 @@ function App() {
         <Route path="/superadmin" element={<SuperAdminDashboard />} />
         <Route path="/superadmin/communities" element={<SuperAdminCommunities />} />
         <Route path="/superadmin/communities/new" element={<SuperAdminCreateCommunity />} />
+        <Route path="/superadmin/modules" element={<SuperAdminModuleRegistry />} />
       </Route>
 
       {/* Catch all - redirect to home */}
