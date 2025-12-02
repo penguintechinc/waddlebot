@@ -110,3 +110,13 @@ export const platformApi = {
   getAuditLog: (params) => api.get('/api/v1/platform/audit-log', { params }),
   getStats: () => api.get('/api/v1/platform/stats'),
 };
+
+export const superAdminApi = {
+  getDashboard: () => api.get('/api/v1/superadmin/dashboard'),
+  getCommunities: (params) => api.get('/api/v1/superadmin/communities', { params }),
+  getCommunity: (id) => api.get(`/api/v1/superadmin/communities/${id}`),
+  createCommunity: (data) => api.post('/api/v1/superadmin/communities', data),
+  updateCommunity: (id, data) => api.put(`/api/v1/superadmin/communities/${id}`, data),
+  deleteCommunity: (id) => api.delete(`/api/v1/superadmin/communities/${id}`),
+  reassignOwner: (id, data) => api.post(`/api/v1/superadmin/communities/${id}/reassign`, data),
+};

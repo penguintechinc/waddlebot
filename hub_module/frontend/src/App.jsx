@@ -33,6 +33,11 @@ import PlatformDashboard from './pages/platform/PlatformDashboard';
 import PlatformUsers from './pages/platform/PlatformUsers';
 import PlatformCommunities from './pages/platform/PlatformCommunities';
 
+// Super admin pages
+import SuperAdminDashboard from './pages/superadmin/SuperAdminDashboard';
+import SuperAdminCommunities from './pages/superadmin/SuperAdminCommunities';
+import SuperAdminCreateCommunity from './pages/superadmin/SuperAdminCreateCommunity';
+
 // Loading spinner
 function LoadingSpinner() {
   return (
@@ -43,8 +48,8 @@ function LoadingSpinner() {
 }
 
 // Protected route wrapper
-function ProtectedRoute({ children, requireAdmin = false, requirePlatformAdmin = false }) {
-  const { user, loading } = useAuth();
+function ProtectedRoute({ children, requireAdmin = false, requirePlatformAdmin = false, requireSuperAdmin = false }) {
+  const { user, loading, isSuperAdmin } = useAuth();
 
   if (loading) {
     return <LoadingSpinner />;
@@ -52,6 +57,10 @@ function ProtectedRoute({ children, requireAdmin = false, requirePlatformAdmin =
 
   if (!user) {
     return <Navigate to="/login" replace />;
+  }
+
+  if (requireSuperAdmin && !isSuperAdmin) {
+    return <Navigate to="/dashboard" replace />;
   }
 
   if (requirePlatformAdmin && !user.roles?.includes('platform-admin')) {
@@ -113,6 +122,19 @@ function App() {
         <Route path="/platform" element={<PlatformDashboard />} />
         <Route path="/platform/users" element={<PlatformUsers />} />
         <Route path="/platform/communities" element={<PlatformCommunities />} />
+      </Route>
+
+      {/* Super admin routes */}
+      <Route
+        element={
+          <ProtectedRoute requireSuperAdmin>
+            <AdminLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route path="/superadmin" element={<SuperAdminDashboard />} />
+        <Route path="/superadmin/communities" element={<SuperAdminCommunities />} />
+        <Route path="/superadmin/communities/new" element={<SuperAdminCreateCommunity />} />
       </Route>
 
       {/* Catch all - redirect to home */}

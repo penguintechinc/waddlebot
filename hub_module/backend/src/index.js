@@ -70,6 +70,29 @@ async function initializeDatabase() {
       )
     `);
 
+    // Create communities table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS communities (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) UNIQUE NOT NULL,
+        display_name VARCHAR(255),
+        description TEXT,
+        platform VARCHAR(50) NOT NULL,
+        platform_server_id VARCHAR(255),
+        owner_id VARCHAR(255),
+        owner_name VARCHAR(255),
+        member_count INTEGER DEFAULT 0,
+        is_active BOOLEAN DEFAULT true,
+        is_public BOOLEAN DEFAULT true,
+        config JSONB DEFAULT '{}',
+        created_by VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        deleted_at TIMESTAMP,
+        deleted_by VARCHAR(255)
+      )
+    `);
+
     // Check if default admin exists
     const adminCheck = await query(
       'SELECT id FROM hub_admins WHERE username = $1',

@@ -4,7 +4,7 @@ import { communityApi } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
 
 function DashboardHome() {
-  const { user } = useAuth();
+  const { user, isSuperAdmin } = useAuth();
   const [communities, setCommunities] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -24,10 +24,10 @@ function DashboardHome() {
 
   const roleColor = (role) => {
     switch (role) {
-      case 'community-owner': return 'bg-yellow-100 text-yellow-800';
-      case 'community-admin': return 'bg-purple-100 text-purple-800';
-      case 'moderator': return 'bg-blue-100 text-blue-800';
-      default: return 'bg-slate-100 text-slate-800';
+      case 'community-owner': return 'bg-gold-500/20 text-gold-300 border border-gold-500/30';
+      case 'community-admin': return 'bg-purple-500/20 text-purple-300 border border-purple-500/30';
+      case 'moderator': return 'bg-sky-500/20 text-sky-300 border border-sky-500/30';
+      default: return 'bg-navy-700 text-navy-300 border border-navy-600';
     }
   };
 
@@ -37,20 +37,36 @@ function DashboardHome() {
 
   return (
     <div>
+      {/* Super Admin Banner */}
+      {isSuperAdmin && (
+        <div className="mb-6 p-4 bg-gradient-to-r from-gold-600 via-gold-500 to-emerald-500 rounded-lg text-navy-950 flex items-center justify-between glow-gold">
+          <div>
+            <div className="font-semibold">Super Admin Access</div>
+            <div className="text-sm text-navy-800">You have global administrative privileges</div>
+          </div>
+          <Link
+            to="/superadmin"
+            className="px-4 py-2 bg-navy-900 text-gold-400 rounded-lg font-medium hover:bg-navy-800 transition-colors border border-navy-700"
+          >
+            Open Control Panel
+          </Link>
+        </div>
+      )}
+
       <div className="mb-8">
-        <h1 className="text-2xl font-bold">Welcome back, {user?.username}!</h1>
-        <p className="text-slate-600">Manage your communities and explore activity</p>
+        <h1 className="text-2xl font-bold text-sky-100">Welcome back, {user?.username}!</h1>
+        <p className="text-navy-400">Manage your communities and explore activity</p>
       </div>
 
       {loading ? (
         <div className="flex justify-center py-12">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-sky-400"></div>
         </div>
       ) : communities.length === 0 ? (
         <div className="card p-12 text-center">
           <div className="text-6xl mb-4">🐧</div>
-          <h2 className="text-xl font-semibold mb-2">No Communities Yet</h2>
-          <p className="text-slate-600 mb-6">
+          <h2 className="text-xl font-semibold mb-2 text-sky-100">No Communities Yet</h2>
+          <p className="text-navy-400 mb-6">
             You haven't joined any communities yet. Browse available communities to get started.
           </p>
           <Link to="/communities" className="btn btn-primary">
@@ -63,9 +79,9 @@ function DashboardHome() {
             <Link
               key={community.id}
               to={`/dashboard/community/${community.id}`}
-              className="card hover:shadow-md transition-shadow overflow-hidden"
+              className="card hover:border-sky-500 transition-all overflow-hidden group"
             >
-              <div className="aspect-video bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center">
+              <div className="aspect-video bg-gradient-to-br from-navy-700 to-navy-800 flex items-center justify-center group-hover:from-sky-900 group-hover:to-navy-800 transition-all">
                 {community.logoUrl ? (
                   <img
                     src={community.logoUrl}
@@ -73,20 +89,20 @@ function DashboardHome() {
                     className="w-full h-full object-cover"
                   />
                 ) : (
-                  <span className="text-5xl text-white">🐧</span>
+                  <span className="text-5xl">🐧</span>
                 )}
               </div>
               <div className="p-4">
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="font-semibold truncate">{community.displayName}</h3>
+                  <h3 className="font-semibold truncate text-sky-100">{community.displayName}</h3>
                   <span className={`text-xs px-2 py-1 rounded-full ${roleColor(community.role)}`}>
                     {roleLabel(community.role)}
                   </span>
                 </div>
-                <p className="text-sm text-slate-600 line-clamp-2">
+                <p className="text-sm text-navy-400 line-clamp-2">
                   {community.description || 'No description'}
                 </p>
-                <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+                <div className="mt-3 flex items-center justify-between text-xs text-navy-500">
                   <span>{community.memberCount} members</span>
                   <span>Joined {new Date(community.joinedAt).toLocaleDateString()}</span>
                 </div>

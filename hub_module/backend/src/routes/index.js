@@ -8,6 +8,7 @@ import authRoutes from './auth.js';
 import communityRoutes from './community.js';
 import adminRoutes from './admin.js';
 import platformRoutes from './platform.js';
+import superadminRoutes from './superadmin.js';
 
 const router = Router();
 
@@ -25,5 +26,8 @@ router.use('/admin', adminRoutes);
 
 // Platform admin routes (platform-admin role required)
 router.use('/platform', platformRoutes);
+
+// Super admin routes (super_admin role required)
+router.use('/superadmin', superadminRoutes);
 
 export default router;

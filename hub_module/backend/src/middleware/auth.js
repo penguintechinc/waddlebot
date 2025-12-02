@@ -77,6 +77,20 @@ export async function requireAuth(req, res, next) {
 }
 
 /**
+ * Require super admin role (hub-level admin)
+ */
+export function requireSuperAdmin(req, res, next) {
+  if (!req.user?.roles?.includes('super_admin')) {
+    logger.authz('Access denied - not super admin', {
+      userId: req.user?.id,
+      path: req.path,
+    });
+    return next(errors.forbidden('Super admin access required'));
+  }
+  next();
+}
+
+/**
  * Require platform admin role
  */
 export function requirePlatformAdmin(req, res, next) {
@@ -183,6 +197,7 @@ export async function requireCommunityAdmin(req, res, next) {
 export default {
   optionalAuth,
   requireAuth,
+  requireSuperAdmin,
   requirePlatformAdmin,
   requireMember,
   requireCommunityAdmin,
