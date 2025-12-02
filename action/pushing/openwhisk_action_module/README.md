@@ -406,6 +406,57 @@ python -m grpc_tools.protoc \
 pytest tests/
 ```
 
+## Local Testing with Docker Compose
+
+The easiest way to test the OpenWhisk integration locally is using docker-compose with the included test script.
+
+### Quick Start
+
+```bash
+# Start OpenWhisk standalone and the action module
+docker-compose up -d openwhisk openwhisk-action postgres redis
+
+# Run the integration test
+./scripts/test-openwhisk.sh
+```
+
+### Test Actions
+
+A sample hello world action is included for testing:
+
+**Location:** `actions/hello.js`
+
+```javascript
+function main(params) {
+    const name = params.name || 'World';
+    return {
+        message: `Hello ${name}`,
+        success: true
+    };
+}
+```
+
+### What the Test Does
+
+1. Waits for OpenWhisk standalone to be healthy (port 3233)
+2. Deploys the hello action to OpenWhisk via REST API
+3. Waits for the openwhisk-action module to be healthy (port 8082)
+4. Gets a JWT token from the module
+5. Invokes the action through the WaddleBot openwhisk-action module
+6. Verifies the response contains "Hello World"
+
+### Environment Variables for Testing
+
+The test script uses these defaults (can be overridden):
+
+```bash
+OPENWHISK_HOST=localhost
+OPENWHISK_PORT=3233
+ACTION_MODULE_HOST=localhost
+ACTION_MODULE_PORT=8082
+MODULE_SECRET_KEY=dev-secret-key-for-testing-only-change-in-production
+```
+
 ## License
 
 Part of WaddleBot. See repository LICENSE file.

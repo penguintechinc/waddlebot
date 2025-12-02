@@ -57,11 +57,56 @@ usage() {
     echo "  $0 status           # Check pod status"
 }
 
+install_microk8s() {
+    log_info "Checking if MicroK8s is installed..."
+
+    if command -v microk8s &>/dev/null; then
+        log_success "MicroK8s is already installed"
+        return 0
+    fi
+
+    log_info "Installing MicroK8s via snap..."
+    if ! command -v snap &>/dev/null; then
+        log_error "Snap is not installed. Please install snapd first:"
+        echo "  sudo apt update && sudo apt install -y snapd"
+        exit 1
+    fi
+
+    sudo snap install microk8s --classic --channel=1.28/stable
+
+    log_info "Adding current user to microk8s group..."
+    sudo usermod -a -G microk8s "$USER"
+    sudo chown -f -R "$USER" ~/.kube 2>/dev/null || true
+
+    log_warn "You may need to log out and back in for group changes to take effect"
+    log_warn "Or run: newgrp microk8s"
+
+    log_info "Waiting for MicroK8s to be ready..."
+    sudo microk8s status --wait-ready
+
+    log_success "MicroK8s installed successfully"
+}
+
 check_microk8s() {
     log_info "Checking microk8s status..."
+
+    # Check if microk8s is installed
+    if ! command -v microk8s &>/dev/null; then
+        log_warn "MicroK8s is not installed"
+        read -p "Would you like to install it now? [y/N] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            install_microk8s
+        else
+            log_error "MicroK8s is required. Install with: sudo snap install microk8s --classic"
+            exit 1
+        fi
+    fi
+
     if ! mk status &>/dev/null; then
-        log_error "MicroK8s is not running. Please start it with: microk8s start"
-        exit 1
+        log_warn "MicroK8s is not running. Starting..."
+        mk start
+        sleep 5
     fi
     log_success "MicroK8s is running"
 }
@@ -70,7 +115,7 @@ setup_addons() {
     log_info "Enabling required microk8s addons..."
 
     # Enable addons
-    mk enable dns hostpath-storage registry
+    mk enable dns hostpath-storage registry ingress
 
     # Wait for registry to be ready
     log_info "Waiting for registry to be ready..."

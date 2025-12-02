@@ -32,7 +32,9 @@ RUN python -m grpc_tools.protoc \
     -I./proto \
     --python_out=./proto \
     --grpc_python_out=./proto \
-    ./proto/openwhisk_action.proto
+    ./proto/openwhisk_action.proto && \
+    # Fix import paths in generated grpc file
+    sed -i 's/^import openwhisk_action_pb2/from proto import openwhisk_action_pb2/' ./proto/openwhisk_action_pb2_grpc.py
 
 # Expose ports
 EXPOSE 8082 50062

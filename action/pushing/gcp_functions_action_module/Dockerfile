@@ -33,7 +33,9 @@ RUN python -m grpc_tools.protoc \
     -I./proto \
     --python_out=./proto \
     --grpc_python_out=./proto \
-    ./proto/gcp_functions_action.proto
+    ./proto/gcp_functions_action.proto && \
+    # Fix import paths in generated grpc file
+    sed -i 's/^import gcp_functions_action_pb2/from proto import gcp_functions_action_pb2/' ./proto/gcp_functions_action_pb2_grpc.py
 
 # Expose ports (REST and gRPC)
 EXPOSE 8081 50061

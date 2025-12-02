@@ -79,7 +79,7 @@ logger = logging.getLogger(__name__)
 # Initialize database
 db = DAL(Config.DATABASE_URL, folder="databases", pool_size=10)
 
-# Define database tables
+# Define database tables (migrate=False since table may already exist)
 db.define_table(
     "gcp_function_invocations",
     db.Field("execution_id", "string", length=255, unique=True),
@@ -93,6 +93,7 @@ db.define_table(
     db.Field("error", "text"),
     db.Field("execution_time_ms", "integer"),
     db.Field("created_at", "datetime", default=datetime.utcnow),
+    migrate=False  # Don't try to migrate - table already exists
 )
 
 # Initialize services

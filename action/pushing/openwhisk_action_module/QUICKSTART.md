@@ -2,9 +2,23 @@
 
 ## Prerequisites
 
-1. **OpenWhisk Installation**: Running OpenWhisk instance
+1. **OpenWhisk Installation**: Running OpenWhisk instance (or use docker-compose)
 2. **Database**: PostgreSQL database for WaddleBot
 3. **Docker**: For containerized deployment
+
+## Fastest: Docker Compose Local Testing
+
+The quickest way to test OpenWhisk integration:
+
+```bash
+# From repository root
+docker-compose up -d openwhisk openwhisk-action postgres redis
+
+# Run integration test
+./scripts/test-openwhisk.sh
+```
+
+This starts OpenWhisk standalone, deploys a hello world action, and verifies the full flow through the WaddleBot action module.
 
 ## 5-Minute Setup
 

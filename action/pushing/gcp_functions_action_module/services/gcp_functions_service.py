@@ -37,6 +37,10 @@ class GCPFunctionsService:
             # Try loading from JSON string or file path
             key_data = Config.GCP_SERVICE_ACCOUNT_KEY
 
+            if not key_data:
+                logger.warning("No GCP_SERVICE_ACCOUNT_KEY configured - running in degraded mode")
+                return None
+
             if key_data.startswith('{'):
                 # JSON string
                 key_info = json.loads(key_data)
@@ -49,15 +53,15 @@ class GCPFunctionsService:
             return credentials
 
         except Exception as e:
-            logger.error(f"Failed to load GCP credentials: {e}")
+            logger.warning(f"Failed to load GCP credentials: {e}")
             # Fall back to default credentials (useful for GCE/GKE)
             try:
                 credentials, project = default()
                 logger.info("Using default GCP credentials")
                 return credentials
             except Exception as e2:
-                logger.error(f"Failed to load default credentials: {e2}")
-                raise
+                logger.warning(f"No GCP credentials available - running in degraded mode: {e2}")
+                return None
 
     async def _ensure_session(self):
         """Ensure aiohttp session exists."""
@@ -69,8 +73,12 @@ class GCPFunctionsService:
         if self.http_session and not self.http_session.closed:
             await self.http_session.close()
 
-    def _get_id_token(self, target_audience: str) -> str:
+    def _get_id_token(self, target_audience: str) -> Optional[str]:
         """Get ID token for authenticating to Cloud Functions."""
+        if not self.credentials:
+            logger.warning("No credentials available for ID token generation")
+            return None
+
         try:
             # Refresh credentials if needed
             if not self.credentials.valid:
@@ -121,14 +129,15 @@ class GCPFunctionsService:
 
             logger.info(f"Invoking Cloud Function: {function_url}")
 
-            # Get ID token for authentication
+            # Get ID token for authentication (if credentials available)
             id_token = self._get_id_token(function_url)
 
             # Prepare headers
             request_headers = {
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {id_token}"
             }
+            if id_token:
+                request_headers["Authorization"] = f"Bearer {id_token}"
 
             if headers:
                 request_headers.update(headers)

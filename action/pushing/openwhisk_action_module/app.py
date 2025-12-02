@@ -79,7 +79,7 @@ logger = logging.getLogger(__name__)
 # Initialize database
 db = DAL(Config.DATABASE_URL, folder="databases", pool_size=10)
 
-# Define database tables
+# Define database tables (migrate=True creates table if not exists, won't fail if exists)
 db.define_table(
     "openwhisk_action_executions",
     db.Field("execution_id", "string", required=True),
@@ -96,7 +96,8 @@ db.define_table(
     db.Field("success", "boolean"),
     db.Field("error", "text"),
     db.Field("created_at", "datetime", default=lambda: datetime.utcnow()),
-    db.Field("completed_at", "datetime")
+    db.Field("completed_at", "datetime"),
+    migrate=False  # Don't try to migrate - table already exists
 )
 
 # Initialize services
