@@ -168,8 +168,8 @@ services:
 
   hub:
     build:
-      context: .
-      dockerfile: hub_module/Dockerfile
+      context: ./hub_module
+      dockerfile: Dockerfile
     container_name: waddlebot-hub
     environment:
       NODE_ENV: production

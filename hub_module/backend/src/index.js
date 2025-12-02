@@ -82,7 +82,7 @@ app.use('/api/v1', routes);
 // Serve frontend static files in production
 if (config.env === 'production') {
   // In Docker, frontend is built to /app/public; in dev, use relative path
-  const frontendPath = process.env.STATIC_PATH || path.join(__dirname, '../../public');
+  const frontendPath = process.env.STATIC_PATH || path.join(__dirname, '../public');
   app.use(express.static(frontendPath));
 
   // SPA fallback - serve index.html for all non-API routes
