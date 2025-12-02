@@ -48,14 +48,14 @@ function AdminBrowserSources() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Browser Sources</h1>
-      <p className="text-slate-600 mb-6">
+      <h1 className="text-2xl font-bold mb-2 text-sky-100">Browser Sources</h1>
+      <p className="text-navy-400 mb-6">
         Use these URLs in OBS Studio browser sources to display community content.
       </p>
 
       {loading ? (
         <div className="flex justify-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-waddle-orange"></div>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-400"></div>
         </div>
       ) : (
         <div className="space-y-4">
@@ -67,13 +67,13 @@ function AdminBrowserSources() {
                   <div className="flex items-center space-x-3">
                     <span className="text-2xl">{info.icon}</span>
                     <div>
-                      <h3 className="font-semibold">{info.label}</h3>
-                      <p className="text-sm text-slate-600">{info.desc}</p>
+                      <h3 className="font-semibold text-sky-100">{info.label}</h3>
+                      <p className="text-sm text-navy-400">{info.desc}</p>
                     </div>
                   </div>
                   <button
                     onClick={() => handleRegenerate(source.sourceType)}
-                    className="text-slate-400 hover:text-slate-600"
+                    className="text-navy-400 hover:text-sky-300 transition-colors"
                     title="Regenerate URL"
                   >
                     <ArrowPathIcon className="w-5 h-5" />
@@ -84,11 +84,11 @@ function AdminBrowserSources() {
                     type="text"
                     readOnly
                     value={source.url}
-                    className="input flex-1 bg-slate-50 text-sm font-mono"
+                    className="input flex-1 bg-navy-800 text-sm font-mono"
                   />
                   <button
                     onClick={() => copyToClipboard(source.url, source.sourceType)}
-                    className="btn btn-secondary"
+                    className="btn btn-secondary flex items-center gap-2"
                   >
                     <ClipboardDocumentIcon className="w-5 h-5" />
                     {copied === source.sourceType ? 'Copied!' : 'Copy'}
@@ -100,9 +100,9 @@ function AdminBrowserSources() {
         </div>
       )}
 
-      <div className="mt-8 card p-6 bg-blue-50 border-blue-200">
-        <h3 className="font-semibold text-blue-800 mb-2">OBS Setup Tips</h3>
-        <ul className="text-sm text-blue-700 space-y-1">
+      <div className="mt-8 card p-6 bg-sky-500/10 border-sky-500/30">
+        <h3 className="font-semibold text-sky-300 mb-2">OBS Setup Tips</h3>
+        <ul className="text-sm text-sky-200 space-y-1">
           <li>• Ticker: Set width to full scene width, height 50-100px, position at bottom</li>
           <li>• Media: Set size to 400x150px, position in corner for now playing display</li>
           <li>• General: Use full screen overlay for announcements</li>

@@ -50,16 +50,16 @@ function SuperAdminCreateCommunity() {
   return (
     <div>
       <div className="flex items-center gap-4 mb-6">
-        <Link to="/superadmin/communities" className="text-slate-500 hover:text-slate-700">
+        <Link to="/superadmin/communities" className="text-navy-400 hover:text-sky-300 transition-colors">
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
         </Link>
-        <h1 className="text-2xl font-bold">Create Community</h1>
+        <h1 className="text-2xl font-bold gradient-text">Create Community</h1>
       </div>
 
       {error && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 mb-6">
+        <div className="p-4 bg-red-500/20 border border-red-500/30 rounded-lg text-red-300 mb-6">
           {error}
         </div>
       )}
@@ -68,12 +68,12 @@ function SuperAdminCreateCommunity() {
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Basic Info */}
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold border-b pb-2">Basic Information</h2>
+            <h2 className="text-lg font-semibold text-sky-100 border-b border-navy-700 pb-2">Basic Information</h2>
 
             <div>
-              <label className="block text-sm font-medium mb-1">
+              <label className="block text-sm font-medium text-sky-200 mb-1">
                 Community Name *
-                <span className="text-slate-500 font-normal ml-2">
+                <span className="text-navy-400 font-normal ml-2">
                   (URL-friendly, auto-formatted)
                 </span>
               </label>
@@ -89,7 +89,7 @@ function SuperAdminCreateCommunity() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">Display Name</label>
+              <label className="block text-sm font-medium text-sky-200 mb-1">Display Name</label>
               <input
                 type="text"
                 name="displayName"
@@ -101,7 +101,7 @@ function SuperAdminCreateCommunity() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">Description</label>
+              <label className="block text-sm font-medium text-sky-200 mb-1">Description</label>
               <textarea
                 name="description"
                 value={form.description}
@@ -115,10 +115,10 @@ function SuperAdminCreateCommunity() {
 
           {/* Platform Info */}
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold border-b pb-2">Platform Configuration</h2>
+            <h2 className="text-lg font-semibold text-sky-100 border-b border-navy-700 pb-2">Platform Configuration</h2>
 
             <div>
-              <label className="block text-sm font-medium mb-1">Platform *</label>
+              <label className="block text-sm font-medium text-sky-200 mb-1">Platform *</label>
               <select
                 name="platform"
                 value={form.platform}
@@ -133,9 +133,9 @@ function SuperAdminCreateCommunity() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">
+              <label className="block text-sm font-medium text-sky-200 mb-1">
                 Platform Server/Channel ID
-                <span className="text-slate-500 font-normal ml-2">(optional)</span>
+                <span className="text-navy-400 font-normal ml-2">(optional)</span>
               </label>
               <input
                 type="text"
@@ -150,12 +150,12 @@ function SuperAdminCreateCommunity() {
 
           {/* Owner Info */}
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold border-b pb-2">Owner Information</h2>
+            <h2 className="text-lg font-semibold text-sky-100 border-b border-navy-700 pb-2">Owner Information</h2>
 
             <div>
-              <label className="block text-sm font-medium mb-1">
+              <label className="block text-sm font-medium text-sky-200 mb-1">
                 Owner Name
-                <span className="text-slate-500 font-normal ml-2">(optional)</span>
+                <span className="text-navy-400 font-normal ml-2">(optional)</span>
               </label>
               <input
                 type="text"
@@ -168,9 +168,9 @@ function SuperAdminCreateCommunity() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">
+              <label className="block text-sm font-medium text-sky-200 mb-1">
                 Owner Platform ID
-                <span className="text-slate-500 font-normal ml-2">(optional)</span>
+                <span className="text-navy-400 font-normal ml-2">(optional)</span>
               </label>
               <input
                 type="text"
@@ -185,19 +185,19 @@ function SuperAdminCreateCommunity() {
 
           {/* Settings */}
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold border-b pb-2">Settings</h2>
+            <h2 className="text-lg font-semibold text-sky-100 border-b border-navy-700 pb-2">Settings</h2>
 
-            <label className="flex items-center gap-3">
+            <label className="flex items-center gap-3 text-sky-200">
               <input
                 type="checkbox"
                 name="isPublic"
                 checked={form.isPublic}
                 onChange={handleChange}
-                className="w-4 h-4"
+                className="w-4 h-4 rounded bg-navy-800 border-navy-600"
               />
               <div>
                 <span className="font-medium">Public Community</span>
-                <p className="text-sm text-slate-500">
+                <p className="text-sm text-navy-400">
                   Public communities are visible in the community directory
                 </p>
               </div>
@@ -205,7 +205,7 @@ function SuperAdminCreateCommunity() {
           </div>
 
           {/* Actions */}
-          <div className="flex justify-end gap-3 pt-4 border-t">
+          <div className="flex justify-end gap-3 pt-4 border-t border-navy-700">
             <Link to="/superadmin/communities" className="btn btn-secondary">
               Cancel
             </Link>

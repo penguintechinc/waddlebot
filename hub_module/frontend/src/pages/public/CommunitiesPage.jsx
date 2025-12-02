@@ -36,13 +36,13 @@ function CommunitiesPage() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
       <div className="text-center mb-12">
-        <h1 className="text-3xl font-bold mb-4">Discover Communities</h1>
-        <p className="text-slate-600">Browse public communities using WaddleBot</p>
+        <h1 className="text-3xl font-bold mb-4 gradient-text">Discover Communities</h1>
+        <p className="text-navy-400">Browse public communities using WaddleBot</p>
       </div>
 
       {loading ? (
         <div className="flex justify-center py-12">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gold-400"></div>
         </div>
       ) : (
         <>
@@ -51,14 +51,14 @@ function CommunitiesPage() {
               <Link
                 key={community.id}
                 to={`/communities/${community.id}`}
-                className="card hover:shadow-md transition-shadow"
+                className="card hover:border-sky-500 transition-all overflow-hidden group"
               >
-                <div className="aspect-video bg-slate-100 rounded-t-xl flex items-center justify-center">
+                <div className="aspect-video bg-gradient-to-br from-navy-700 to-navy-800 flex items-center justify-center group-hover:from-sky-900 group-hover:to-navy-800 transition-all">
                   {community.logoUrl ? (
                     <img
                       src={community.logoUrl}
                       alt={community.displayName}
-                      className="w-full h-full object-cover rounded-t-xl"
+                      className="w-full h-full object-cover"
                     />
                   ) : (
                     <span className="text-4xl">🐧</span>
@@ -67,12 +67,12 @@ function CommunitiesPage() {
                 <div className="p-4">
                   <div className="flex items-center space-x-2 mb-1">
                     <span>{platformIcon(community.primaryPlatform)}</span>
-                    <h3 className="font-semibold truncate">{community.displayName}</h3>
+                    <h3 className="font-semibold truncate text-sky-100">{community.displayName}</h3>
                   </div>
-                  <p className="text-sm text-slate-600 line-clamp-2">
+                  <p className="text-sm text-navy-400 line-clamp-2">
                     {community.description || 'No description'}
                   </p>
-                  <div className="mt-3 text-xs text-slate-500">
+                  <div className="mt-3 text-xs text-navy-500">
                     {community.memberCount} members
                   </div>
                 </div>
@@ -90,7 +90,7 @@ function CommunitiesPage() {
               >
                 Previous
               </button>
-              <span className="px-4 py-2 text-slate-600">
+              <span className="px-4 py-2 text-navy-400">
                 Page {page} of {pagination.totalPages}
               </span>
               <button
@@ -104,7 +104,7 @@ function CommunitiesPage() {
           )}
 
           {communities.length === 0 && (
-            <div className="text-center py-12 text-slate-500">
+            <div className="text-center py-12 text-navy-400">
               No public communities found
             </div>
           )}

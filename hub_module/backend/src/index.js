@@ -77,7 +77,10 @@ async function initializeDatabase() {
         name VARCHAR(255) UNIQUE NOT NULL,
         display_name VARCHAR(255),
         description TEXT,
-        platform VARCHAR(50) NOT NULL,
+        logo_url TEXT,
+        banner_url TEXT,
+        primary_platform VARCHAR(50) NOT NULL DEFAULT 'discord',
+        platform VARCHAR(50) NOT NULL DEFAULT 'discord',
         platform_server_id VARCHAR(255),
         owner_id VARCHAR(255),
         owner_name VARCHAR(255),
@@ -90,6 +93,25 @@ async function initializeDatabase() {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         deleted_at TIMESTAMP,
         deleted_by VARCHAR(255)
+      )
+    `);
+
+    // Create community_members table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS community_members (
+        id SERIAL PRIMARY KEY,
+        community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+        user_id VARCHAR(255),
+        platform VARCHAR(50) NOT NULL,
+        platform_user_id VARCHAR(255),
+        display_name VARCHAR(255),
+        avatar_url TEXT,
+        role VARCHAR(50) DEFAULT 'member',
+        reputation_score INTEGER DEFAULT 0,
+        is_active BOOLEAN DEFAULT true,
+        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(community_id, platform, platform_user_id)
       )
     `);
 

@@ -13,7 +13,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 function AdminLayout() {
-  const { user, logout, isPlatformAdmin } = useAuth();
+  const { user, logout, isPlatformAdmin, isSuperAdmin } = useAuth();
   const location = useLocation();
   const { communityId } = useParams();
 
@@ -44,41 +44,49 @@ function AdminLayout() {
   const title = communityId ? 'Community Admin' : 'Platform Admin';
 
   return (
-    <div className="min-h-screen bg-slate-100">
+    <div className="min-h-screen bg-navy-950">
       {/* Top bar */}
-      <header className="bg-slate-900 text-white sticky top-0 z-50">
+      <header className="bg-navy-900 border-b border-navy-700 sticky top-0 z-50">
         <div className="flex justify-between items-center h-16 px-4 sm:px-6 lg:px-8">
           <div className="flex items-center space-x-4">
             <Link to="/" className="flex items-center space-x-2">
               <span className="text-2xl">🐧</span>
-              <span className="text-xl font-bold">WaddleBot</span>
+              <span className="text-xl font-bold text-gold-400">WaddleBot</span>
             </Link>
-            <span className="text-slate-500">|</span>
+            <span className="text-navy-600">|</span>
             <div className="flex items-center space-x-2">
-              <ShieldCheckIcon className="w-5 h-5 text-waddle-orange" />
-              <span className="font-medium text-waddle-orange">{title}</span>
+              <ShieldCheckIcon className="w-5 h-5 text-gold-400" />
+              <span className="font-medium text-gold-400">{title}</span>
             </div>
           </div>
 
           <div className="flex items-center space-x-4">
-            <Link to="/dashboard" className="text-sm text-slate-300 hover:text-white">
+            {isSuperAdmin && (
+              <Link
+                to="/superadmin"
+                className="text-sm font-medium text-gold-400 hover:text-gold-300"
+              >
+                Super Admin
+              </Link>
+            )}
+            <Link to="/dashboard" className="text-sm text-navy-300 hover:text-sky-300">
               Back to Dashboard
             </Link>
             <div className="flex items-center space-x-2">
               {user?.avatarUrl ? (
                 <img src={user.avatarUrl} alt={user.username} className="w-8 h-8 rounded-full" />
               ) : (
-                <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center">
-                  <span className="text-white font-medium">
+                <div className="w-8 h-8 rounded-full bg-navy-700 flex items-center justify-center border border-navy-600">
+                  <span className="text-sky-100 font-medium">
                     {user?.username?.charAt(0).toUpperCase()}
                   </span>
                 </div>
               )}
-              <span className="text-sm text-slate-300">{user?.username}</span>
+              <span className="text-sm text-sky-100">{user?.username}</span>
             </div>
             <button
               onClick={logout}
-              className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+              className="p-2 text-navy-400 hover:text-sky-300 rounded-lg hover:bg-navy-800"
             >
               <ArrowLeftOnRectangleIcon className="w-5 h-5" />
             </button>
@@ -88,7 +96,7 @@ function AdminLayout() {
 
       <div className="flex">
         {/* Sidebar */}
-        <aside className="w-64 bg-slate-800 min-h-[calc(100vh-4rem)] sticky top-16">
+        <aside className="w-64 bg-navy-900 border-r border-navy-700 min-h-[calc(100vh-4rem)] sticky top-16">
           <nav className="p-4 space-y-1">
             {navItems.map((item) => (
               <Link
@@ -96,8 +104,8 @@ function AdminLayout() {
                 to={item.to}
                 className={`flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
                   isActive(item.to, item.exact)
-                    ? 'bg-waddle-orange text-white'
-                    : 'text-slate-300 hover:bg-slate-700 hover:text-white'
+                    ? 'bg-gold-500/20 text-gold-400 border border-gold-500/30'
+                    : 'text-navy-300 hover:bg-navy-800 hover:text-sky-300'
                 }`}
               >
                 <item.icon className="w-5 h-5" />
@@ -108,13 +116,13 @@ function AdminLayout() {
             {communityId && (
               <>
                 <div className="pt-6 pb-2">
-                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider px-3">
+                  <div className="text-xs font-semibold text-navy-500 uppercase tracking-wider px-3">
                     Quick Actions
                   </div>
                 </div>
                 <Link
                   to={`/dashboard/community/${communityId}`}
-                  className="flex items-center space-x-3 px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-700 hover:text-white"
+                  className="flex items-center space-x-3 px-3 py-2 rounded-lg text-navy-300 hover:bg-navy-800 hover:text-sky-300"
                 >
                   <DocumentTextIcon className="w-5 h-5" />
                   <span className="text-sm font-medium">View Community</span>
@@ -125,7 +133,7 @@ function AdminLayout() {
             {isPlatformAdmin && communityId && (
               <Link
                 to="/platform"
-                className="flex items-center space-x-3 px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-700 hover:text-white"
+                className="flex items-center space-x-3 px-3 py-2 rounded-lg text-navy-300 hover:bg-navy-800 hover:text-sky-300"
               >
                 <ShieldCheckIcon className="w-5 h-5" />
                 <span className="text-sm font-medium">Platform Admin</span>

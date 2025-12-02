@@ -25,7 +25,7 @@ function CommunityPublicPage() {
   if (loading) {
     return (
       <div className="flex justify-center py-20">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gold-400"></div>
       </div>
     );
   }
@@ -34,8 +34,8 @@ function CommunityPublicPage() {
     return (
       <div className="max-w-xl mx-auto px-4 py-20 text-center">
         <div className="text-6xl mb-4">😔</div>
-        <h1 className="text-2xl font-bold mb-2">Community Not Found</h1>
-        <p className="text-slate-600 mb-6">{error}</p>
+        <h1 className="text-2xl font-bold mb-2 text-sky-100">Community Not Found</h1>
+        <p className="text-navy-400 mb-6">{error}</p>
         <Link to="/communities" className="btn btn-primary">
           Browse Communities
         </Link>
@@ -46,7 +46,7 @@ function CommunityPublicPage() {
   return (
     <div>
       {/* Banner */}
-      <div className="h-48 bg-gradient-to-r from-primary-600 to-primary-800 relative">
+      <div className="h-48 bg-gradient-to-r from-navy-800 via-sky-900 to-navy-800 relative">
         {community.bannerUrl && (
           <img
             src={community.bannerUrl}
@@ -58,8 +58,8 @@ function CommunityPublicPage() {
 
       {/* Header */}
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="relative -mt-16 flex flex-col md:flex-row md:items-end md:space-x-6 pb-6 border-b border-slate-200">
-          <div className="w-32 h-32 rounded-xl bg-white shadow-lg flex items-center justify-center overflow-hidden">
+        <div className="relative -mt-16 flex flex-col md:flex-row md:items-end md:space-x-6 pb-6 border-b border-navy-700">
+          <div className="w-32 h-32 rounded-xl bg-navy-800 shadow-lg flex items-center justify-center overflow-hidden border border-navy-600">
             {community.logoUrl ? (
               <img src={community.logoUrl} alt={community.displayName} className="w-full h-full object-cover" />
             ) : (
@@ -67,9 +67,9 @@ function CommunityPublicPage() {
             )}
           </div>
           <div className="mt-4 md:mt-0 flex-1">
-            <h1 className="text-3xl font-bold">{community.displayName}</h1>
-            <p className="text-slate-600 mt-1">{community.description || 'No description'}</p>
-            <div className="flex items-center space-x-4 mt-3 text-sm text-slate-500">
+            <h1 className="text-3xl font-bold text-sky-100">{community.displayName}</h1>
+            <p className="text-navy-400 mt-1">{community.description || 'No description'}</p>
+            <div className="flex items-center space-x-4 mt-3 text-sm text-navy-500">
               <span>{community.memberCount} members</span>
               <span>Since {new Date(community.createdAt).toLocaleDateString()}</span>
             </div>
@@ -81,9 +81,9 @@ function CommunityPublicPage() {
 
         {/* Content */}
         <div className="py-8">
-          <h2 className="text-xl font-semibold mb-4">About</h2>
+          <h2 className="text-xl font-semibold mb-4 text-sky-100">About</h2>
           <div className="card p-6">
-            <p className="text-slate-600">
+            <p className="text-navy-400">
               {community.description || 'This community has not added a description yet.'}
             </p>
           </div>

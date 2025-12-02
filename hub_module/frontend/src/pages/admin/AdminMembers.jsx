@@ -28,17 +28,17 @@ function AdminMembers() {
 
   const roleColor = (role) => {
     switch (role) {
-      case 'community-owner': return 'bg-yellow-100 text-yellow-800';
-      case 'community-admin': return 'bg-purple-100 text-purple-800';
-      case 'moderator': return 'bg-blue-100 text-blue-800';
-      default: return 'bg-slate-100 text-slate-800';
+      case 'community-owner': return 'badge-gold';
+      case 'community-admin': return 'bg-purple-500/20 text-purple-300 border border-purple-500/30';
+      case 'moderator': return 'badge-sky';
+      default: return 'bg-navy-700 text-navy-300 border border-navy-600';
     }
   };
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Members</h1>
+        <h1 className="text-2xl font-bold text-sky-100">Members</h1>
         <input
           type="search"
           placeholder="Search members..."
@@ -49,42 +49,42 @@ function AdminMembers() {
       </div>
 
       <div className="card overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-slate-50 border-b border-slate-200">
+        <table>
+          <thead>
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">User</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Role</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Rep</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Joined</th>
+              <th>User</th>
+              <th>Role</th>
+              <th>Rep</th>
+              <th>Joined</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-200">
+          <tbody>
             {loading ? (
               <tr>
-                <td colSpan="4" className="px-6 py-12 text-center">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-waddle-orange mx-auto"></div>
+                <td colSpan="4" className="p-12 text-center">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-400 mx-auto"></div>
                 </td>
               </tr>
             ) : members.length === 0 ? (
               <tr>
-                <td colSpan="4" className="px-6 py-12 text-center text-slate-500">
+                <td colSpan="4" className="p-12 text-center text-navy-400">
                   No members found
                 </td>
               </tr>
             ) : (
               members.map((member) => (
-                <tr key={member.id} className="hover:bg-slate-50">
-                  <td className="px-6 py-4">
-                    <div className="font-medium">{member.displayName}</div>
-                    <div className="text-xs text-slate-500">{member.platform}</div>
+                <tr key={member.id}>
+                  <td>
+                    <div className="font-medium text-sky-100">{member.displayName}</div>
+                    <div className="text-xs text-navy-500">{member.platform}</div>
                   </td>
-                  <td className="px-6 py-4">
-                    <span className={`text-xs px-2 py-1 rounded-full ${roleColor(member.role)}`}>
+                  <td>
+                    <span className={`badge ${roleColor(member.role)}`}>
                       {member.role.replace('community-', '')}
                     </span>
                   </td>
-                  <td className="px-6 py-4">{member.reputationScore}</td>
-                  <td className="px-6 py-4 text-sm text-slate-500">
+                  <td className="text-gold-400 font-medium">{member.reputationScore}</td>
+                  <td className="text-sm text-navy-400">
                     {new Date(member.joinedAt).toLocaleDateString()}
                   </td>
                 </tr>
@@ -94,8 +94,8 @@ function AdminMembers() {
         </table>
 
         {pagination && pagination.totalPages > 1 && (
-          <div className="flex justify-between items-center px-6 py-3 bg-slate-50 border-t border-slate-200">
-            <span className="text-sm text-slate-600">
+          <div className="flex justify-between items-center p-4 border-t border-navy-700">
+            <span className="text-sm text-navy-400">
               {pagination.total} total members
             </span>
             <div className="flex space-x-2">

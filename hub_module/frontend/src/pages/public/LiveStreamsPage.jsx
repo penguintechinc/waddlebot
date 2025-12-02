@@ -24,7 +24,7 @@ function LiveStreamsPage() {
   if (loading) {
     return (
       <div className="flex justify-center py-20">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gold-400"></div>
       </div>
     );
   }
@@ -33,10 +33,10 @@ function LiveStreamsPage() {
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-3xl font-bold">Live Streams</h1>
-          <p className="text-slate-600">Currently live from WaddleBot communities</p>
+          <h1 className="text-3xl font-bold gradient-text">Live Streams</h1>
+          <p className="text-navy-400">Currently live from WaddleBot communities</p>
         </div>
-        <div className="flex items-center space-x-2 text-red-500">
+        <div className="flex items-center space-x-2 text-red-400">
           <span className="relative flex h-3 w-3">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
@@ -48,8 +48,8 @@ function LiveStreamsPage() {
       {streams.length === 0 ? (
         <div className="text-center py-20">
           <div className="text-6xl mb-4">📺</div>
-          <h2 className="text-xl font-semibold mb-2">No Streams Live</h2>
-          <p className="text-slate-600">Check back later for live content</p>
+          <h2 className="text-xl font-semibold mb-2 text-sky-100">No Streams Live</h2>
+          <p className="text-navy-400">Check back later for live content</p>
         </div>
       ) : (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -59,9 +59,9 @@ function LiveStreamsPage() {
               href={`https://twitch.tv/${stream.channelName}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="card overflow-hidden hover:shadow-lg transition-shadow group"
+              className="card overflow-hidden hover:border-sky-500 transition-all group"
             >
-              <div className="relative aspect-video bg-slate-900">
+              <div className="relative aspect-video bg-navy-800">
                 {stream.thumbnailUrl ? (
                   <img
                     src={stream.thumbnailUrl.replace('{width}', '440').replace('{height}', '248')}
@@ -81,12 +81,12 @@ function LiveStreamsPage() {
                 </div>
               </div>
               <div className="p-4">
-                <h3 className="font-semibold truncate group-hover:text-primary-600">
+                <h3 className="font-semibold truncate text-sky-100 group-hover:text-gold-400 transition-colors">
                   {stream.channelName}
                 </h3>
-                <p className="text-sm text-slate-600 truncate">{stream.title || 'No title'}</p>
+                <p className="text-sm text-navy-400 truncate">{stream.title || 'No title'}</p>
                 {stream.game && (
-                  <p className="text-xs text-slate-500 mt-1">{stream.game}</p>
+                  <p className="text-xs text-navy-500 mt-1">{stream.game}</p>
                 )}
               </div>
             </a>

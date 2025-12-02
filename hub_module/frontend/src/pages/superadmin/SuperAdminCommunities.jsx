@@ -84,7 +84,7 @@ function SuperAdminCommunities() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Manage Communities</h1>
+        <h1 className="text-2xl font-bold gradient-text">Manage Communities</h1>
         <Link to="/superadmin/communities/new" className="btn btn-primary">
           + Create Community
         </Link>
@@ -124,85 +124,85 @@ function SuperAdminCommunities() {
       </div>
 
       {error && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 mb-6">
+        <div className="p-4 bg-red-500/20 border border-red-500/30 rounded-lg text-red-300 mb-6">
           {error}
         </div>
       )}
 
       {/* Communities Table */}
       <div className="card overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-slate-50 border-b">
+        <table>
+          <thead>
             <tr>
-              <th className="text-left p-4 font-medium">Community</th>
-              <th className="text-left p-4 font-medium">Platform</th>
-              <th className="text-left p-4 font-medium">Owner</th>
-              <th className="text-left p-4 font-medium">Members</th>
-              <th className="text-left p-4 font-medium">Status</th>
-              <th className="text-left p-4 font-medium">Created</th>
-              <th className="text-right p-4 font-medium">Actions</th>
+              <th>Community</th>
+              <th>Platform</th>
+              <th>Owner</th>
+              <th>Members</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th className="text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
                 <td colSpan={7} className="p-8 text-center">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-400 mx-auto"></div>
                 </td>
               </tr>
             ) : communities.length === 0 ? (
               <tr>
-                <td colSpan={7} className="p-8 text-center text-slate-500">
+                <td colSpan={7} className="p-8 text-center text-navy-400">
                   No communities found
                 </td>
               </tr>
             ) : (
               communities.map((community) => (
-                <tr key={community.id} className="border-b hover:bg-slate-50">
-                  <td className="p-4">
-                    <div className="font-medium">{community.displayName}</div>
-                    <div className="text-sm text-slate-500">{community.name}</div>
+                <tr key={community.id}>
+                  <td>
+                    <div className="font-medium text-sky-100">{community.displayName}</div>
+                    <div className="text-sm text-navy-400">{community.name}</div>
                   </td>
-                  <td className="p-4">
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${
-                      community.platform === 'discord' ? 'bg-indigo-100 text-indigo-700' :
-                      community.platform === 'twitch' ? 'bg-purple-100 text-purple-700' :
-                      'bg-green-100 text-green-700'
+                  <td>
+                    <span className={`badge ${
+                      community.platform === 'discord' ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' :
+                      community.platform === 'twitch' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' :
+                      'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                     }`}>
                       {community.platform}
                     </span>
                   </td>
-                  <td className="p-4">
-                    {community.ownerName || <span className="text-slate-400">Unassigned</span>}
+                  <td>
+                    {community.ownerName || <span className="text-navy-500">Unassigned</span>}
                   </td>
-                  <td className="p-4">{community.memberCount}</td>
-                  <td className="p-4">
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${
-                      community.isActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                  <td>{community.memberCount}</td>
+                  <td>
+                    <span className={`badge ${
+                      community.isActive ? 'badge-green' : 'badge-red'
                     }`}>
                       {community.isActive ? 'Active' : 'Inactive'}
                     </span>
                   </td>
-                  <td className="p-4 text-sm text-slate-500">
+                  <td className="text-sm text-navy-400">
                     {new Date(community.createdAt).toLocaleDateString()}
                   </td>
-                  <td className="p-4 text-right">
+                  <td className="text-right">
                     <div className="flex justify-end gap-2">
                       <button
                         onClick={() => setEditingCommunity(community)}
-                        className="text-blue-600 hover:underline text-sm"
+                        className="text-sky-400 hover:text-sky-300 text-sm"
                       >
                         Edit
                       </button>
                       <button
                         onClick={() => setReassignModal(community)}
-                        className="text-amber-600 hover:underline text-sm"
+                        className="text-gold-400 hover:text-gold-300 text-sm"
                       >
                         Reassign
                       </button>
                       <button
                         onClick={() => setDeleteModal(community)}
-                        className="text-red-600 hover:underline text-sm"
+                        className="text-red-400 hover:text-red-300 text-sm"
                       >
                         Delete
                       </button>
@@ -216,8 +216,8 @@ function SuperAdminCommunities() {
 
         {/* Pagination */}
         {pagination.totalPages > 1 && (
-          <div className="flex items-center justify-between p-4 border-t">
-            <div className="text-sm text-slate-500">
+          <div className="flex items-center justify-between p-4 border-t border-navy-700">
+            <div className="text-sm text-navy-400">
               Showing {((page - 1) * 25) + 1} to {Math.min(page * 25, pagination.total)} of {pagination.total}
             </div>
             <div className="flex gap-2">
@@ -287,15 +287,15 @@ function EditCommunityModal({ community, onClose, onSave }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
-        <div className="p-6 border-b">
-          <h2 className="text-xl font-semibold">Edit Community</h2>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+      <div className="bg-navy-900 rounded-xl shadow-xl max-w-md w-full mx-4 border border-navy-700">
+        <div className="p-6 border-b border-navy-700">
+          <h2 className="text-xl font-semibold text-sky-100">Edit Community</h2>
         </div>
         <form onSubmit={handleSubmit}>
           <div className="p-6 space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Display Name</label>
+              <label className="block text-sm font-medium text-sky-200 mb-1">Display Name</label>
               <input
                 type="text"
                 value={form.displayName}
@@ -304,7 +304,7 @@ function EditCommunityModal({ community, onClose, onSave }) {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Description</label>
+              <label className="block text-sm font-medium text-sky-200 mb-1">Description</label>
               <textarea
                 value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
@@ -313,25 +313,27 @@ function EditCommunityModal({ community, onClose, onSave }) {
               />
             </div>
             <div className="flex gap-4">
-              <label className="flex items-center gap-2">
+              <label className="flex items-center gap-2 text-sky-200">
                 <input
                   type="checkbox"
                   checked={form.isActive}
                   onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
+                  className="w-4 h-4 rounded bg-navy-800 border-navy-600"
                 />
                 <span className="text-sm">Active</span>
               </label>
-              <label className="flex items-center gap-2">
+              <label className="flex items-center gap-2 text-sky-200">
                 <input
                   type="checkbox"
                   checked={form.isPublic}
                   onChange={(e) => setForm({ ...form, isPublic: e.target.checked })}
+                  className="w-4 h-4 rounded bg-navy-800 border-navy-600"
                 />
                 <span className="text-sm">Public</span>
               </label>
             </div>
           </div>
-          <div className="p-6 border-t flex justify-end gap-3">
+          <div className="p-6 border-t border-navy-700 flex justify-end gap-3">
             <button type="button" onClick={onClose} className="btn btn-secondary">
               Cancel
             </button>
@@ -362,21 +364,21 @@ function ReassignOwnerModal({ community, onClose, onReassign }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
-        <div className="p-6 border-b">
-          <h2 className="text-xl font-semibold">Reassign Owner</h2>
-          <p className="text-sm text-slate-500 mt-1">
-            Reassigning ownership of: <strong>{community.displayName}</strong>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+      <div className="bg-navy-900 rounded-xl shadow-xl max-w-md w-full mx-4 border border-navy-700">
+        <div className="p-6 border-b border-navy-700">
+          <h2 className="text-xl font-semibold text-gold-400">Reassign Owner</h2>
+          <p className="text-sm text-navy-400 mt-1">
+            Reassigning ownership of: <strong className="text-sky-100">{community.displayName}</strong>
           </p>
         </div>
         <form onSubmit={handleSubmit}>
           <div className="p-6 space-y-4">
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded text-amber-800 text-sm">
+            <div className="p-3 bg-gold-500/20 border border-gold-500/30 rounded-lg text-gold-300 text-sm">
               Current owner: {community.ownerName || 'Unassigned'}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">New Owner Name *</label>
+              <label className="block text-sm font-medium text-sky-200 mb-1">New Owner Name *</label>
               <input
                 type="text"
                 value={newOwnerName}
@@ -387,7 +389,7 @@ function ReassignOwnerModal({ community, onClose, onReassign }) {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">New Owner ID (optional)</label>
+              <label className="block text-sm font-medium text-sky-200 mb-1">New Owner ID (optional)</label>
               <input
                 type="text"
                 value={newOwnerId}
@@ -397,7 +399,7 @@ function ReassignOwnerModal({ community, onClose, onReassign }) {
               />
             </div>
           </div>
-          <div className="p-6 border-t flex justify-end gap-3">
+          <div className="p-6 border-t border-navy-700 flex justify-end gap-3">
             <button type="button" onClick={onClose} className="btn btn-secondary">
               Cancel
             </button>
@@ -427,19 +429,19 @@ function DeleteCommunityModal({ community, onClose, onDelete }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
-        <div className="p-6 border-b">
-          <h2 className="text-xl font-semibold text-red-600">Delete Community</h2>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+      <div className="bg-navy-900 rounded-xl shadow-xl max-w-md w-full mx-4 border border-navy-700">
+        <div className="p-6 border-b border-navy-700">
+          <h2 className="text-xl font-semibold text-red-400">Delete Community</h2>
         </div>
         <form onSubmit={handleSubmit}>
           <div className="p-6 space-y-4">
-            <div className="p-3 bg-red-50 border border-red-200 rounded text-red-800 text-sm">
+            <div className="p-3 bg-red-500/20 border border-red-500/30 rounded-lg text-red-300 text-sm">
               This action will deactivate the community. This cannot be undone.
             </div>
-            <p>
+            <p className="text-sky-100">
               To confirm deletion, please type the community name:{' '}
-              <strong className="text-red-600">{community.name}</strong>
+              <strong className="text-red-400">{community.name}</strong>
             </p>
             <input
               type="text"
@@ -449,14 +451,14 @@ function DeleteCommunityModal({ community, onClose, onDelete }) {
               placeholder="Type community name to confirm"
             />
           </div>
-          <div className="p-6 border-t flex justify-end gap-3">
+          <div className="p-6 border-t border-navy-700 flex justify-end gap-3">
             <button type="button" onClick={onClose} className="btn btn-secondary">
               Cancel
             </button>
             <button
               type="submit"
               disabled={deleting || confirmName !== community.name}
-              className="btn bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+              className="btn btn-danger disabled:opacity-50"
             >
               {deleting ? 'Deleting...' : 'Delete Community'}
             </button>

@@ -24,13 +24,13 @@ function CommunityDashboard() {
   if (loading) {
     return (
       <div className="flex justify-center py-12">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gold-400"></div>
       </div>
     );
   }
 
   if (!data) {
-    return <div className="text-center py-12 text-slate-500">Failed to load dashboard</div>;
+    return <div className="text-center py-12 text-navy-400">Failed to load dashboard</div>;
   }
 
   const { community, membership, recentActivity, liveStreams } = data;
@@ -40,7 +40,7 @@ function CommunityDashboard() {
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center space-x-4">
-          <div className="w-16 h-16 rounded-xl bg-primary-100 flex items-center justify-center overflow-hidden">
+          <div className="w-16 h-16 rounded-xl bg-navy-800 flex items-center justify-center overflow-hidden border border-navy-600">
             {community.logoUrl ? (
               <img src={community.logoUrl} alt={community.displayName} className="w-full h-full object-cover" />
             ) : (
@@ -48,8 +48,8 @@ function CommunityDashboard() {
             )}
           </div>
           <div>
-            <h1 className="text-2xl font-bold">{community.displayName}</h1>
-            <p className="text-slate-600">{membership.role.replace('community-', '').replace('-', ' ')}</p>
+            <h1 className="text-2xl font-bold text-sky-100">{community.displayName}</h1>
+            <p className="text-navy-400 capitalize">{membership.role.replace('community-', '').replace('-', ' ')}</p>
           </div>
         </div>
         {['community-owner', 'community-admin', 'moderator'].includes(membership.role) && (
@@ -63,33 +63,33 @@ function CommunityDashboard() {
         {/* Stats cards */}
         <div className="lg:col-span-2 space-y-6">
           <div className="grid sm:grid-cols-3 gap-4">
-            <div className="card p-4">
-              <div className="text-2xl font-bold text-primary-600">{community.memberCount}</div>
-              <div className="text-slate-600 text-sm">Members</div>
+            <div className="card p-4 border-l-4 border-l-sky-400">
+              <div className="text-2xl font-bold text-sky-400">{community.memberCount}</div>
+              <div className="text-navy-400 text-sm">Members</div>
             </div>
-            <div className="card p-4">
-              <div className="text-2xl font-bold text-green-600">{membership.reputationScore}</div>
-              <div className="text-slate-600 text-sm">Your Rep</div>
+            <div className="card p-4 border-l-4 border-l-gold-400">
+              <div className="text-2xl font-bold text-gold-400">{membership.reputationScore}</div>
+              <div className="text-navy-400 text-sm">Your Rep</div>
             </div>
-            <div className="card p-4">
-              <div className="text-2xl font-bold text-purple-600">{liveStreams.length}</div>
-              <div className="text-slate-600 text-sm">Live Now</div>
+            <div className="card p-4 border-l-4 border-l-purple-400">
+              <div className="text-2xl font-bold text-purple-400">{liveStreams.length}</div>
+              <div className="text-navy-400 text-sm">Live Now</div>
             </div>
           </div>
 
           {/* Recent Activity */}
           <div className="card">
             <div className="card-header">
-              <h2 className="font-semibold">Recent Activity</h2>
+              <h2 className="font-semibold text-sky-100">Recent Activity</h2>
             </div>
-            <div className="divide-y divide-slate-200">
+            <div className="divide-y divide-navy-700">
               {recentActivity.length === 0 ? (
-                <div className="p-4 text-slate-500 text-center">No recent activity</div>
+                <div className="p-4 text-navy-400 text-center">No recent activity</div>
               ) : (
                 recentActivity.slice(0, 5).map((activity) => (
                   <div key={activity.id} className="p-4">
-                    <p className="text-sm">{activity.description}</p>
-                    <p className="text-xs text-slate-500 mt-1">
+                    <p className="text-sm text-sky-100">{activity.description}</p>
+                    <p className="text-xs text-navy-500 mt-1">
                       {new Date(activity.createdAt).toLocaleString()}
                     </p>
                   </div>
@@ -105,7 +105,7 @@ function CommunityDashboard() {
           {liveStreams.length > 0 && (
             <div className="card">
               <div className="card-header">
-                <h2 className="font-semibold flex items-center space-x-2">
+                <h2 className="font-semibold text-sky-100 flex items-center space-x-2">
                   <span className="relative flex h-2 w-2">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
@@ -113,18 +113,18 @@ function CommunityDashboard() {
                   <span>Live Now</span>
                 </h2>
               </div>
-              <div className="divide-y divide-slate-200">
+              <div className="divide-y divide-navy-700">
                 {liveStreams.map((stream) => (
                   <a
                     key={stream.entityId}
                     href={`https://twitch.tv/${stream.channelName}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block p-4 hover:bg-slate-50"
+                    className="block p-4 hover:bg-navy-800 transition-colors"
                   >
-                    <div className="font-medium">{stream.channelName}</div>
-                    <div className="text-sm text-slate-600 truncate">{stream.title}</div>
-                    <div className="text-xs text-slate-500 mt-1">
+                    <div className="font-medium text-sky-100">{stream.channelName}</div>
+                    <div className="text-sm text-navy-400 truncate">{stream.title}</div>
+                    <div className="text-xs text-navy-500 mt-1">
                       {stream.viewerCount.toLocaleString()} viewers
                     </div>
                   </a>
@@ -136,12 +136,12 @@ function CommunityDashboard() {
           {/* Quick Links */}
           <div className="card">
             <div className="card-header">
-              <h2 className="font-semibold">Quick Links</h2>
+              <h2 className="font-semibold text-sky-100">Quick Links</h2>
             </div>
             <div className="p-2">
               <Link
                 to={`/dashboard/community/${id}/settings`}
-                className="block px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg"
+                className="block px-4 py-2 text-sm text-navy-300 hover:bg-navy-800 hover:text-sky-300 rounded-lg transition-colors"
               >
                 Community Settings
               </Link>
