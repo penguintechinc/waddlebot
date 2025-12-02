@@ -20,6 +20,7 @@ import OAuthCallback from './pages/auth/OAuthCallback';
 import DashboardHome from './pages/dashboard/DashboardHome';
 import CommunityDashboard from './pages/dashboard/CommunityDashboard';
 import CommunitySettings from './pages/dashboard/CommunitySettings';
+import AccountSettings from './pages/dashboard/AccountSettings';
 
 // Admin pages
 import AdminHome from './pages/admin/AdminHome';
@@ -92,6 +93,7 @@ function App() {
         }
       >
         <Route path="/dashboard" element={<DashboardHome />} />
+        <Route path="/dashboard/settings" element={<AccountSettings />} />
         <Route path="/dashboard/community/:id" element={<CommunityDashboard />} />
         <Route path="/dashboard/community/:id/settings" element={<CommunitySettings />} />
       </Route>

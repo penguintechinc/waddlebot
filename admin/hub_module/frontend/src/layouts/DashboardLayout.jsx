@@ -7,6 +7,7 @@ import {
   ChatBubbleLeftRightIcon,
   Cog6ToothIcon,
   ArrowLeftOnRectangleIcon,
+  UserCircleIcon,
 } from '@heroicons/react/24/outline';
 
 function DashboardLayout() {
@@ -16,6 +17,7 @@ function DashboardLayout() {
 
   const mainNav = [
     { to: '/dashboard', icon: HomeIcon, label: 'My Communities' },
+    { to: '/dashboard/settings', icon: UserCircleIcon, label: 'Account Settings' },
   ];
 
   const communityNav = communityId

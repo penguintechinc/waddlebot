@@ -120,3 +120,13 @@ export const superAdminApi = {
   deleteCommunity: (id) => api.delete(`/api/v1/superadmin/communities/${id}`),
   reassignOwner: (id, data) => api.post(`/api/v1/superadmin/communities/${id}/reassign`, data),
 };
+
+// User Identity API
+export const userApi = {
+  getIdentities: () => api.get('/api/v1/user/identities'),
+  linkIdentity: (platform) => api.post(`/api/v1/user/identities/link/${platform}`),
+  unlinkIdentity: (platform) => api.delete(`/api/v1/user/identities/${platform}`),
+  getPrimaryIdentity: () => api.get('/api/v1/user/identities/primary'),
+  setPrimaryIdentity: (platform) => api.put('/api/v1/user/identities/primary', { platform }),
+  updateProfile: (data) => api.put('/api/v1/user/profile', data),
+};

@@ -4,52 +4,71 @@
 
 WaddleBot is a multi-platform chat bot system with a modular, microservices architecture. The system consists of:
 
-- **Core**: Central API layer with routing (the "router")
-- **Collector Modules**: Platform-specific modules that receive webhooks/chat from platforms like Twitch, Discord, Slack
-- **Action Modules**: Executed in AWS Lambda for processing and responses
+- **Trigger Modules**: Platform-specific modules that START the workflow by receiving webhooks/events or polling
+  - **Receiver Modules**: Receive webhooks/events from platforms like Twitch, Discord, Slack
+  - **Poller Modules**: Poll sources on cron schedules (e.g., IRC)
+  - **Cron Modules**: Timed actions and scheduled tasks
+- **Processing Module**: Central router/API server that processes events and routes to action modules
+- **Action Modules**: Response modules that execute after processing
+  - **Interactive Modules**: Return responses to users (AI, alias, shoutout, inventory, etc.)
+  - **Pushing Modules**: Push to external systems and webhooks
+  - **Security Modules**: Content moderation and security checks
+- **Core Modules**: Core platform services (identity, labels, browser source, reputation, community)
+- **Admin Modules**: Administrative interfaces (hub_module for community management)
 - **Database**: PostgreSQL with read replicas for configuration, routing, logins, roles, etc.
+
+## Module Terminology
+
+| Category | Subcategory | Purpose | Examples |
+|----------|-------------|---------|----------|
+| `trigger/` | `receiver/` | Receives webhooks/events | twitch, discord, slack |
+| `trigger/` | `poller/` | Polls sources on cron | IRC |
+| `trigger/` | `cron/` | Timed actions | periodic messages |
+| `processing/` | - | Main router/API server | router_module |
+| `action/` | `interactive/` | Returns responses | shoutout, ai, alias, inventory, calendar, memories, youtube_music, spotify |
+| `action/` | `pushing/` | Pushes to external systems | webhooks |
+| `action/` | `security/` | Security/moderation | content filtering |
+| `core/` | - | Platform services | identity, labels, browser_source, reputation, community |
+| `admin/` | - | Administrative UIs | hub_module |
+| `archive/` | - | Legacy/deprecated | chat, gateway, listener, marketplace, kong_admin_broker |
 
 ## Architecture
 
 ### Core Components
-- **Router/Core**: py4web-based API layer that handles routing to Lambda functions
-- **Collectors**: Individual Docker containers, each with py4web implementation
-- **Actions**: AWS Lambda functions for processing
+- **Processing (Router)**: Flask/Quart-based API layer that handles event routing and action module execution
+- **Trigger (Receivers)**: Individual Docker containers that receive webhooks/events from platforms
+- **Action (Interactive/Pushing/Security)**: Docker containers that execute responses and actions
+- **Core Services**: Platform services for identity, labels, browser sources, reputation, and community management
 - **Database**: Default using PostgreSQL db server storing:
   - `servers` table: owner, platform (twitch/discord/slack), channel, configuration
-  - Routes to Lambda functions
+  - Routes to action modules
   - User logins, roles, permissions
   - Module registrations and configurations
 
 ### Technology Stack
-- **Primary Framework**: py4web on Python 3.12
-- **API Gateway**: Kong (open source) with declarative configuration
-- **Database**: PyDAL library with a default of PostgreSQL with read replicas
+- **Primary Framework**: Flask/Quart on Python 3.13
+- **Routing**: Hub module handles direct routing (Kong removed)
+- **Database**: AsyncDAL wrapper around PyDAL with PostgreSQL and read replicas
 - **Session Management**: Redis for session ID tracking
 - **Containerization**: Docker containers
 - **Orchestration**: Kubernetes (longer term)
-- **Cloud Functions**: AWS Lambda and Apache OpenWHisk (longer term) for actions
-- **Authentication**: Kong API Key authentication with consumer groups 
+- **Cloud Functions**: AWS Lambda and Apache OpenWhisk (longer term) for actions
+- **Authentication**: API Key authentication with role-based access control
 - **Future Migration**: Parts may migrate to Golang later
 
 ## Current Implementation
 
-### Core System Components
+### Processing Module (Flask/Quart-based)
 - **router_module/**: High-performance command router with multi-threading, caching, and read replicas
-- **marketplace_module/**: py4web-based community module marketplace and management system
-- **portal_module/**: py4web-based community management portal with authentication and user dashboard
-- **kong_admin_broker/**: Kong super admin user management service with full audit trail
-- **chat/**: Matterbridge-based chat integration
-- **gateway/**: Flask-based API gateway (DEPRECATED - migrated to Kong)
-- **listener/**: Legacy Twitch authentication and activity listeners
-- **libs/**: Shared libraries across modules
 
-### Collector Modules (py4web-based)
+### Trigger Modules (Flask/Quart-based)
+#### Receiver Modules
 - **twitch_module/**: Complete Twitch collector with EventSub webhooks, OAuth, and API integration
 - **discord_module/**: Discord collector using py-cord library for bot events and slash commands
 - **slack_module/**: Slack collector using Slack SDK for events and slash commands
 
-### Interaction Modules (py4web-based)
+### Action Modules (Flask/Quart-based)
+#### Interactive Modules
 - **ai_interaction_module/**: AI-powered interaction module supporting Ollama, OpenAI, and MCP providers for chat responses
 - **alias_interaction_module/**: Linux-style alias system for custom commands with variable substitution
 - **shoutout_interaction_module/**: Platform-specific user shoutouts with Twitch API integration and auto-shoutout functionality
@@ -57,24 +76,36 @@ WaddleBot is a multi-platform chat bot system with a modular, microservices arch
 - **calendar_interaction_module/**: Event management system with approval workflows, recurring events, and label-based auto-approval
 - **memories_interaction_module/**: Community memory management system for quotes, reminders, and URLs with label-based permissions
 - **youtube_music_interaction_module/**: YouTube Music integration with search, playback control, and media browser source output
-- **spotify_interaction_module/**: Spotify integration with OAuth authentication, search, playbook control, and media browser source output
+- **spotify_interaction_module/**: Spotify integration with OAuth authentication, search, playback control, and media browser source output
 
-### Core System Modules (py4web-based)
+### Core Modules (Flask/Quart-based)
+- **identity_core_module/**: Cross-platform identity linking and verification system built on Flask-Security-Too with comprehensive API key management
 - **labels_core_module/**: High-performance multi-threaded label management system for communities, users, modules, and entity groups with user identity verification
 - **browser_source_core_module/**: Multi-threaded browser source management system for OBS integration with ticker, media, and general display sources
-- **identity_core_module/**: Cross-platform identity linking and verification system built on py4web Auth with comprehensive API key management
+- **reputation_module/**: User reputation and activity tracking system
+- **community_module/**: Community management and configuration service
 
-### Administration Modules (py4web-based)
-- **kong_admin_broker/**: Kong super admin user management with automated consumer creation, API key management, and comprehensive audit logging
+### Admin Modules (Flask/Quart-based)
+- **hub_module/**: Community management portal with authentication, user dashboard, and direct routing (replaces Kong)
 
-### Collector Architecture
-Each collector module:
+### Archive (Deprecated/Legacy)
+- **marketplace_module/**: Community module marketplace (DEPRECATED - functionality moved to hub_module)
+- **kong_admin_broker/**: Kong super admin management (REMOVED - Kong no longer used)
+- **chat/**: Matterbridge-based chat integration (LEGACY)
+- **gateway/**: Flask-based API gateway (DEPRECATED - migrated to hub_module)
+- **listener/**: Legacy Twitch authentication and activity listeners (LEGACY)
+
+### Shared Libraries
+- **libs/flask_core/**: Shared Flask/Quart utilities (AsyncDAL, auth, datamodels, logging, API utils)
+
+### Trigger (Receiver) Architecture
+Each trigger/receiver module:
 - Runs as its own Docker container
-- Has its own py4web implementation
+- Built on Flask/Quart with Python 3.13
 - Pulls monitored servers/channels from PostgreSQL `servers` table
-- Communicates with core via API when receiving chat/events
-- Registers itself with core API
-- Designed for handling a 1000+ chat channels at a time
+- Communicates with processing module (router) via API when receiving chat/events
+- Registers itself with router API
+- Designed for handling 1000+ chat channels at a time
 - All configuration comes from environment variables passed through docker
 
 ### Database Schema (Key Tables)
@@ -186,165 +217,64 @@ SYSLOG_FACILITY=LOCAL0           # Syslog facility
 
 ## File Structure
 ```
-/workspaces/WaddleBot/
-├── router_module/          # High-performance command router (CORE)
-│   ├── controllers/        # Router endpoints, health, metrics
-│   ├── models.py          # Commands, entities, executions tables
-│   ├── config.py          # Router and execution configuration
-│   ├── services/          # Command processor, cache, rate limiter
-│   │   ├── command_processor.py  # Multi-threaded command processing
-│   │   ├── cache_manager.py     # High-performance caching
-│   │   ├── rate_limiter.py      # Sliding window rate limiting
-│   │   ├── execution_engine.py  # Lambda/OpenWhisk execution
-│   │   ├── rbac_service.py      # Role-based access control
-│   │   └── session_manager.py   # Redis session management
-│   ├── middleware/        # RBAC middleware for permission checking
-│   ├── k8s/              # Kubernetes deployment configs
-│   └── Dockerfile        # Container definition
-├── marketplace_module/    # Community module marketplace (CORE)
-│   ├── controllers/       # Module browsing, installation, management
-│   ├── models.py         # Modules, installations, reviews tables
-│   ├── services/         # Module management, router sync
-│   ├── k8s/             # Kubernetes deployment configs
-│   └── Dockerfile       # Container definition
-├── portal_module/        # Community management portal (CORE)
-│   ├── app.py           # Main py4web application
-│   ├── controllers/     # Portal endpoints and authentication
-│   ├── templates/       # HTML templates for portal UI
-│   ├── services/        # Portal services (auth, email, community data)
-│   │   ├── auth_service.py     # Portal authentication with temp passwords
-│   │   ├── email_service.py    # Email service (SMTP/sendmail)
-│   │   └── portal_service.py   # Community data retrieval
-│   ├── k8s/            # Kubernetes deployment configs
-│   └── Dockerfile      # Container definition
-├── twitch_module/        # py4web Twitch collector
-│   ├── controllers/      # Webhook, API, auth handlers
-│   ├── models.py        # Database models and tables
-│   ├── config.py        # Configuration management
-│   ├── services/        # Core API communication & bot service
-│   ├── k8s/            # Kubernetes deployment configs
-│   └── Dockerfile      # Container definition
-├── discord_module/      # py4web Discord collector
-│   ├── controllers/     # Event handlers, API, auth
-│   ├── models.py       # Database models for Discord
-│   ├── config.py       # Discord bot configuration
-│   ├── services/       # Core API & py-cord bot service
-│   ├── dataclasses.py  # Discord-specific data structures
-│   └── requirements.txt # Python dependencies
-├── slack_module/       # py4web Slack collector
-│   ├── controllers/    # Event handlers, slash commands
-│   ├── models.py      # Database models for Slack
-│   ├── config.py      # Slack app configuration
-│   ├── services/      # Core API communication
-│   └── requirements.txt # Python dependencies
-├── ai_interaction_module/  # AI-powered interaction module
-│   ├── controllers/    # Main interaction endpoints
-│   ├── models.py      # Database models for AI interactions
-│   ├── config.py      # AI provider configuration (Ollama/OpenAI/MCP)
-│   ├── services/      # AI service providers and router communication
-│   │   ├── ai_service.py      # Unified AI service abstraction
-│   │   ├── ollama_provider.py # Ollama AI provider implementation
-│   │   ├── openai_provider.py # OpenAI API provider implementation
-│   │   ├── mcp_provider.py    # Model Context Protocol provider
-│   │   └── router_service.py  # Router communication service
-│   ├── templates/     # HTML templates
-│   ├── Dockerfile     # Container definition
-│   └── requirements.txt # Python dependencies including OpenAI
-├── alias_interaction_module/  # Linux-style alias system
-│   ├── app.py         # Main application with alias management
-│   ├── requirements.txt # Python dependencies
-│   ├── Dockerfile     # Container definition
-│   └── k8s/          # Kubernetes deployment configs
-├── shoutout_interaction_module/  # Platform-specific user shoutouts
-│   ├── app.py         # Main application with shoutout functionality
-│   ├── requirements.txt # Python dependencies
-│   ├── Dockerfile     # Container definition
-│   └── k8s/          # Kubernetes deployment configs
-├── labels_core_module/  # High-performance multi-threaded label management system
-│   ├── app.py         # Main application with labels, user verification, and entity groups
-│   ├── requirements.txt # Python dependencies (py4web, redis, requests)
-│   ├── Dockerfile     # Container definition
-│   └── k8s/          # Kubernetes deployment configs
-├── inventory_interaction_module/  # Multi-threaded inventory management system
-│   ├── app.py        # Main application with inventory CRUD operations
-│   ├── models.py     # Database models for inventory items and activity
-│   ├── config.py     # Configuration and environment variables
-│   ├── logging_config.py # Comprehensive AAA logging system
-│   ├── services/     # Inventory services and router communication
-│   ├── tests/        # Comprehensive unit tests
-│   │   ├── test_inventory_service.py  # Service layer tests
-│   │   ├── test_api.py                # API endpoint tests
-│   │   └── __init__.py
-│   ├── Dockerfile    # Container definition
-│   ├── requirements.txt # Python dependencies
-│   └── k8s/         # Kubernetes deployment configs
-├── calendar_interaction_module/  # Event management system
-│   ├── app.py        # Main application with calendar functionality
-│   ├── Dockerfile    # Container definition
-│   ├── requirements.txt # Python dependencies
-│   └── k8s/         # Kubernetes deployment configs
-├── memories_interaction_module/  # Community memory management system
-│   ├── app.py        # Main application with memories functionality
-│   ├── Dockerfile    # Container definition
-│   ├── requirements.txt # Python dependencies
-│   └── k8s/         # Kubernetes deployment configs
-├── youtube_music_interaction_module/  # YouTube Music integration
-│   ├── app.py        # Main application with YouTube Music commands
-│   ├── models.py     # Database models for now playing, search cache, activity
-│   ├── config.py     # YouTube API configuration
-│   ├── services/     # YouTube Music service and router communication
-│   │   ├── youtube_music_service.py  # YouTube Data API integration
-│   │   └── router_service.py         # Router communication service
-│   ├── Dockerfile    # Container definition
-│   ├── requirements.txt # Python dependencies
-│   └── k8s/         # Kubernetes deployment configs
-├── spotify_interaction_module/  # Spotify integration
-│   ├── app.py        # Main application with Spotify commands and OAuth
-│   ├── models.py     # Database models for tokens, now playing, search cache
-│   ├── config.py     # Spotify API configuration
-│   ├── services/     # Spotify service and router communication
-│   │   ├── spotify_service.py        # Spotify Web API integration
-│   │   └── router_service.py         # Router communication service
-│   ├── Dockerfile    # Container definition
-│   ├── requirements.txt # Python dependencies
-│   └── k8s/         # Kubernetes deployment configs
-├── browser_source_core_module/  # Browser source management system
-│   ├── app.py        # Main application with WebSocket and browser source handling
-│   ├── models.py     # Database models for tokens, history, access logs
-│   ├── config.py     # Browser source configuration
-│   ├── services/     # Browser source services
-│   │   ├── browser_source_service.py  # Browser source management
-│   │   ├── websocket_service.py       # WebSocket handling
-│   │   └── router_service.py          # Router communication service
-│   ├── templates/    # HTML templates for browser sources
-│   │   ├── ticker.html    # Ticker browser source template
-│   │   ├── media.html     # Media browser source template
-│   │   └── general.html   # General browser source template
-│   ├── static/       # CSS and JavaScript for browser sources
-│   │   ├── css/      # Styling for different source types
-│   │   └── js/       # JavaScript for WebSocket and animations
-│   ├── Dockerfile    # Container definition
-│   ├── requirements.txt # Python dependencies
-│   └── k8s/         # Kubernetes deployment configs
-├── kong_admin_broker/  # Kong super admin user management
-│   ├── controllers/   # Admin user management endpoints
-│   │   └── admin.py   # Broker API endpoints for super admin management
-│   ├── models.py     # Database models for users, audit log, backups
-│   ├── config.py     # Broker and Kong admin configuration
-│   ├── services/     # Kong integration and user management services
-│   │   ├── kong_client.py     # Kong Admin API client for consumer management
-│   │   └── user_manager.py    # Super admin user management service
-│   ├── Dockerfile    # Container definition
-│   ├── requirements.txt # Python dependencies
-│   └── API.md        # Comprehensive API documentation
-├── kong/             # Kong API Gateway configuration
-│   ├── docker-compose.yml    # Kong deployment with PostgreSQL
-│   ├── kong.yml      # Declarative Kong configuration
-│   └── scripts/      # Kong setup and management scripts
-├── chat/              # Existing Matterbridge integration
-├── gateway/          # Existing Flask gateway (DEPRECATED - migrated to Kong)
-├── listener/         # Existing Twitch listeners (LEGACY)
-├── libs/            # Shared libraries
+WaddleBot/
+├── trigger/                          # Modules that START the workflow
+│   ├── receiver/                     # Webhook/event receivers
+│   │   ├── twitch_module_flask/     # Twitch EventSub webhooks, OAuth, API integration
+│   │   ├── discord_module_flask/    # Discord py-cord bot events and slash commands
+│   │   └── slack_module_flask/      # Slack SDK events and slash commands
+│   ├── poller/                       # Cron-based polling (future: IRC)
+│   └── cron/                         # Timed actions (future)
+├── processing/                       # Main API server
+│   └── router_module_flask/         # High-performance command router with multi-threading
+│       ├── controllers/             # Router endpoints, health, metrics
+│       ├── models.py               # Commands, entities, executions tables
+│       ├── services/               # Command processor, cache, rate limiter
+│       ├── k8s/                    # Kubernetes deployment configs
+│       └── Dockerfile              # Container definition
+├── action/                           # Response/action modules
+│   ├── interactive/                 # Return responses to users
+│   │   ├── ai_interaction_module_flask/       # AI chat with Ollama/OpenAI/MCP
+│   │   ├── alias_interaction_module_flask/    # Linux-style alias system
+│   │   ├── shoutout_interaction_module_flask/ # Platform-specific shoutouts
+│   │   ├── inventory_interaction_module_flask/  # Inventory management
+│   │   ├── calendar_interaction_module_flask/   # Event management
+│   │   ├── memories_interaction_module_flask/   # Quotes, reminders, URLs
+│   │   ├── youtube_music_interaction_module_flask/  # YouTube Music integration
+│   │   └── spotify_interaction_module_flask/    # Spotify integration
+│   ├── pushing/                     # Push to external systems (future)
+│   └── security/                    # Security/moderation (future)
+├── core/                             # Core platform services
+│   ├── identity_core_module_flask/  # Cross-platform identity linking
+│   ├── labels_core_module_flask/    # Label management system
+│   ├── browser_source_core_module_flask/  # OBS browser source integration
+│   ├── reputation_module_flask/     # Reputation and activity tracking
+│   └── community_module_flask/      # Community management service
+├── admin/                            # Administrative modules
+│   └── hub_module/                  # Community portal with direct routing
+│       ├── controllers/             # Portal endpoints, authentication
+│       ├── templates/               # HTML templates for portal UI
+│       ├── services/                # Auth, email, community data
+│       ├── k8s/                     # Kubernetes deployment configs
+│       └── Dockerfile               # Container definition
+├── archive/                          # Legacy/deprecated modules
+│   ├── marketplace_module/          # (DEPRECATED - moved to hub_module)
+│   ├── kong_admin_broker/           # (REMOVED - Kong no longer used)
+│   ├── kong/                        # (REMOVED - Kong replaced by hub routing)
+│   ├── chat/                        # (LEGACY - Matterbridge integration)
+│   ├── gateway/                     # (DEPRECATED - migrated to hub_module)
+│   └── listener/                    # (LEGACY - Twitch listeners)
+├── libs/                             # Shared libraries
+│   └── flask_core/                  # Shared Flask/Quart utilities
+│       ├── database.py              # AsyncDAL wrapper around PyDAL
+│       ├── auth.py                  # Flask-Security-Too + OAuth (Authlib)
+│       ├── datamodels.py            # Python 3.13 dataclasses with slots
+│       ├── logging_config.py        # AAA logging system
+│       ├── api_utils.py             # API decorators and helpers
+│       └── setup.py                 # Package installation
+├── config/                           # Shared configurations
+│   ├── nginx/                       # Nginx reverse proxy configs
+│   └── postgres/                    # PostgreSQL database configs
 └── Premium/         # Premium mobile applications
     ├── LICENSE        # Premium-only license
     ├── Android/       # Native Android app (Kotlin/Jetpack Compose)
@@ -372,15 +302,13 @@ SYSLOG_FACILITY=LOCAL0           # Syslog facility
 
 ## Integration Points
 
-### Kong API Gateway Integration
+### Hub Module Direct Routing
 
-All WaddleBot APIs are unified through Kong API Gateway for centralized routing, authentication, and rate limiting:
+All WaddleBot APIs are routed through the Hub Module, which provides centralized routing, authentication, and rate limiting (Kong has been removed):
 
-**Kong Services:**
+**Services:**
 - **router-service**: Core routing and command processing (`http://router-service:8000`)
-- **marketplace-service**: Module marketplace and management (`http://marketplace-service:8001`)
 - **ai-interaction**: AI services with multi-provider support (`http://ai-interaction:8005`)
-- **kong-admin-broker**: Super admin user management (`http://kong-admin-broker:8000`)
 - **identity-core**: Cross-platform identity linking and verification (`http://identity-core:8050`)
 - **twitch-collector**: Twitch platform integration (`http://twitch-collector:8002`)
 - **discord-collector**: Discord platform integration (`http://discord-collector:8003`)
@@ -388,12 +316,12 @@ All WaddleBot APIs are unified through Kong API Gateway for centralized routing,
 - **youtube-music**: YouTube Music integration (`http://youtube-music:8025`)
 - **spotify-interaction**: Spotify integration (`http://spotify-interaction:8026`)
 - **browser-source**: Browser source management (`http://browser-source:8027`)
+- **reputation**: Reputation and activity tracking (`http://reputation:8028`)
+- **community**: Community management service (`http://community:8029`)
 
-**Kong Routes:**
+**Hub Routes:**
 - `/router/*` → Router API (with authentication)
-- `/marketplace/*` → Marketplace API (with authentication)
 - `/ai/*` → AI Interaction API (with authentication)
-- `/broker/*` → Kong Admin Broker API (broker key authentication)
 - `/identity/*` → Identity Core API (with authentication)
 - `/auth/*` → User authentication API (with authentication)
 - `/webhooks/twitch/*` → Twitch webhooks (with authentication)
@@ -402,27 +330,23 @@ All WaddleBot APIs are unified through Kong API Gateway for centralized routing,
 - `/youtube/*` → YouTube Music API (with authentication)
 - `/spotify/*` → Spotify API (with authentication)
 - `/browser/*` → Browser Source API (with authentication)
+- `/reputation/*` → Reputation API (with authentication)
+- `/community/*` → Community API (with authentication)
 - `/health` → Health checks (no authentication)
-- `/ai/health` → AI health check (no authentication)
-- `/broker/health` → Broker health check (no authentication)
-- `/identity/health` → Identity health check (no authentication)
-- `/youtube/health` → YouTube Music health check (no authentication)
-- `/spotify/health` → Spotify health check (no authentication)
-- `/browser/health` → Browser Source health check (no authentication)
 
 **Authentication & Authorization:**
 - API Key authentication via `X-API-Key` header
-- Broker Key authentication via `X-Broker-Key` header (admin operations)
-- Consumer groups: `collectors`, `admins`, `services`, `api-users`, `super-admins`
-- Rate limiting per service and consumer group
+- Role-based access control (RBAC) via Flask-Security-Too
+- User roles: `trigger`, `action`, `core`, `admin`, `user`
+- Rate limiting per service and user role
 - CORS support for web applications
 
 **Rate Limiting:**
 - Router: 1000/min, 10000/hour
-- Marketplace: 500/min, 5000/hour
 - AI Interaction: 1000/min, 10000/hour
-- Kong Admin Broker: 100/min, 1000/hour
-- Collectors: 200/min, 2000/hour
+- Trigger modules: 200/min, 2000/hour
+- Action modules: 500/min, 5000/hour
+- Core modules: 500/min, 5000/hour
 
 ### Router API Endpoints (Core Component)
 - `POST /router/events` - Single event processing from collectors (returns session_id)
@@ -469,19 +393,6 @@ All WaddleBot APIs are unified through Kong API Gateway for centralized routing,
 - `PUT /api/ai/v1/config` - Update AI configuration
 - `GET /api/ai/v1/providers` - List available AI providers
 
-### Kong Admin Broker API Endpoints
-- `POST /api/broker/v1/super-admins` - Create Kong super admin user
-- `GET /api/broker/v1/super-admins` - List all super admin users
-- `GET /api/broker/v1/super-admins/{username}` - Get specific super admin user
-- `PUT /api/broker/v1/super-admins/{username}` - Update super admin user
-- `POST /api/broker/v1/super-admins/{username}/deactivate` - Deactivate super admin user
-- `POST /api/broker/v1/super-admins/{username}/regenerate-key` - Regenerate API key
-- `GET /api/broker/v1/audit-log` - Get comprehensive audit trail
-- `POST /api/broker/v1/backup` - Backup all super admin users
-- `GET /api/broker/v1/kong/info` - Get Kong server information
-- `GET /api/broker/v1/kong/consumers` - List all Kong consumers
-- `GET /api/broker/v1/statistics` - Get broker and Kong statistics
-- `GET /api/broker/v1/health` - Broker health check (no auth)
 
 ### Browser Source API Endpoints
 - `POST /browser/source/display` - Receive display data from router and distribute to browser sources
@@ -678,54 +589,19 @@ MODULE_NAME=router
 MODULE_VERSION=1.0.0
 ```
 
-#### Kong Admin Broker Module
-```bash
-# Kong Admin API Configuration
-KONG_ADMIN_URL=http://kong:8001
-KONG_ADMIN_USERNAME=admin
-KONG_ADMIN_PASSWORD=admin_password
-
-# Broker Security Configuration
-BROKER_SECRET_KEY=waddlebot_broker_secret_key_change_me_in_production
-BROKER_API_KEY=wbot_broker_master_key_placeholder
-SUPER_ADMIN_GROUP=super-admins
-API_KEY_LENGTH=64
-REQUIRE_EMAIL_VERIFICATION=false
-
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-
-# Email Configuration (optional)
-SMTP_HOST=smtp.company.com
-SMTP_PORT=587
-SMTP_USERNAME=broker@company.com
-SMTP_PASSWORD=smtp_password
-SMTP_TLS=true
-FROM_EMAIL=noreply@waddlebot.com
-
-# Performance Settings
-MAX_CONCURRENT_REQUESTS=10
-REQUEST_TIMEOUT=30
-LOG_LEVEL=INFO
-
-# Module Info
-MODULE_NAME=kong_admin_broker
-MODULE_VERSION=1.0.0
-```
-
-#### Portal Module
+#### Hub Module
 ```bash
 # Database
 DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
 
-# Portal Configuration
-PORTAL_URL=http://localhost:8000
-APP_NAME=WaddleBot Community Portal
+# Hub Configuration
+HUB_URL=http://localhost:8000
+APP_NAME=WaddleBot Community Hub
 
-# Email Configuration (py4web Mailer)
+# Email Configuration (Flask Mailer)
 SMTP_HOST=smtp.company.com
 SMTP_PORT=587
-SMTP_USERNAME=portal@company.com
+SMTP_USERNAME=hub@company.com
 SMTP_PASSWORD=smtp_password
 SMTP_TLS=true
 FROM_EMAIL=noreply@waddlebot.com
@@ -733,22 +609,25 @@ FROM_EMAIL=noreply@waddlebot.com
 # Browser Source Integration
 BROWSER_SOURCE_BASE_URL=http://browser-source-core:8027
 
+# Service URLs for Routing
+ROUTER_SERVICE_URL=http://router-service:8000
+AI_SERVICE_URL=http://ai-interaction:8005
+IDENTITY_SERVICE_URL=http://identity-core:8050
+TWITCH_SERVICE_URL=http://twitch-collector:8002
+DISCORD_SERVICE_URL=http://discord-collector:8003
+SLACK_SERVICE_URL=http://slack-collector:8004
+YOUTUBE_SERVICE_URL=http://youtube-music:8025
+SPOTIFY_SERVICE_URL=http://spotify-interaction:8026
+BROWSER_SOURCE_URL=http://browser-source:8027
+REPUTATION_SERVICE_URL=http://reputation:8028
+COMMUNITY_SERVICE_URL=http://community:8029
+
+# Rate Limiting
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_STORAGE_URL=redis://redis:6379/0
+
 # Module Info
-MODULE_NAME=portal
-MODULE_VERSION=1.0.0
-```
-
-#### Marketplace Module
-```bash
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/waddlebot
-
-# Core API Integration
-CORE_API_URL=http://router-service:8000
-ROUTER_API_URL=http://router-service:8000/router
-
-# Module Info
-MODULE_NAME=marketplace
+MODULE_NAME=hub_module
 MODULE_VERSION=1.0.0
 ```
 
@@ -1064,20 +943,21 @@ ENABLE_OAUTH_PROVIDERS=false
 - **Usage Analytics**: Track module usage and performance statistics
 - **Category System**: Hierarchical module categorization
 
-### Kong Admin Broker Module (`kong_admin_broker/`) - ADMINISTRATION COMPONENT
-- **Super Admin Management**: Complete CRUD operations for Kong super admin users
-- **Automated Kong Integration**: Creates Kong consumers, API keys, and ACL group memberships
-- **Audit Trail**: Comprehensive logging of all administrative actions with full context
-- **API Key Management**: Secure 64-character API key generation and rotation capabilities
-- **Backup & Recovery**: Complete backup system for Kong consumer configurations
-- **Health Monitoring**: Kong Admin API connectivity and status monitoring
-- **Security Features**: Broker-level authentication, rate limiting, and access control
-- **Database Schema**: Dedicated tables for users, audit logs, sessions, and backups
-- **Kong Consumer Lifecycle**: Full lifecycle management from creation to deactivation
-- **Permission System**: Role-based access with super-admin, admin, and service tiers
+### Hub Module (`hub_module/`) - ADMINISTRATION COMPONENT
+- **Community Management Portal**: Web-based interface for community administrators
+- **Direct Routing**: Replaces Kong API Gateway with direct service routing
+- **User Authentication**: Flask-Security-Too for user authentication and session management
+- **Role-Based Access Control**: User roles for trigger, action, core, admin, and user permissions
+- **Rate Limiting**: Per-service and per-role rate limiting with Redis backend
+- **Dashboard**: Community statistics, user management, and module configuration
+- **Browser Source Management**: Display unique browser source URLs for OBS integration
+- **Email Service**: SMTP/sendmail support for notifications and password resets
+- **API Key Management**: Generate and manage API keys for programmatic access
+- **Audit Trail**: Comprehensive logging of all administrative actions
+- **Service Health Monitoring**: Monitor health status of all WaddleBot services
 
 ### Identity Core Module (`identity_core_module/`) - CORE COMPONENT
-- **py4web Auth Foundation**: Built on py4web's robust authentication system with extended user fields
+- **Flask-Security-Too Foundation**: Built on Flask-Security-Too authentication system with extended user fields
 - **Cross-Platform Linking**: Secure identity verification between Discord, Twitch, and Slack accounts
 - **Whisper/DM Verification**: Platform-specific verification via whispers and direct messages
 - **User API Key Management**: Self-service API key generation with same permissions as user identity
@@ -1089,9 +969,9 @@ ENABLE_OAUTH_PROVIDERS=false
 **Key Features:**
 - **Identity Linking Flow**: Users type `!identity link twitch username` → verification code sent via whisper → `!verify CODE` confirms link
 - **API Key System**: Users can create, regenerate, and revoke their own API keys for programmatic access
-- **Session Management**: py4web session-based authentication with configurable expiration
+- **Session Management**: Flask session-based authentication with configurable expiration
 - **Platform Integration**: Communicates with Twitch, Discord, and Slack collectors for whisper/DM delivery
-- **Database Schema**: Extended py4web auth_user table with WaddleBot-specific fields (display_name, primary_platform, reputation_score)
+- **Database Schema**: Extended Flask-Security user table with WaddleBot-specific fields (display_name, primary_platform, reputation_score)
 - **Verification Security**: 6-character alphanumeric codes (excluding ambiguous characters) with 10-minute expiration
 - **Rate Limiting**: Sliding window rate limiting to prevent spam and abuse
 - **Health Monitoring**: Comprehensive health checks for all platform APIs and dependencies
@@ -1108,31 +988,31 @@ ENABLE_OAUTH_PROVIDERS=false
 - **Performance Monitoring**: Real-time metrics and health monitoring in health endpoint
 - **Database Optimization**: Proper indexing and connection pooling for thousands of requests per second
 
-### Collector Modules
+### Trigger Modules (Receivers)
 
-#### Twitch Module (`twitch_module/`)
+#### Twitch Module (`trigger/receiver/twitch_module_flask/`)
 - **EventSub Webhooks**: Handles follow, subscribe, cheer, raid, gift subscription events
 - **OAuth Integration**: Complete OAuth flow with token management and refresh
 - **API Integration**: Twitch Helix API for user info and subscription management
 - **Activity Points**: follow=10, sub=50, bits=variable, raid=30, subgift=60, ban=-10
 
-#### Discord Module (`discord_module/`)
+#### Discord Module (`trigger/receiver/discord_module_flask/`)
 - **py-cord Integration**: Uses py-cord library for Discord bot functionality
 - **Event Handling**: Messages, reactions, member joins, voice states, server boosts
 - **Slash Commands**: Built-in slash command support with py-cord
 - **Voice Tracking**: Tracks voice channel participation with time-based points
 - **Activity Points**: message=5, reaction=2, member_join=10, voice_join=8, voice_time=1/min, boost=100
 
-#### Slack Module (`slack_module/`)
+#### Slack Module (`trigger/receiver/slack_module_flask/`)
 - **Event API**: Handles messages, reactions, file shares, channel joins
 - **Slash Commands**: Custom `/waddlebot` command with help, status, points subcommands
 - **Slack SDK**: Uses official Slack SDK for Python
 - **User Caching**: Caches user information for performance
 - **Activity Points**: message=5, file_share=15, reaction=3, member_join=10, app_mention=8
 
-### Interaction Modules
+### Action Modules (Interactive)
 
-#### AI Interaction Module (`ai_interaction_module/`)
+#### AI Interaction Module (`action/interactive/ai_interaction_module_flask/`)
 - **Multi-Provider Support**: Unified interface supporting Ollama, OpenAI, and MCP (Model Context Protocol) providers
 - **Provider Configuration**: Environment variable `AI_PROVIDER` selects between 'ollama', 'openai', or 'mcp'
 - **Configurable System Prompt**: Default helpful chatbot assistant prompt, customizable via `SYSTEM_PROMPT` environment variable
@@ -1178,7 +1058,7 @@ RESPOND_TO_EVENTS=true
 EVENT_RESPONSE_TYPES=subscription,follow,donation
 ```
 
-#### Alias Interaction Module (`alias_interaction_module/`)
+#### Alias Interaction Module (`action/interactive/alias_interaction_module_flask/`)
 - **Linux-Style Aliases**: Commands work like Linux bash aliases with `!alias add !user "!so user"`
 - **Variable Substitution**: Support for `{user}`, `{args}`, `{arg1}`, `{arg2}`, `{all_args}` placeholders
 - **Alias Management**: Add, remove, list aliases with proper permission checking
@@ -1192,7 +1072,7 @@ EVENT_RESPONSE_TYPES=subscription,follow,donation
 - Variable substitution in commands
 - Integration with router for command execution
 
-#### Shoutout Interaction Module (`shoutout_interaction_module/`)
+#### Shoutout Interaction Module (`action/interactive/shoutout_interaction_module_flask/`)
 - **Platform Integration**: Twitch API integration for user information and clips
 - **Auto-Shoutout**: Automatic shoutouts on follow/subscribe/raid events
 - **User Management**: Community managers can configure user-specific settings
@@ -1213,14 +1093,14 @@ EVENT_RESPONSE_TYPES=subscription,follow,donation
 - Random clip selection from past 7 days
 - Full-screen media response for OBS scenes
 
-#### Inventory Interaction Module (`inventory_interaction_module/`)
+#### Inventory Interaction Module (`action/interactive/inventory_interaction_module_flask/`)
 - **Multi-Threaded Architecture**: ThreadPoolExecutor for concurrent operations (20 workers)
 - **Item Management**: Track any item whether IRL or in-game with comprehensive CRUD operations
 - **Label System**: Support up to 5 labels per item for categorization and filtering
 - **Caching**: High-performance caching with thread-safe operations
 - **Comprehensive AAA Logging**: Full Authentication, Authorization, and Auditing logging system
 
-#### Calendar Interaction Module (`calendar_interaction_module/`)
+#### Calendar Interaction Module (`action/interactive/calendar_interaction_module_flask/`)
 - **Event Management**: Complete event lifecycle management with CRUD operations
 - **Approval Workflow**: Events require approval by community admins/moderators unless user has 'event-autoapprove' label
 - **Recurring Events**: Support for daily, weekly, monthly, and yearly recurring events
@@ -1228,7 +1108,7 @@ EVENT_RESPONSE_TYPES=subscription,follow,donation
 - **Event Reminders**: Automatic reminder system (1 day, 1 hour, 15 minutes before)
 - **Label Integration**: Integrates with labels_core_module for permission checking
 
-#### Memories Interaction Module (`memories_interaction_module/`)
+#### Memories Interaction Module (`action/interactive/memories_interaction_module_flask/`)
 - **Multi-Type Memory System**: Supports quotes, URLs, and notes with different display formats
 - **Permission System**: Community managers, moderators, and users with 'memories' label can manage content
 - **Reminder System**: Personal reminders with natural language time parsing and automatic scheduling
@@ -1332,7 +1212,7 @@ inventory_activity (
 - Background activity logging for audit trails
 - Health monitoring with comprehensive metrics
 
-#### YouTube Music Interaction Module (`youtube_music_interaction_module/`)
+#### YouTube Music Interaction Module (`action/interactive/youtube_music_interaction_module_flask/`)
 - **YouTube Data API v3 Integration**: Direct integration with YouTube API for music search and metadata
 - **Search and Playback**: Search YouTube Music tracks and queue for playback
 - **Media Browser Source Output**: Sends track information with album art to browser source for OBS
@@ -1366,7 +1246,7 @@ youtube_activity (
 )
 ```
 
-#### Spotify Interaction Module (`spotify_interaction_module/`)
+#### Spotify Interaction Module (`action/interactive/spotify_interaction_module_flask/`)
 - **Spotify Web API Integration**: OAuth 2.0 authentication with full playback control
 - **Real-time Playback Control**: Play, pause, skip, volume control on user's Spotify devices
 - **Device Management**: List and control playback on multiple Spotify devices
@@ -1403,7 +1283,7 @@ spotify_search_cache (
 )
 ```
 
-#### Browser Source Core Module (`browser_source_core_module/`)
+#### Browser Source Core Module (`core/browser_source_core_module_flask/`)
 - **Multi-threaded Architecture**: ThreadPoolExecutor for handling hundreds of concurrent browser sources
 - **WebSocket Communication**: Real-time updates to browser sources via WebSocket connections
 - **Three Source Types**: Ticker, Media, and General browser sources for different display needs

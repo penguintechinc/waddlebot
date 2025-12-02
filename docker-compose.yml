@@ -81,46 +81,13 @@ services:
     restart: unless-stopped
 
   # =============================================================================
-  # API GATEWAY (Public)
-  # =============================================================================
-
-  kong:
-    image: kong:3.9
-    container_name: waddlebot-kong
-    environment:
-      KONG_DATABASE: "off"
-      KONG_DECLARATIVE_CONFIG: /kong/kong.yml
-      KONG_PROXY_ACCESS_LOG: /dev/stdout
-      KONG_ADMIN_ACCESS_LOG: /dev/stdout
-      KONG_PROXY_ERROR_LOG: /dev/stderr
-      KONG_ADMIN_ERROR_LOG: /dev/stderr
-      KONG_ADMIN_LISTEN: 0.0.0.0:8001
-      KONG_PROXY_LISTEN: 0.0.0.0:8000
-    volumes:
-      - ./kong/kong.yml:/kong/kong.yml:ro
-    ports:
-      - "8000:8000"   # Proxy (public API)
-      - "8001:8001"   # Admin API
-    networks:
-      - waddlebot-public
-      - waddlebot-internal
-    depends_on:
-      - router
-    healthcheck:
-      test: ["CMD", "kong", "health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
-
-  # =============================================================================
-  # CORE MODULES (Internal, accessed via Kong)
+  # CORE MODULES
   # =============================================================================
 
   router:
     build:
       context: .
-      dockerfile: router_module/Dockerfile
+      dockerfile: processing/router_module/Dockerfile
     container_name: waddlebot-router
     environment:
       MODULE_NAME: router
@@ -144,31 +111,11 @@ services:
       retries: 3
     restart: unless-stopped
 
-  marketplace:
-    build:
-      context: .
-      dockerfile: marketplace_module/Dockerfile
-    container_name: waddlebot-marketplace
-    environment:
-      MODULE_NAME: marketplace
-      MODULE_PORT: 8001
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    networks:
-      - waddlebot-internal
-    depends_on:
-      - router
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
+  # marketplace service removed - functionality now in hub admin panel
 
   hub:
     build:
-      context: ./hub_module
+      context: ./admin/hub_module
       dockerfile: Dockerfile
     container_name: waddlebot-hub
     environment:
@@ -231,7 +178,7 @@ services:
   twitch-collector:
     build:
       context: .
-      dockerfile: twitch_module/Dockerfile
+      dockerfile: trigger/receiver/twitch_module/Dockerfile
     container_name: waddlebot-twitch
     environment:
       MODULE_NAME: twitch-collector
@@ -256,7 +203,7 @@ services:
   discord-collector:
     build:
       context: .
-      dockerfile: discord_module/Dockerfile
+      dockerfile: trigger/receiver/discord_module/Dockerfile
     container_name: waddlebot-discord
     environment:
       MODULE_NAME: discord-collector
@@ -280,7 +227,7 @@ services:
   slack-collector:
     build:
       context: .
-      dockerfile: slack_module/Dockerfile
+      dockerfile: trigger/receiver/slack_module/Dockerfile
     container_name: waddlebot-slack
     environment:
       MODULE_NAME: slack-collector
@@ -308,7 +255,7 @@ services:
   ai-interaction:
     build:
       context: .
-      dockerfile: ai_interaction_module/Dockerfile
+      dockerfile: action/interactive/ai_interaction_module/Dockerfile
     container_name: waddlebot-ai
     environment:
       MODULE_NAME: ai-interaction
@@ -336,7 +283,7 @@ services:
   alias-interaction:
     build:
       context: .
-      dockerfile: alias_interaction_module/Dockerfile
+      dockerfile: action/interactive/alias_interaction_module/Dockerfile
     container_name: waddlebot-alias
     environment:
       MODULE_NAME: alias-interaction
@@ -358,7 +305,7 @@ services:
   shoutout-interaction:
     build:
       context: .
-      dockerfile: shoutout_interaction_module/Dockerfile
+      dockerfile: action/interactive/shoutout_interaction_module/Dockerfile
     container_name: waddlebot-shoutout
     environment:
       MODULE_NAME: shoutout-interaction
@@ -380,7 +327,7 @@ services:
   inventory-interaction:
     build:
       context: .
-      dockerfile: inventory_interaction_module/Dockerfile
+      dockerfile: action/interactive/inventory_interaction_module/Dockerfile
     container_name: waddlebot-inventory
     environment:
       MODULE_NAME: inventory-interaction
@@ -402,7 +349,7 @@ services:
   calendar-interaction:
     build:
       context: .
-      dockerfile: calendar_interaction_module/Dockerfile
+      dockerfile: action/interactive/calendar_interaction_module/Dockerfile
     container_name: waddlebot-calendar
     environment:
       MODULE_NAME: calendar-interaction
@@ -424,7 +371,7 @@ services:
   memories-interaction:
     build:
       context: .
-      dockerfile: memories_interaction_module/Dockerfile
+      dockerfile: action/interactive/memories_interaction_module/Dockerfile
     container_name: waddlebot-memories
     environment:
       MODULE_NAME: memories-interaction
@@ -446,7 +393,7 @@ services:
   youtube-music:
     build:
       context: .
-      dockerfile: youtube_music_interaction_module/Dockerfile
+      dockerfile: action/interactive/youtube_music_interaction_module/Dockerfile
     container_name: waddlebot-youtube-music
     environment:
       MODULE_NAME: youtube-music
@@ -471,7 +418,7 @@ services:
   spotify-interaction:
     build:
       context: .
-      dockerfile: spotify_interaction_module/Dockerfile
+      dockerfile: action/interactive/spotify_interaction_module/Dockerfile
     container_name: waddlebot-spotify
     environment:
       MODULE_NAME: spotify-interaction
@@ -501,7 +448,7 @@ services:
   labels-core:
     build:
       context: .
-      dockerfile: labels_core_module/Dockerfile
+      dockerfile: core/labels_core_module/Dockerfile
     container_name: waddlebot-labels
     environment:
       MODULE_NAME: labels-core
@@ -527,7 +474,7 @@ services:
   browser-source:
     build:
       context: .
-      dockerfile: browser_source_core_module/Dockerfile
+      dockerfile: core/browser_source_core_module/Dockerfile
     container_name: waddlebot-browser-source
     environment:
       MODULE_NAME: browser-source
@@ -552,7 +499,7 @@ services:
   identity-core:
     build:
       context: .
-      dockerfile: identity_core_module/Dockerfile
+      dockerfile: core/identity_core_module/Dockerfile
     container_name: waddlebot-identity
     environment:
       MODULE_NAME: identity-core
@@ -582,7 +529,7 @@ services:
   community:
     build:
       context: .
-      dockerfile: community_module/Dockerfile
+      dockerfile: core/community_module/Dockerfile
     container_name: waddlebot-community
     environment:
       MODULE_NAME: community
@@ -604,7 +551,7 @@ services:
   reputation:
     build:
       context: .
-      dockerfile: reputation_module/Dockerfile
+      dockerfile: core/reputation_module/Dockerfile
     container_name: waddlebot-reputation
     environment:
       MODULE_NAME: reputation

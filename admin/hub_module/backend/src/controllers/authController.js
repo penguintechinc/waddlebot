@@ -321,14 +321,52 @@ export async function getCurrentUser(req, res, next) {
       return res.json({ success: true, user: null });
     }
 
-    // Get user's communities
-    const communitiesResult = await query(
-      `SELECT c.id, c.name, c.display_name, cm.role
-       FROM community_members cm
-       JOIN communities c ON c.id = cm.community_id
-       WHERE cm.user_id = $1 AND cm.is_active = true AND c.is_active = true`,
-      [req.user.id]
-    );
+    // For admin users, return admin info directly
+    if (req.user.platform === 'admin') {
+      // Get admin details from hub_admins
+      const adminResult = await query(
+        'SELECT id, username, email, is_super_admin FROM hub_admins WHERE id = $1 AND is_active = true',
+        [parseInt(req.user.platformUserId, 10)]
+      );
+
+      if (adminResult.rows.length === 0) {
+        return res.json({ success: true, user: null });
+      }
+
+      const admin = adminResult.rows[0];
+      return res.json({
+        success: true,
+        user: {
+          id: admin.id,
+          platform: 'admin',
+          platformUserId: admin.id.toString(),
+          username: admin.username,
+          email: admin.email,
+          roles: req.user.roles,
+          isAdmin: true,
+          isSuperAdmin: admin.is_super_admin,
+          communities: [], // Admins can access all communities
+        },
+      });
+    }
+
+    // Get user's communities for regular users
+    let communities = [];
+    if (req.user.id) {
+      const communitiesResult = await query(
+        `SELECT c.id, c.name, c.display_name, cm.role
+         FROM community_members cm
+         JOIN communities c ON c.id = cm.community_id
+         WHERE cm.user_id = $1 AND cm.is_active = true AND c.is_active = true`,
+        [req.user.id]
+      );
+      communities = communitiesResult.rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        displayName: r.display_name || r.name,
+        role: r.role,
+      }));
+    }
 
     res.json({
       success: true,
@@ -339,12 +377,7 @@ export async function getCurrentUser(req, res, next) {
         username: req.user.username,
         avatarUrl: req.user.avatarUrl,
         roles: req.user.roles,
-        communities: communitiesResult.rows.map(r => ({
-          id: r.id,
-          name: r.name,
-          displayName: r.display_name || r.name,
-          role: r.role,
-        })),
+        communities,
       },
     });
   } catch (err) {

@@ -70,6 +70,35 @@ async function initializeDatabase() {
       )
     `);
 
+    // Create hub_users table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS hub_users (
+        id SERIAL PRIMARY KEY,
+        display_name VARCHAR(255),
+        email VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        is_active BOOLEAN DEFAULT true
+      )
+    `);
+
+    // Create hub_user_identities table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS hub_user_identities (
+        id SERIAL PRIMARY KEY,
+        hub_user_id INTEGER NOT NULL REFERENCES hub_users(id) ON DELETE CASCADE,
+        platform VARCHAR(50) NOT NULL,
+        platform_user_id VARCHAR(255) NOT NULL,
+        platform_username VARCHAR(255),
+        avatar_url TEXT,
+        is_primary BOOLEAN DEFAULT false,
+        linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_used TIMESTAMP,
+        UNIQUE(hub_user_id, platform),
+        UNIQUE(platform, platform_user_id)
+      )
+    `);
+
     // Create communities table if not exists
     await query(`
       CREATE TABLE IF NOT EXISTS communities (

@@ -5,6 +5,7 @@
 import { Router } from 'express';
 import publicRoutes from './public.js';
 import authRoutes from './auth.js';
+import userRoutes from './user.js';
 import communityRoutes from './community.js';
 import adminRoutes from './admin.js';
 import platformRoutes from './platform.js';
@@ -17,6 +18,9 @@ router.use('/public', publicRoutes);
 
 // Auth routes (login, OAuth, temp password)
 router.use('/auth', authRoutes);
+
+// User routes (auth required - identity linking, profile)
+router.use('/user', userRoutes);
 
 // Community member routes (auth required)
 router.use('/community', communityRoutes);
