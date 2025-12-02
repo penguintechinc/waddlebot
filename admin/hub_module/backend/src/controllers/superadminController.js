@@ -146,38 +146,60 @@ export async function createCommunity(req, res, next) {
       return next(errors.conflict('Community name already exists'));
     }
 
-    const result = await query(
-      `INSERT INTO communities
-       (name, display_name, description, platform, platform_server_id, owner_id, owner_name, is_public, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, name, display_name, platform, created_at`,
-      [
-        name.toLowerCase().replace(/\s+/g, '-'),
-        displayName || name,
-        description || '',
-        platform,
-        platformServerId || null,
-        ownerId || null,
-        ownerName || null,
-        isPublic !== false,
-        req.user.platformUserId,
-      ]
-    );
+    // Use transaction to ensure community and owner membership are created together
+    const result = await transaction(async (client) => {
+      // Create the community
+      const communityResult = await client.query(
+        `INSERT INTO communities
+         (name, display_name, description, platform, platform_server_id, owner_id, owner_name, is_public, member_count, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9)
+         RETURNING id, name, display_name, platform, created_at`,
+        [
+          name.toLowerCase().replace(/\s+/g, '-'),
+          displayName || name,
+          description || '',
+          platform,
+          platformServerId || null,
+          ownerId || null,
+          ownerName || null,
+          isPublic !== false,
+          req.user.platformUserId,
+        ]
+      );
+
+      const newCommunity = communityResult.rows[0];
+
+      // Add creator as community-owner member
+      await client.query(
+        `INSERT INTO community_members
+         (community_id, user_id, platform, platform_user_id, display_name, role, reputation_score, is_active, joined_at)
+         VALUES ($1, $2, $3, $4, $5, 'community-owner', 100, true, NOW())`,
+        [
+          newCommunity.id,
+          req.user.id || null,
+          'admin',
+          req.user.platformUserId,
+          ownerName || req.user.username || 'Admin',
+        ]
+      );
+
+      return newCommunity;
+    });
 
     logger.audit('Community created', {
       adminId: req.user.platformUserId,
-      communityId: result.rows[0].id,
-      name: result.rows[0].name,
+      communityId: result.id,
+      name: result.name,
     });
 
     res.status(201).json({
       success: true,
       community: {
-        id: result.rows[0].id,
-        name: result.rows[0].name,
-        displayName: result.rows[0].display_name,
-        platform: result.rows[0].platform,
-        createdAt: result.rows[0].created_at?.toISOString(),
+        id: result.id,
+        name: result.name,
+        displayName: result.display_name,
+        platform: result.platform,
+        createdAt: result.created_at?.toISOString(),
       },
     });
   } catch (err) {
