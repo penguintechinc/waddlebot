@@ -46,17 +46,33 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  const loginWithAdmin = useCallback(async (username, password) => {
+    try {
+      setError(null);
+      const response = await api.post('/api/v1/auth/admin', { username, password });
+      if (response.data.success) {
+        localStorage.setItem('token', response.data.token);
+        setUser(response.data.user);
+        return response.data;
+      }
+    } catch (err) {
+      const message = err.response?.data?.error?.message || err.response?.data?.error || 'Login failed';
+      setError(message);
+      throw new Error(message);
+    }
+  }, []);
+
   const loginWithTempPassword = useCallback(async (identifier, password) => {
     try {
       setError(null);
-      const response = await api.post('/api/v1/auth/temp-login', { identifier, password });
+      const response = await api.post('/api/v1/auth/temp-password', { identifier, password });
       if (response.data.success) {
         localStorage.setItem('token', response.data.token);
         await fetchCurrentUser();
         return response.data;
       }
     } catch (err) {
-      const message = err.response?.data?.error || 'Login failed';
+      const message = err.response?.data?.error?.message || err.response?.data?.error || 'Login failed';
       setError(message);
       throw new Error(message);
     }
@@ -97,12 +113,14 @@ export function AuthProvider({ children }) {
     loading,
     error,
     loginWithOAuth,
+    loginWithAdmin,
     loginWithTempPassword,
     handleOAuthCallback,
     logout,
     refreshToken,
     isAuthenticated: !!user,
-    isPlatformAdmin: user?.roles?.includes('platform-admin'),
+    isAdmin: user?.isAdmin || user?.roles?.includes('admin'),
+    isSuperAdmin: user?.isSuperAdmin || user?.roles?.includes('super_admin'),
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -13,6 +13,72 @@ import { logger } from '../utils/logger.js';
 const SALT_ROUNDS = 12;
 
 /**
+ * Local admin login
+ */
+export async function adminLogin(req, res, next) {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return next(errors.badRequest('Username and password required'));
+    }
+
+    // Find admin user
+    const result = await query(
+      `SELECT id, username, password_hash, email, is_active, is_super_admin
+       FROM hub_admins
+       WHERE username = $1 AND is_active = true`,
+      [username]
+    );
+
+    if (result.rows.length === 0) {
+      logger.auth('Admin login failed - user not found', { username });
+      return next(errors.unauthorized('Invalid credentials'));
+    }
+
+    const admin = result.rows[0];
+
+    // Verify password
+    const valid = await bcrypt.compare(password, admin.password_hash);
+    if (!valid) {
+      logger.auth('Admin login failed - invalid password', { username });
+      return next(errors.unauthorized('Invalid credentials'));
+    }
+
+    // Update last login
+    await query(
+      'UPDATE hub_admins SET last_login = NOW() WHERE id = $1',
+      [admin.id]
+    );
+
+    // Create session
+    const sessionToken = await createSession({
+      platform: 'admin',
+      platformUserId: admin.id.toString(),
+      username: admin.username,
+      isAdmin: true,
+      isSuperAdmin: admin.is_super_admin,
+    });
+
+    logger.auth('Admin login successful', { username, isSuperAdmin: admin.is_super_admin });
+
+    res.json({
+      success: true,
+      token: sessionToken,
+      user: {
+        id: admin.id,
+        username: admin.username,
+        email: admin.email,
+        isAdmin: true,
+        isSuperAdmin: admin.is_super_admin,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * Start OAuth flow - redirect to identity module
  */
 export async function startOAuth(req, res, next) {
@@ -289,11 +355,11 @@ export async function getCurrentUser(req, res, next) {
 /**
  * Create session and JWT token
  */
-async function createSession({ platform, platformUserId, username, avatarUrl, requiresOAuthLink, communityId }) {
+async function createSession({ platform, platformUserId, username, avatarUrl, requiresOAuthLink, communityId, isAdmin, isSuperAdmin }) {
   // Look up or create user ID
   let userId = null;
 
-  if (platform !== 'temp') {
+  if (platform !== 'temp' && platform !== 'admin') {
     // Check if user exists by platform identity
     const userResult = await query(
       `SELECT id FROM community_members WHERE platform = $1 AND platform_user_id = $2 LIMIT 1`,
@@ -301,6 +367,11 @@ async function createSession({ platform, platformUserId, username, avatarUrl, re
     );
     userId = userResult.rows[0]?.id;
   }
+
+  // Build roles array
+  const roles = [];
+  if (isAdmin) roles.push('admin');
+  if (isSuperAdmin) roles.push('super_admin');
 
   // Create JWT payload
   const payload = {
@@ -311,7 +382,9 @@ async function createSession({ platform, platformUserId, username, avatarUrl, re
     avatarUrl,
     requiresOAuthLink: requiresOAuthLink || false,
     communityId,
-    roles: [], // Will be populated from database
+    isAdmin: isAdmin || false,
+    isSuperAdmin: isSuperAdmin || false,
+    roles,
   };
 
   // Generate token

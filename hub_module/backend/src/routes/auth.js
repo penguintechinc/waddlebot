@@ -11,6 +11,9 @@ const router = Router();
 router.get('/oauth/:platform', authController.startOAuth);
 router.get('/oauth/:platform/callback', authController.oauthCallback);
 
+// Admin local login
+router.post('/admin', authController.adminLogin);
+
 // Temp password login
 router.post('/temp-password', authController.tempPasswordLogin);
 

@@ -9,11 +9,90 @@ import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import bcrypt from 'bcrypt';
 import { config } from './config/index.js';
-import { checkConnection, closePool } from './config/database.js';
+import { checkConnection, closePool, query } from './config/database.js';
 import { logger } from './utils/logger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import routes from './routes/index.js';
+
+/**
+ * Initialize database tables and default admin
+ */
+async function initializeDatabase() {
+  try {
+    // Create hub_admins table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS hub_admins (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        email VARCHAR(255),
+        is_active BOOLEAN DEFAULT true,
+        is_super_admin BOOLEAN DEFAULT false,
+        last_login TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create hub_sessions table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS hub_sessions (
+        id SERIAL PRIMARY KEY,
+        session_token TEXT NOT NULL,
+        user_id INTEGER,
+        platform VARCHAR(50),
+        platform_user_id VARCHAR(255),
+        platform_username VARCHAR(255),
+        avatar_url TEXT,
+        is_active BOOLEAN DEFAULT true,
+        expires_at TIMESTAMP,
+        revoked_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create hub_temp_passwords table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS hub_temp_passwords (
+        id SERIAL PRIMARY KEY,
+        user_identifier VARCHAR(255) NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        community_id INTEGER,
+        force_oauth_link BOOLEAN DEFAULT false,
+        linked_oauth_platform VARCHAR(50),
+        linked_oauth_user_id VARCHAR(255),
+        is_used BOOLEAN DEFAULT false,
+        used_at TIMESTAMP,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Check if default admin exists
+    const adminCheck = await query(
+      'SELECT id FROM hub_admins WHERE username = $1',
+      ['admin']
+    );
+
+    if (adminCheck.rows.length === 0) {
+      // Create default admin with password 'admin123'
+      const passwordHash = await bcrypt.hash('admin123', 12);
+      await query(
+        `INSERT INTO hub_admins (username, password_hash, email, is_super_admin)
+         VALUES ($1, $2, $3, $4)`,
+        ['admin', passwordHash, 'admin@waddlebot.local', true]
+      );
+      logger.system('Default admin user created (username: admin, password: admin123)');
+    }
+
+    logger.system('Database initialized successfully');
+  } catch (err) {
+    logger.error('Database initialization failed', { error: err.message });
+    throw err;
+  }
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -114,17 +193,27 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 // Start server
-const server = app.listen(config.port, config.host, () => {
-  logger.system('Hub module started', {
-    port: config.port,
-    host: config.host,
-    env: config.env,
-  });
-});
+async function start() {
+  // Initialize database tables and default admin
+  await initializeDatabase();
 
-// Handle server errors
-server.on('error', (err) => {
-  logger.error('Server error', { error: err.message });
+  const server = app.listen(config.port, config.host, () => {
+    logger.system('Hub module started', {
+      port: config.port,
+      host: config.host,
+      env: config.env,
+    });
+  });
+
+  // Handle server errors
+  server.on('error', (err) => {
+    logger.error('Server error', { error: err.message });
+    process.exit(1);
+  });
+}
+
+start().catch((err) => {
+  logger.error('Failed to start server', { error: err.message });
   process.exit(1);
 });
 

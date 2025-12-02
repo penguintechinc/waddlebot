@@ -4,9 +4,9 @@ import { useAuth } from '../../contexts/AuthContext';
 
 function LoginPage() {
   const navigate = useNavigate();
-  const { loginWithOAuth, loginWithTempPassword, error, isAuthenticated } = useAuth();
-  const [showTempLogin, setShowTempLogin] = useState(false);
-  const [identifier, setIdentifier] = useState('');
+  const { loginWithOAuth, loginWithAdmin, loginWithTempPassword, error, isAuthenticated } = useAuth();
+  const [loginMode, setLoginMode] = useState('admin'); // 'admin', 'oauth', 'temp'
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [localError, setLocalError] = useState('');
@@ -26,12 +26,26 @@ function LoginPage() {
     }
   };
 
+  const handleAdminLogin = async (e) => {
+    e.preventDefault();
+    setLocalError('');
+    setLoading(true);
+    try {
+      await loginWithAdmin(username, password);
+      navigate('/dashboard');
+    } catch (err) {
+      setLocalError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleTempLogin = async (e) => {
     e.preventDefault();
     setLocalError('');
     setLoading(true);
     try {
-      const result = await loginWithTempPassword(identifier, password);
+      const result = await loginWithTempPassword(username, password);
       if (result.requiresOAuthLink) {
         navigate('/auth/link-oauth');
       } else {
@@ -60,7 +74,67 @@ function LoginPage() {
             </div>
           )}
 
-          {!showTempLogin ? (
+          {/* Login Mode Tabs */}
+          <div className="flex border-b border-slate-200 mb-6">
+            <button
+              onClick={() => setLoginMode('admin')}
+              className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${
+                loginMode === 'admin'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Admin Login
+            </button>
+            <button
+              onClick={() => setLoginMode('oauth')}
+              className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${
+                loginMode === 'oauth'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Platform Login
+            </button>
+          </div>
+
+          {loginMode === 'admin' && (
+            <form onSubmit={handleAdminLogin}>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    Username
+                  </label>
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="input"
+                    placeholder="admin"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="input"
+                    placeholder="Enter password"
+                    required
+                  />
+                </div>
+                <button type="submit" disabled={loading} className="btn btn-primary w-full">
+                  {loading ? 'Signing in...' : 'Sign In'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {loginMode === 'oauth' && (
             <>
               <div className="space-y-3">
                 <button
@@ -99,14 +173,16 @@ function LoginPage() {
 
               <div className="mt-6 pt-6 border-t border-slate-200 text-center">
                 <button
-                  onClick={() => setShowTempLogin(true)}
+                  onClick={() => setLoginMode('temp')}
                   className="text-sm text-slate-500 hover:text-slate-700"
                 >
                   Have a temporary password? Sign in here
                 </button>
               </div>
             </>
-          ) : (
+          )}
+
+          {loginMode === 'temp' && (
             <form onSubmit={handleTempLogin}>
               <div className="space-y-4">
                 <div>
@@ -115,8 +191,8 @@ function LoginPage() {
                   </label>
                   <input
                     type="text"
-                    value={identifier}
-                    onChange={(e) => setIdentifier(e.target.value)}
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
                     className="input"
                     placeholder="Enter your identifier"
                     required
@@ -143,10 +219,10 @@ function LoginPage() {
               <div className="mt-4 text-center">
                 <button
                   type="button"
-                  onClick={() => setShowTempLogin(false)}
+                  onClick={() => setLoginMode('oauth')}
                   className="text-sm text-slate-500 hover:text-slate-700"
                 >
-                  Back to OAuth login
+                  Back to Platform login
                 </button>
               </div>
             </form>
