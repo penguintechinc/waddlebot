@@ -29,12 +29,12 @@ RUN mkdir -p /app/databases
 
 # Generate gRPC code from proto file
 RUN python -m grpc_tools.protoc \
-    -I./proto \
-    --python_out=./proto \
-    --grpc_python_out=./proto \
-    ./proto/openwhisk_action.proto && \
+    -I./grpc_proto \
+    --python_out=./grpc_proto \
+    --grpc_python_out=./grpc_proto \
+    ./grpc_proto/openwhisk_action.proto && \
     # Fix import paths in generated grpc file
-    sed -i 's/^import openwhisk_action_pb2/from proto import openwhisk_action_pb2/' ./proto/openwhisk_action_pb2_grpc.py
+    sed -i 's/^import openwhisk_action_pb2/from grpc_proto import openwhisk_action_pb2/' ./grpc_proto/openwhisk_action_pb2_grpc.py
 
 # Expose ports
 EXPOSE 8082 50062

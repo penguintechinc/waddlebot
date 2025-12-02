@@ -17,7 +17,7 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
+@dataclass
 class WaddleAIProvider:
     """
     WaddleAI proxy provider for centralized AI management.
@@ -51,6 +51,7 @@ class WaddleAIProvider:
     preferred_model: str = field(  # noqa: E501
         default_factory=lambda: Config.WADDLEAI_PREFERRED_MODEL
     )
+    headers: Dict[str, str] = field(default_factory=dict, init=False)
 
     def __post_init__(self):
         """Initialize provider"""

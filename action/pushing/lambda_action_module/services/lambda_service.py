@@ -64,6 +64,7 @@ class LambdaService:
             self.db.Field('error_message', 'text'),
             self.db.Field('invoked_at', 'datetime', default=datetime.utcnow),
             self.db.Field('completed_at', 'datetime'),
+            migrate=False  # Don't try to migrate - table already exists
         )
         logger.info("Lambda invocations table setup complete")
 

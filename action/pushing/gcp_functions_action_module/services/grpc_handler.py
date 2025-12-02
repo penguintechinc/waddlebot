@@ -15,8 +15,8 @@ from services.gcp_functions_service import GCPFunctionsService
 
 # Import generated proto files (will be generated during Docker build)
 try:
-    from proto import gcp_functions_action_pb2
-    from proto import gcp_functions_action_pb2_grpc
+    from grpc_proto import gcp_functions_action_pb2
+    from grpc_proto import gcp_functions_action_pb2_grpc
 except ImportError:
     # Placeholder for development
     logger = logging.getLogger(__name__)

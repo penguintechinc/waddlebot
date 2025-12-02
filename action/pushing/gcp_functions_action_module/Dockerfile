@@ -30,12 +30,12 @@ RUN mkdir -p /app/databases
 
 # Generate gRPC code from proto file
 RUN python -m grpc_tools.protoc \
-    -I./proto \
-    --python_out=./proto \
-    --grpc_python_out=./proto \
-    ./proto/gcp_functions_action.proto && \
+    -I./grpc_proto \
+    --python_out=./grpc_proto \
+    --grpc_python_out=./grpc_proto \
+    ./grpc_proto/gcp_functions_action.proto && \
     # Fix import paths in generated grpc file
-    sed -i 's/^import gcp_functions_action_pb2/from proto import gcp_functions_action_pb2/' ./proto/gcp_functions_action_pb2_grpc.py
+    sed -i 's/^import gcp_functions_action_pb2/from grpc_proto import gcp_functions_action_pb2/' ./grpc_proto/gcp_functions_action_pb2_grpc.py
 
 # Expose ports (REST and gRPC)
 EXPOSE 8081 50061

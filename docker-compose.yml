@@ -15,6 +15,7 @@ volumes:
   postgres-data:
   redis-data:
   minio-data:
+  ollama-data:
 
 services:
   # =============================================================================
@@ -80,6 +81,33 @@ services:
       - waddlebot-public
     restart: unless-stopped
 
+  # Ollama for local AI inference testing
+  ollama:
+    image: ollama/ollama:latest
+    container_name: waddlebot-ollama
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - waddlebot-internal
+      - waddlebot-public  # Needs internet to pull models
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    restart: unless-stopped
+    # Uncomment to use GPU acceleration
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
   # Apache OpenWhisk standalone for testing serverless actions
   openwhisk:
     image: openwhisk/standalone:nightly
@@ -125,7 +153,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -214,7 +242,7 @@ services:
     depends_on:
       - router
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -238,7 +266,7 @@ services:
     depends_on:
       - router
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -262,7 +290,7 @@ services:
     depends_on:
       - router
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -282,10 +310,11 @@ services:
       MODULE_PORT: 8005
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
       ROUTER_API_URL: http://router:8000
-      AI_PROVIDER: ${AI_PROVIDER:-waddleai}
-      OLLAMA_HOST: ${OLLAMA_HOST:-localhost}
+      AI_PROVIDER: ${AI_PROVIDER:-ollama}
+      OLLAMA_HOST: ${OLLAMA_HOST:-ollama}
       OLLAMA_PORT: ${OLLAMA_PORT:-11434}
       OLLAMA_USE_TLS: ${OLLAMA_USE_TLS:-false}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-tinyllama}
       WADDLEAI_BASE_URL: ${WADDLEAI_BASE_URL:-http://waddleai:8000}
       WADDLEAI_API_KEY: ${WADDLEAI_API_KEY}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -293,8 +322,9 @@ services:
       - waddlebot-internal
     depends_on:
       - router
+      - ollama
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -316,7 +346,7 @@ services:
     depends_on:
       - router
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -338,7 +368,7 @@ services:
     depends_on:
       - router
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8011/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -360,7 +390,7 @@ services:
     depends_on:
       - router
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8024/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8024/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -382,7 +412,7 @@ services:
     depends_on:
       - router
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8030/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8030/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -404,7 +434,7 @@ services:
     depends_on:
       - router
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8031/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8031/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -429,7 +459,7 @@ services:
       - router
       - browser-source
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8025/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8025/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -455,7 +485,7 @@ services:
       - router
       - browser-source
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8026/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8026/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -485,7 +515,7 @@ services:
       - router
       - redis
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8023/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8023/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -510,7 +540,7 @@ services:
     depends_on:
       - router
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8027/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8027/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -536,7 +566,7 @@ services:
       - router
       - redis
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8050/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8050/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -562,7 +592,7 @@ services:
     depends_on:
       - router
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8020/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -584,7 +614,7 @@ services:
     depends_on:
       - router
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8021/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8021/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -613,7 +643,7 @@ services:
       - router
       - postgres
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8070/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8070/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -638,7 +668,7 @@ services:
       - router
       - postgres
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8071/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8071/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -664,7 +694,7 @@ services:
       - router
       - postgres
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8072/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8072/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -691,7 +721,7 @@ services:
       - router
       - postgres
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8073/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8073/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -723,7 +753,7 @@ services:
       - router
       - postgres
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -751,7 +781,7 @@ services:
       - router
       - postgres
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -781,7 +811,7 @@ services:
       - postgres
       - openwhisk
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/health')"]
       interval: 30s
       timeout: 10s
       retries: 3

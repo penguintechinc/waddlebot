@@ -8,7 +8,7 @@ import logging
 
 import grpc
 import jwt
-from proto import lambda_action_pb2, lambda_action_pb2_grpc
+from grpc_proto import lambda_action_pb2, lambda_action_pb2_grpc
 
 from config import Config
 from services.lambda_service import LambdaService

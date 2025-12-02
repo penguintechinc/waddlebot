@@ -1,4 +1,4 @@
-# Build from parent directory: docker build -f ai_interaction_module_flask/Dockerfile -t waddlebot/ai-interaction:latest .
+# Build from parent directory: docker build -f action/interactive/ai_interaction_module/Dockerfile -t waddlebot/ai-interaction:latest .
 
 FROM python:3.13-slim
 
@@ -11,8 +11,8 @@ COPY libs/flask_core /app/libs/flask_core
 RUN cd /app/libs/flask_core && pip install --no-cache-dir .
 
 # Copy module files
-COPY ai_interaction_module_flask/requirements.txt /app/
-COPY ai_interaction_module_flask /app/
+COPY action/interactive/ai_interaction_module/requirements.txt /app/
+COPY action/interactive/ai_interaction_module /app/
 
 # Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt

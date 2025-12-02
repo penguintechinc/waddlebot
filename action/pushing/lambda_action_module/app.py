@@ -17,7 +17,7 @@ import grpc
 import jwt
 from hypercorn.asyncio import serve
 from hypercorn.config import Config as HypercornConfig
-from proto import lambda_action_pb2_grpc
+from grpc_proto import lambda_action_pb2_grpc
 from pydal import DAL
 from quart import Quart, jsonify, request
 
