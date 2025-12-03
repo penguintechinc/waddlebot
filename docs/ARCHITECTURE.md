@@ -162,18 +162,59 @@ User types: "!play never gonna give you up"
     └─────────────┘        └─────────────┘
 ```
 
-## Data Flow: OAuth Authentication
+## Data Flow: Unified Authentication
 
+The Hub uses a **local-login-centric** authentication model where all users have a local account
+(email/password) with optional OAuth platform identities linked as spokes.
+
+### Local Login Flow
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                     OAUTH AUTHENTICATION FLOW                                 │
+│                     LOCAL LOGIN / REGISTRATION FLOW                           │
 └──────────────────────────────────────────────────────────────────────────────┘
 
     ┌─────────────┐
     │    User     │
     │   Browser   │
     └──────┬──────┘
-           │ 1. Click "Login with Discord"
+           │ 1. Enter email + password
+           │    (Login or Register)
+           ▼
+    ┌─────────────┐
+    │  hub_module │
+    │  (Frontend) │
+    └──────┬──────┘
+           │ 2. POST /api/v1/auth/login or /register
+           ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                      HUB MODULE (Backend)                    │
+    │  ┌───────────────────────────────────────────────────────┐  │
+    │  │ 3. Validate credentials against hub_users table       │  │
+    │  │ 4. Create JWT session (userId, roles, isSuperAdmin)   │  │
+    │  │ 5. Store session in hub_sessions table                │  │
+    │  │ 6. Return token + user info                           │  │
+    │  └───────────────────────────────────────────────────────┘  │
+    └──────┬──────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌─────────────┐
+    │    User     │
+    │  Dashboard  │
+    └─────────────┘
+```
+
+### OAuth Login Flow (Creates/Links Account)
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                     OAUTH LOGIN FLOW                                          │
+│     (If no existing user, creates local account + links platform)            │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+    ┌─────────────┐
+    │    User     │
+    │   Browser   │
+    └──────┬──────┘
+           │ 1. Click "Continue with Discord"
            ▼
     ┌─────────────┐
     │  hub_module │
@@ -181,47 +222,134 @@ User types: "!play never gonna give you up"
     └──────┬──────┘
            │ 2. GET /api/v1/auth/oauth/discord
            ▼
-    ┌─────────────┐
-    │  hub_module │
-    │  (Backend)  │
-    └──────┬──────┘
-           │ 3. Get OAuth URL from identity_core
-           ▼
-    ┌─────────────┐
-    │  identity_  │
-    │    core     │
-    └──────┬──────┘
-           │ 4. Return Discord OAuth URL
+    ┌─────────────────────────────────────────────────────────────┐
+    │                      HUB MODULE (Backend)                    │
+    │  ┌───────────────────────────────────────────────────────┐  │
+    │  │ 3. Generate OAuth state (CSRF protection)             │  │
+    │  │ 4. Store state in hub_oauth_states table              │  │
+    │  │ 5. Return Discord OAuth URL with state                │  │
+    │  └───────────────────────────────────────────────────────┘  │
+    └──────┬──────────────────────────────────────────────────────┘
+           │
            ▼
     ┌─────────────┐
     │   Discord   │
     │   OAuth     │
     └──────┬──────┘
-           │ 5. User authorizes, redirect with code
+           │ 6. User authorizes, redirect with code
            ▼
-    ┌─────────────┐
-    │  hub_module │
-    │  /callback  │
-    └──────┬──────┘
-           │ 6. Exchange code for user info via identity_core
-           ▼
-    ┌─────────────┐
-    │  identity_  │
-    │    core     │
-    └──────┬──────┘
-           │ 7. Verify with Discord, return user data
-           ▼
-    ┌─────────────┐
-    │  hub_module │
-    │  (Backend)  │
-    └──────┬──────┘
-           │ 8. Create JWT session, store in DB
-           │ 9. Redirect to frontend with token
+    ┌─────────────────────────────────────────────────────────────┐
+    │                      HUB MODULE (Backend)                    │
+    │           /api/v1/auth/oauth/discord/callback                │
+    │  ┌───────────────────────────────────────────────────────┐  │
+    │  │ 7. Verify state from hub_oauth_states                 │  │
+    │  │ 8. Exchange code for tokens with Discord              │  │
+    │  │ 9. Get user info from Discord API                     │  │
+    │  │ 10. Check hub_user_identities for existing link       │  │
+    │  │                                                       │  │
+    │  │ If existing: Return existing user                     │  │
+    │  │ If email matches: Link to existing user               │  │
+    │  │ If new: Create hub_users + hub_user_identities        │  │
+    │  │                                                       │  │
+    │  │ 11. Create JWT session                                │  │
+    │  │ 12. Redirect to /auth/callback?token=...              │  │
+    │  └───────────────────────────────────────────────────────┘  │
+    └──────┬──────────────────────────────────────────────────────┘
+           │
            ▼
     ┌─────────────┐
     │    User     │
     │  Dashboard  │
     └─────────────┘
+```
+
+### Platform Linking Flow (Logged-in User)
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                     PLATFORM LINKING FLOW                                     │
+│              (User already logged in, links new platform)                     │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+    ┌─────────────┐
+    │    User     │   Already logged in via local login
+    │  Settings   │   or different OAuth platform
+    └──────┬──────┘
+           │ 1. Click "Connect Discord"
+           ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                      HUB MODULE (Backend)                    │
+    │           GET /api/v1/auth/oauth/discord/link                │
+    │  ┌───────────────────────────────────────────────────────┐  │
+    │  │ 2. Generate state with user_id stored                 │  │
+    │  │ 3. Return OAuth URL                                   │  │
+    │  └───────────────────────────────────────────────────────┘  │
+    └──────┬──────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌─────────────┐
+    │   Discord   │
+    │   OAuth     │
+    └──────┬──────┘
+           │ 4. User authorizes
+           ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                      HUB MODULE (Backend)                    │
+    │           /api/v1/auth/oauth/discord/link-callback           │
+    │  ┌───────────────────────────────────────────────────────┐  │
+    │  │ 5. Verify state, get user_id                          │  │
+    │  │ 6. Exchange code for user info                        │  │
+    │  │ 7. Check if platform already linked to another user   │  │
+    │  │ 8. Insert/update hub_user_identities                  │  │
+    │  │ 9. Redirect to /dashboard/settings?linked=discord     │  │
+    │  └───────────────────────────────────────────────────────┘  │
+    └──────┬──────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌─────────────┐
+    │    User     │  Now has Discord linked
+    │  Settings   │  to their local account
+    └─────────────┘
+```
+
+### User Data Model
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                     UNIFIED USER DATA MODEL                                   │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+    ┌─────────────────────────────────────────────────────────────┐
+    │                      hub_users                               │
+    │  ┌───────────────────────────────────────────────────────┐  │
+    │  │ id: 1                                                 │  │
+    │  │ email: user@example.com       (primary identifier)    │  │
+    │  │ username: cooluser                                    │  │
+    │  │ password_hash: $2b$12$...     (optional if OAuth-only)│  │
+    │  │ avatar_url: https://...                               │  │
+    │  │ is_super_admin: false                                 │  │
+    │  │ is_active: true                                       │  │
+    │  └───────────────────────────────────────────────────────┘  │
+    └──────────────────────────────────────────────────────────────┘
+                                 │
+                                 │ 1:N
+                                 ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                   hub_user_identities                        │
+    │  ┌───────────────────────────────────────────────────────┐  │
+    │  │ hub_user_id: 1                                        │  │
+    │  │ platform: discord             (discord/twitch/slack)  │  │
+    │  │ platform_user_id: 123456789   (platform's user ID)    │  │
+    │  │ platform_username: CoolUser#1234                      │  │
+    │  │ avatar_url: https://cdn.discord.../avatar.png         │  │
+    │  │ linked_at: 2025-12-03                                 │  │
+    │  └───────────────────────────────────────────────────────┘  │
+    │  ┌───────────────────────────────────────────────────────┐  │
+    │  │ hub_user_id: 1                                        │  │
+    │  │ platform: twitch                                      │  │
+    │  │ platform_user_id: 987654321                           │  │
+    │  │ platform_username: cooluser_tv                        │  │
+    │  │ ...                                                   │  │
+    │  └───────────────────────────────────────────────────────┘  │
+    └─────────────────────────────────────────────────────────────┘
 ```
 
 ## Data Flow: Browser Source Updates
@@ -380,16 +508,17 @@ CLAIM LIFECYCLE:
 │  module_responses                    ───────────                             │
 │                                      hub_sessions                            │
 │  MODULE TABLES                       hub_temp_passwords                      │
-│  ─────────────                       platform_admins                         │
-│  modules                             audit_log                               │
-│  module_installations                                                        │
-│  collector_modules                   FEATURE TABLES                          │
-│                                      ──────────────                          │
-│  IDENTITY TABLES                     events (calendar)                       │
-│  ───────────────                     memories                                │
-│  identity_links                      inventory_items                         │
-│  identity_verifications              browser_source_tokens                   │
-│  user_api_keys                       labels                                  │
+│  ─────────────                       hub_oauth_states                        │
+│  modules                             platform_configs                        │
+│  module_installations                audit_log                               │
+│  collector_modules                                                           │
+│                                      FEATURE TABLES                          │
+│  IDENTITY TABLES                     ──────────────                          │
+│  ───────────────                     events (calendar)                       │
+│  hub_users                           memories                                │
+│  hub_user_identities                 inventory_items                         │
+│  user_api_keys                       browser_source_tokens                   │
+│                                      labels                                  │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```

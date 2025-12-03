@@ -12,6 +12,10 @@ router.post('/register', authController.register);
 router.post('/login', authController.login);
 router.post('/admin', authController.adminLogin); // Legacy admin login
 
+// Email verification
+router.get('/verify-email', authController.verifyEmail);
+router.post('/resend-verification', authController.resendVerification);
+
 // Password management (requires auth)
 router.post('/password', requireAuth, authController.setPassword);
 

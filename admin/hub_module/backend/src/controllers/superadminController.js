@@ -163,7 +163,7 @@ export async function createCommunity(req, res, next) {
           ownerId || null,
           ownerName || null,
           isPublic !== false,
-          req.user.platformUserId,
+          req.user.id,
         ]
       );
 
@@ -178,7 +178,7 @@ export async function createCommunity(req, res, next) {
           newCommunity.id,
           req.user.id || null,
           'admin',
-          req.user.platformUserId,
+          req.user.id,
           ownerName || req.user.username || 'Admin',
         ]
       );
@@ -187,7 +187,7 @@ export async function createCommunity(req, res, next) {
     });
 
     logger.audit('Community created', {
-      adminId: req.user.platformUserId,
+      adminId: req.user.id,
       communityId: result.id,
       name: result.name,
     });
@@ -274,7 +274,7 @@ export async function updateCommunity(req, res, next) {
     );
 
     logger.audit('Community updated', {
-      adminId: req.user.platformUserId,
+      adminId: req.user.id,
       communityId,
       updates: Object.keys(req.body),
     });
@@ -295,7 +295,7 @@ export async function deleteCommunity(req, res, next) {
     const result = await query(
       `UPDATE communities SET is_active = false, deleted_at = NOW(), deleted_by = $1
        WHERE id = $2 RETURNING name`,
-      [req.user.platformUserId, communityId]
+      [req.user.id, communityId]
     );
 
     if (result.rows.length === 0) {
@@ -303,7 +303,7 @@ export async function deleteCommunity(req, res, next) {
     }
 
     logger.audit('Community deleted', {
-      adminId: req.user.platformUserId,
+      adminId: req.user.id,
       communityId,
       name: result.rows[0].name,
     });
@@ -347,7 +347,7 @@ export async function reassignOwner(req, res, next) {
     );
 
     logger.audit('Community ownership reassigned', {
-      adminId: req.user.platformUserId,
+      adminId: req.user.id,
       communityId,
       previousOwnerId: previousOwner.owner_id,
       previousOwnerName: previousOwner.owner_name,
@@ -544,7 +544,7 @@ export async function createModule(req, res, next) {
     );
 
     logger.audit('Module created', {
-      adminId: req.user.platformUserId,
+      adminId: req.user.id,
       moduleId: result.rows[0].id,
       name: result.rows[0].name,
     });
@@ -631,7 +631,7 @@ export async function updateModule(req, res, next) {
     );
 
     logger.audit('Module updated', {
-      adminId: req.user.platformUserId,
+      adminId: req.user.id,
       moduleId,
       updates: Object.keys(req.body),
     });
@@ -666,7 +666,7 @@ export async function publishModule(req, res, next) {
     }
 
     logger.audit('Module publication status changed', {
-      adminId: req.user.platformUserId,
+      adminId: req.user.id,
       moduleId,
       moduleName: result.rows[0].name,
       isPublished,
@@ -712,7 +712,7 @@ export async function deleteModule(req, res, next) {
     }
 
     logger.audit('Module deleted', {
-      adminId: req.user.platformUserId,
+      adminId: req.user.id,
       moduleId,
       moduleName: result.rows[0].name,
     });

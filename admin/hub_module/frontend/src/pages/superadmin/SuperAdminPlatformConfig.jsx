@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { superAdminApi } from '../../services/api';
-import { Settings, Save, RefreshCw, Check, X, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { Settings, Save, RefreshCw, Check, X, Eye, EyeOff, AlertCircle, Mail, Shield } from 'lucide-react';
 
 // Platform icons as simple SVG components
 const DiscordIcon = () => (
@@ -70,12 +70,28 @@ const PLATFORM_CONFIG = {
       { key: 'client_secret', label: 'Client Secret', secret: true, placeholder: 'Google Cloud OAuth Client Secret' },
     ],
   },
+  email: {
+    name: 'Email (SMTP)',
+    icon: () => <Mail className="w-6 h-6" />,
+    color: 'bg-blue-500',
+    fields: [
+      { key: 'smtp_host', label: 'SMTP Host', secret: false, placeholder: 'smtp.example.com' },
+      { key: 'smtp_port', label: 'SMTP Port', secret: false, placeholder: '587' },
+      { key: 'smtp_user', label: 'SMTP Username', secret: false, placeholder: 'user@example.com' },
+      { key: 'smtp_password', label: 'SMTP Password', secret: true, placeholder: 'SMTP password' },
+      { key: 'smtp_from', label: 'From Email', secret: false, placeholder: 'noreply@example.com' },
+      { key: 'smtp_from_name', label: 'From Name', secret: false, placeholder: 'WaddleBot' },
+      { key: 'smtp_secure', label: 'Use TLS', secret: false, placeholder: 'true or false' },
+    ],
+  },
 };
 
 export default function SuperAdminPlatformConfig() {
   const [configs, setConfigs] = useState({});
+  const [hubSettings, setHubSettings] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState({});
+  const [savingSettings, setSavingSettings] = useState(false);
   const [testing, setTesting] = useState({});
   const [testResults, setTestResults] = useState({});
   const [error, setError] = useState(null);
@@ -83,10 +99,31 @@ export default function SuperAdminPlatformConfig() {
   const [showSecrets, setShowSecrets] = useState({});
   const [formData, setFormData] = useState({});
   const [expandedPlatform, setExpandedPlatform] = useState(null);
+  const [settingsForm, setSettingsForm] = useState({
+    signup_enabled: false,
+    signup_require_email_verification: true,
+    signup_allowed_domains: '',
+  });
 
   useEffect(() => {
     loadConfigs();
+    loadHubSettings();
   }, []);
+
+  const loadHubSettings = async () => {
+    try {
+      const response = await superAdminApi.getHubSettings();
+      const settings = response.data.settings || {};
+      setHubSettings(settings);
+      setSettingsForm({
+        signup_enabled: settings.signup_enabled?.value === 'true',
+        signup_require_email_verification: settings.signup_require_email_verification?.value !== 'false',
+        signup_allowed_domains: settings.signup_allowed_domains?.value || '',
+      });
+    } catch {
+      // Settings may not exist yet
+    }
+  };
 
   const loadConfigs = async () => {
     try {
@@ -175,6 +212,31 @@ export default function SuperAdminPlatformConfig() {
     const fieldKey = `${platform}-${key}`;
     setShowSecrets(prev => ({ ...prev, [fieldKey]: !prev[fieldKey] }));
   };
+
+  const handleSaveSettings = async () => {
+    try {
+      setSavingSettings(true);
+      setError(null);
+
+      await superAdminApi.updateHubSettings({
+        settings: {
+          signup_enabled: settingsForm.signup_enabled ? 'true' : 'false',
+          signup_require_email_verification: settingsForm.signup_require_email_verification ? 'true' : 'false',
+          signup_allowed_domains: settingsForm.signup_allowed_domains,
+        }
+      });
+
+      setSuccess('Signup settings saved successfully');
+      loadHubSettings();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to save signup settings');
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const isEmailConfigured = hubSettings.email_configured?.value === 'true';
 
   if (loading) {
     return (
@@ -348,6 +410,122 @@ export default function SuperAdminPlatformConfig() {
             </div>
           );
         })}
+      </div>
+
+      {/* Signup Settings Section */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <div className="flex items-center gap-4 p-4 border-b border-gray-200 dark:border-gray-700">
+          <div className="p-3 rounded-lg bg-emerald-500 text-white">
+            <Shield className="w-6 h-6" />
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              Signup Settings
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Control user registration and email verification
+            </p>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-6">
+          {/* Email Status */}
+          <div className={`p-4 rounded-lg ${isEmailConfigured ? 'bg-green-50 dark:bg-green-900/20' : 'bg-yellow-50 dark:bg-yellow-900/20'}`}>
+            <div className="flex items-center gap-2">
+              {isEmailConfigured ? (
+                <>
+                  <Check className="w-5 h-5 text-green-600 dark:text-green-400" />
+                  <span className="text-green-700 dark:text-green-400">
+                    Email service is configured. You can enable signups.
+                  </span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
+                  <span className="text-yellow-700 dark:text-yellow-400">
+                    Configure email settings above and test the connection to enable signups.
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Enable Signups */}
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="font-medium text-gray-900 dark:text-white">
+                Enable Public Signups
+              </label>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Allow new users to register accounts
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settingsForm.signup_enabled}
+                onChange={(e) => setSettingsForm(prev => ({ ...prev, signup_enabled: e.target.checked }))}
+                disabled={!isEmailConfigured}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-indigo-600 peer-disabled:opacity-50"></div>
+            </label>
+          </div>
+
+          {/* Require Email Verification */}
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="font-medium text-gray-900 dark:text-white">
+                Require Email Verification
+              </label>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Users must verify their email before accessing the platform
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settingsForm.signup_require_email_verification}
+                onChange={(e) => setSettingsForm(prev => ({ ...prev, signup_require_email_verification: e.target.checked }))}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-indigo-600"></div>
+            </label>
+          </div>
+
+          {/* Allowed Domains */}
+          <div>
+            <label className="block font-medium text-gray-900 dark:text-white mb-1">
+              Allowed Email Domains (optional)
+            </label>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+              Comma-separated list of domains. Leave empty to allow all domains.
+            </p>
+            <input
+              type="text"
+              value={settingsForm.signup_allowed_domains}
+              onChange={(e) => setSettingsForm(prev => ({ ...prev, signup_allowed_domains: e.target.value }))}
+              placeholder="example.com, company.org"
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            />
+          </div>
+
+          {/* Save Button */}
+          <div className="pt-4">
+            <button
+              onClick={handleSaveSettings}
+              disabled={savingSettings}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {savingSettings ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )}
+              Save Signup Settings
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Info Note */}

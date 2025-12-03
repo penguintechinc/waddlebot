@@ -55,8 +55,20 @@ export function AuthProvider({ children }) {
         setUser(response.data.user);
         return response.data;
       }
+      // Handle requires verification response (403 with requiresVerification)
+      if (response.data.requiresVerification) {
+        const error = new Error(response.data.message || 'Email verification required');
+        error.requiresVerification = true;
+        throw error;
+      }
     } catch (err) {
-      const message = err.response?.data?.error?.message || err.response?.data?.error || 'Login failed';
+      // Check for verification required in error response
+      if (err.response?.data?.requiresVerification) {
+        const error = new Error(err.response.data.message || 'Email verification required');
+        error.requiresVerification = true;
+        throw error;
+      }
+      const message = err.response?.data?.error?.message || err.response?.data?.error || err.response?.data?.message || err.message || 'Login failed';
       setError(message);
       throw new Error(message);
     }
@@ -67,12 +79,16 @@ export function AuthProvider({ children }) {
       setError(null);
       const response = await api.post('/api/v1/auth/register', { email, password, username });
       if (response.data.success) {
+        // Handle email verification required case
+        if (response.data.requiresVerification) {
+          return { requiresVerification: true, message: response.data.message };
+        }
         localStorage.setItem('token', response.data.token);
         setUser(response.data.user);
         return response.data;
       }
     } catch (err) {
-      const message = err.response?.data?.error?.message || err.response?.data?.error || 'Registration failed';
+      const message = err.response?.data?.error?.message || err.response?.data?.error || err.response?.data?.message || 'Registration failed';
       setError(message);
       throw new Error(message);
     }

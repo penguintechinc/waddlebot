@@ -17,4 +17,7 @@ router.get('/communities/:id', publicController.getCommunity);
 router.get('/live', publicController.getLiveStreams);
 router.get('/live/:entityId', publicController.getStreamDetails);
 
+// Signup settings (for login page to determine if signup is available)
+router.get('/signup-settings', publicController.getSignupSettings);
+
 export default router;

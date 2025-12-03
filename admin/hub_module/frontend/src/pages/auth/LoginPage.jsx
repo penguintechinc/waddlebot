@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import axios from 'axios';
 
 function LoginPage() {
   const navigate = useNavigate();
@@ -12,6 +13,26 @@ function LoginPage() {
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const [localError, setLocalError] = useState('');
+  const [signupSettings, setSignupSettings] = useState({ signupEnabled: false, loading: true });
+  const [verificationSent, setVerificationSent] = useState(false);
+  const [resendingVerification, setResendingVerification] = useState(false);
+
+  // Fetch signup settings on mount
+  useEffect(() => {
+    const fetchSignupSettings = async () => {
+      try {
+        const response = await axios.get('/api/v1/public/signup-settings');
+        setSignupSettings({
+          signupEnabled: response.data.signupEnabled,
+          allowedDomains: response.data.allowedDomains,
+          loading: false
+        });
+      } catch {
+        setSignupSettings({ signupEnabled: false, loading: false });
+      }
+    };
+    fetchSignupSettings();
+  }, []);
 
   // Check for OAuth errors in URL
   useEffect(() => {
@@ -38,15 +59,45 @@ function LoginPage() {
 
     try {
       if (mode === 'register') {
-        await register(email, password, username);
+        const result = await register(email, password, username);
+        // Check if email verification is required
+        if (result?.requiresVerification) {
+          setVerificationSent(true);
+          return;
+        }
       } else {
-        await login(email, password);
+        const result = await login(email, password);
+        // Check if user needs to verify email
+        if (result?.requiresVerification) {
+          setLocalError('Please verify your email address before logging in');
+          setVerificationSent(true);
+          return;
+        }
       }
       navigate('/dashboard');
     } catch (err) {
-      setLocalError(err.message || 'Authentication failed');
+      // Handle verification required from login
+      if (err.requiresVerification) {
+        setLocalError('Please verify your email address before logging in');
+        setVerificationSent(true);
+      } else {
+        setLocalError(err.message || 'Authentication failed');
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    setResendingVerification(true);
+    try {
+      await axios.post('/api/v1/auth/resend-verification', { email });
+      setLocalError('');
+      alert('Verification email sent! Please check your inbox.');
+    } catch (err) {
+      setLocalError(err.response?.data?.message || 'Failed to resend verification email');
+    } finally {
+      setResendingVerification(false);
     }
   };
 
@@ -75,6 +126,25 @@ function LoginPage() {
           {(authError || localError) && (
             <div className="mb-4 p-3 bg-red-500/20 border border-red-500/30 rounded-lg text-red-300 text-sm">
               {authError || localError}
+            </div>
+          )}
+
+          {/* Verification Sent Message */}
+          {verificationSent && (
+            <div className="mb-4 p-4 bg-green-500/20 border border-green-500/30 rounded-lg">
+              <h3 className="font-medium text-green-300 mb-2">Check your email!</h3>
+              <p className="text-green-200/80 text-sm mb-3">
+                {mode === 'register'
+                  ? 'We\'ve sent a verification link to your email. Please verify your email to complete registration.'
+                  : 'Your email hasn\'t been verified yet. Please check your inbox for the verification link.'}
+              </p>
+              <button
+                onClick={handleResendVerification}
+                disabled={resendingVerification || !email}
+                className="text-sm text-green-300 hover:text-green-200 underline disabled:opacity-50"
+              >
+                {resendingVerification ? 'Sending...' : 'Resend verification email'}
+              </button>
             </div>
           )}
 
@@ -181,23 +251,30 @@ function LoginPage() {
             </div>
           </form>
 
-          {/* Toggle Login/Register */}
+          {/* Toggle Login/Register - Only show signup if enabled */}
           <div className="mt-6 text-center">
             {mode === 'login' ? (
-              <p className="text-navy-400">
-                Don't have an account?{' '}
-                <button
-                  onClick={() => setMode('register')}
-                  className="text-sky-400 hover:text-sky-300 font-medium"
-                >
-                  Sign up
-                </button>
-              </p>
+              signupSettings.signupEnabled && !signupSettings.loading ? (
+                <p className="text-navy-400">
+                  Don't have an account?{' '}
+                  <button
+                    onClick={() => { setMode('register'); setVerificationSent(false); }}
+                    className="text-sky-400 hover:text-sky-300 font-medium"
+                  >
+                    Sign up
+                  </button>
+                  {signupSettings.allowedDomains && (
+                    <span className="block text-xs text-navy-500 mt-1">
+                      (Registration limited to: {signupSettings.allowedDomains.join(', ')})
+                    </span>
+                  )}
+                </p>
+              ) : null
             ) : (
               <p className="text-navy-400">
                 Already have an account?{' '}
                 <button
-                  onClick={() => setMode('login')}
+                  onClick={() => { setMode('login'); setVerificationSent(false); }}
                   className="text-sky-400 hover:text-sky-300 font-medium"
                 >
                   Sign in

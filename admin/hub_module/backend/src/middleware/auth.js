@@ -41,10 +41,13 @@ async function verifyToken(req) {
 
     return {
       id: decoded.userId,
+      userId: decoded.userId, // For backwards compatibility
       platform: decoded.platform,
       platformUserId: decoded.platformUserId,
       username: decoded.username,
+      email: decoded.email,
       avatarUrl: decoded.avatarUrl,
+      isSuperAdmin: decoded.isSuperAdmin,
       roles: decoded.roles || [],
       communityRoles: decoded.communityRoles || {},
     };

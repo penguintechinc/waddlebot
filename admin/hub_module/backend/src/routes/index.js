@@ -25,6 +25,7 @@ router.use('/user', userRoutes);
 
 // Community member routes (auth required)
 router.use('/community', communityRoutes);
+router.use('/communities', communityRoutes); // Alias for plural form
 
 // Community admin routes (admin role required)
 router.use('/admin', adminRoutes);

@@ -69,9 +69,21 @@ CREATE TABLE IF NOT EXISTS hub_users (
     avatar_url TEXT,
     is_active BOOLEAN DEFAULT TRUE,
     is_super_admin BOOLEAN DEFAULT FALSE,
+    email_verified BOOLEAN DEFAULT FALSE,
+    email_verification_token VARCHAR(100),
+    email_verification_expires TIMESTAMP,
     last_login TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Global hub settings
+CREATE TABLE IF NOT EXISTS hub_settings (
+    id SERIAL PRIMARY KEY,
+    setting_key VARCHAR(100) UNIQUE NOT NULL,
+    setting_value TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES hub_users(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_hub_users_email ON hub_users(email);
@@ -180,8 +192,8 @@ CREATE INDEX IF NOT EXISTS idx_community_members_community ON community_members(
 CREATE INDEX IF NOT EXISTS idx_community_members_user ON community_members(user_id);
 
 -- Create default super admin user (password: admin123)
-INSERT INTO hub_users (email, username, password_hash, is_super_admin, is_active)
-VALUES ('admin@waddlebot.local', 'admin', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X4.0xGQH0IH9q8g.G', true, true)
+INSERT INTO hub_users (email, username, password_hash, is_super_admin, is_active, email_verified)
+VALUES ('admin@localhost', 'admin', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X4.0xGQH0IH9q8g.G', true, true, true)
 ON CONFLICT (email) DO NOTHING;
 
 -- Development notice

@@ -240,3 +240,35 @@ export async function getStreamDetails(req, res, next) {
     next(err);
   }
 }
+
+/**
+ * Get signup settings (public endpoint for login page)
+ */
+export async function getSignupSettings(req, res, next) {
+  try {
+    const result = await query(
+      `SELECT setting_key, setting_value FROM hub_settings
+       WHERE setting_key IN ('signup_enabled', 'email_configured', 'signup_allowed_domains')`
+    );
+
+    const settings = {};
+    for (const row of result.rows) {
+      settings[row.setting_key] = row.setting_value;
+    }
+
+    // Signup is only available if email is configured and signup is enabled
+    const signupEnabled = settings.signup_enabled === 'true' && settings.email_configured === 'true';
+    const allowedDomains = settings.signup_allowed_domains
+      ? settings.signup_allowed_domains.split(',').map(d => d.trim()).filter(Boolean)
+      : [];
+
+    res.json({
+      success: true,
+      signupEnabled,
+      hasAllowedDomains: allowedDomains.length > 0,
+      allowedDomains: allowedDomains.length > 0 ? allowedDomains : null,
+    });
+  } catch (err) {
+    next(err);
+  }
+}

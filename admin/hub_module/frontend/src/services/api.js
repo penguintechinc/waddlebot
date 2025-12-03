@@ -131,6 +131,9 @@ export const superAdminApi = {
   getPlatformConfigs: () => api.get('/api/v1/superadmin/platform-config'),
   updatePlatformConfig: (platform, data) => api.put(`/api/v1/superadmin/platform-config/${platform}`, data),
   testPlatformConnection: (platform) => api.post(`/api/v1/superadmin/platform-config/${platform}/test`),
+  // Hub settings
+  getHubSettings: () => api.get('/api/v1/superadmin/settings'),
+  updateHubSettings: (data) => api.put('/api/v1/superadmin/settings', data),
 };
 
 // Marketplace API

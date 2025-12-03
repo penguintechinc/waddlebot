@@ -35,4 +35,8 @@ router.get('/platform-config', platformConfigController.getPlatformConfigs);
 router.put('/platform-config/:platform', platformConfigController.updatePlatformConfig);
 router.post('/platform-config/:platform/test', platformConfigController.testPlatformConnection);
 
+// Hub settings management (signup, email, etc.)
+router.get('/settings', platformConfigController.getHubSettings);
+router.put('/settings', platformConfigController.updateHubSettings);
+
 export default router;

@@ -15,8 +15,21 @@ import { query, transaction } from '../config/database.js';
 import { config } from '../config/index.js';
 import { errors } from '../middleware/errorHandler.js';
 import { logger } from '../utils/logger.js';
+import { generateVerificationToken, sendVerificationEmail } from '../utils/email.js';
 
 const SALT_ROUNDS = 12;
+
+/**
+ * Get hub settings helper
+ */
+async function getHubSettingsMap() {
+  const result = await query('SELECT setting_key, setting_value FROM hub_settings');
+  const settings = {};
+  for (const row of result.rows) {
+    settings[row.setting_key] = row.setting_value;
+  }
+  return settings;
+}
 
 /**
  * Register new user with local credentials
@@ -27,6 +40,26 @@ export async function register(req, res, next) {
 
     if (!email || !password) {
       return next(errors.badRequest('Email and password required'));
+    }
+
+    // Check signup settings
+    const settings = await getHubSettingsMap();
+    const signupEnabled = settings.signup_enabled === 'true';
+    const emailConfigured = settings.email_configured === 'true';
+    const requireVerification = settings.signup_require_email_verification === 'true';
+    const allowedDomains = settings.signup_allowed_domains
+      ? settings.signup_allowed_domains.split(',').map(d => d.trim().toLowerCase()).filter(Boolean)
+      : [];
+
+    // Check if signup is enabled
+    if (!signupEnabled || !emailConfigured) {
+      return next(errors.forbidden('Registration is currently disabled'));
+    }
+
+    // Check domain restriction
+    const emailDomain = email.toLowerCase().split('@')[1];
+    if (allowedDomains.length > 0 && !allowedDomains.includes(emailDomain)) {
+      return next(errors.forbidden(`Registration is restricted to specific email domains`));
     }
 
     // Check if email already exists
@@ -42,17 +75,49 @@ export async function register(req, res, next) {
     // Hash password
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
 
+    // Generate verification token if required
+    let verificationToken = null;
+    let verificationExpires = null;
+    if (requireVerification) {
+      verificationToken = generateVerificationToken();
+      verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    }
+
     // Create user
     const result = await query(
-      `INSERT INTO hub_users (email, password_hash, username, is_active, created_at)
-       VALUES ($1, $2, $3, true, NOW())
-       RETURNING id, email, username`,
-      [email.toLowerCase(), passwordHash, username || email.split('@')[0]]
+      `INSERT INTO hub_users
+       (email, password_hash, username, is_active, email_verified, email_verification_token, email_verification_expires, created_at)
+       VALUES ($1, $2, $3, true, $4, $5, $6, NOW())
+       RETURNING id, email, username, email_verified`,
+      [
+        email.toLowerCase(),
+        passwordHash,
+        username || email.split('@')[0],
+        !requireVerification, // email_verified is true only if verification not required
+        verificationToken,
+        verificationExpires
+      ]
     );
 
     const user = result.rows[0];
 
-    // Create session
+    // Send verification email if required
+    if (requireVerification) {
+      const emailResult = await sendVerificationEmail(user.email, user.username, verificationToken);
+      if (!emailResult.success) {
+        logger.error('Failed to send verification email', { email: user.email, error: emailResult.error });
+      }
+
+      logger.auth('User registered - verification required', { userId: user.id, email: user.email });
+
+      return res.json({
+        success: true,
+        requiresVerification: true,
+        message: 'Please check your email to verify your account',
+      });
+    }
+
+    // Create session (only if no verification required)
     const sessionToken = await createSession({
       userId: user.id,
       username: user.username,
@@ -76,6 +141,120 @@ export async function register(req, res, next) {
 }
 
 /**
+ * Verify email address
+ */
+export async function verifyEmail(req, res, next) {
+  try {
+    const { token } = req.query;
+
+    if (!token) {
+      return next(errors.badRequest('Verification token required'));
+    }
+
+    // Find user with this token
+    const result = await query(
+      `SELECT id, email, username, email_verification_expires
+       FROM hub_users
+       WHERE email_verification_token = $1`,
+      [token]
+    );
+
+    if (result.rows.length === 0) {
+      return next(errors.badRequest('Invalid or expired verification token'));
+    }
+
+    const user = result.rows[0];
+
+    // Check if token expired
+    if (new Date() > new Date(user.email_verification_expires)) {
+      return next(errors.badRequest('Verification token has expired'));
+    }
+
+    // Mark email as verified
+    await query(
+      `UPDATE hub_users
+       SET email_verified = true, email_verification_token = NULL, email_verification_expires = NULL
+       WHERE id = $1`,
+      [user.id]
+    );
+
+    logger.auth('Email verified', { userId: user.id, email: user.email });
+
+    // Create session so user is logged in
+    const sessionToken = await createSession({
+      userId: user.id,
+      username: user.username,
+      email: user.email,
+    });
+
+    res.json({
+      success: true,
+      message: 'Email verified successfully',
+      token: sessionToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Resend verification email
+ */
+export async function resendVerification(req, res, next) {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return next(errors.badRequest('Email required'));
+    }
+
+    // Find user
+    const result = await query(
+      `SELECT id, email, username, email_verified
+       FROM hub_users WHERE email = $1`,
+      [email.toLowerCase()]
+    );
+
+    if (result.rows.length === 0) {
+      // Don't reveal if user exists
+      return res.json({ success: true, message: 'If the email exists, a verification link has been sent' });
+    }
+
+    const user = result.rows[0];
+
+    if (user.email_verified) {
+      return next(errors.badRequest('Email is already verified'));
+    }
+
+    // Generate new token
+    const verificationToken = generateVerificationToken();
+    const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    await query(
+      `UPDATE hub_users
+       SET email_verification_token = $1, email_verification_expires = $2
+       WHERE id = $3`,
+      [verificationToken, verificationExpires, user.id]
+    );
+
+    // Send email
+    const emailResult = await sendVerificationEmail(user.email, user.username, verificationToken);
+    if (!emailResult.success) {
+      logger.error('Failed to resend verification email', { email: user.email, error: emailResult.error });
+    }
+
+    res.json({ success: true, message: 'Verification email sent' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * Local login with email/password
  */
 export async function login(req, res, next) {
@@ -88,10 +267,10 @@ export async function login(req, res, next) {
 
     // Find user
     const result = await query(
-      `SELECT u.id, u.email, u.username, u.password_hash, u.avatar_url, u.is_active, u.is_super_admin,
+      `SELECT u.id, u.email, u.username, u.password_hash, u.avatar_url, u.is_active, u.is_super_admin, u.email_verified,
               array_agg(DISTINCT ui.platform) FILTER (WHERE ui.platform IS NOT NULL) as linked_platforms
        FROM hub_users u
-       LEFT JOIN hub_user_identities ui ON ui.user_id = u.id
+       LEFT JOIN hub_user_identities ui ON ui.hub_user_id = u.id
        WHERE u.email = $1
        GROUP BY u.id`,
       [email.toLowerCase()]
@@ -107,6 +286,16 @@ export async function login(req, res, next) {
     if (!user.is_active) {
       logger.auth('Login failed - user inactive', { email });
       return next(errors.unauthorized('Account is inactive'));
+    }
+
+    // Check if email verification is required
+    if (user.email_verified === false) {
+      logger.auth('Login failed - email not verified', { email });
+      return res.status(403).json({
+        success: false,
+        requiresVerification: true,
+        message: 'Please verify your email address before logging in',
+      });
     }
 
     // Verify password
@@ -338,9 +527,9 @@ export async function oauthCallback(req, res, next) {
 async function findOrCreateUserFromOAuth(platform, userData, mode) {
   // Check if this platform identity already exists
   const identityResult = await query(
-    `SELECT ui.user_id, u.id, u.email, u.username, u.avatar_url, u.is_super_admin
+    `SELECT ui.hub_user_id, u.id, u.email, u.username, u.avatar_url, u.is_super_admin
      FROM hub_user_identities ui
-     JOIN hub_users u ON u.id = ui.user_id
+     JOIN hub_users u ON u.id = ui.hub_user_id
      WHERE ui.platform = $1 AND ui.platform_user_id = $2`,
     [platform, userData.id]
   );
@@ -349,9 +538,9 @@ async function findOrCreateUserFromOAuth(platform, userData, mode) {
     // Existing user, update their platform info
     await query(
       `UPDATE hub_user_identities
-       SET platform_username = $1, platform_avatar = $2, access_token = $3, refresh_token = $4, last_used = NOW()
-       WHERE platform = $5 AND platform_user_id = $6`,
-      [userData.username, userData.avatar_url, userData.access_token, userData.refresh_token, platform, userData.id]
+       SET platform_username = $1, avatar_url = $2, last_used = NOW()
+       WHERE platform = $3 AND platform_user_id = $4`,
+      [userData.username, userData.avatar_url, platform, userData.id]
     );
     return identityResult.rows[0];
   }
@@ -390,9 +579,9 @@ async function findOrCreateUserFromOAuth(platform, userData, mode) {
   // Create identity link
   await query(
     `INSERT INTO hub_user_identities
-     (user_id, platform, platform_user_id, platform_username, platform_email, platform_avatar, access_token, refresh_token, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
-    [userId, platform, userData.id, userData.username, userData.email, userData.avatar_url, userData.access_token, userData.refresh_token]
+     (hub_user_id, platform, platform_user_id, platform_username, avatar_url, linked_at)
+     VALUES ($1, $2, $3, $4, $5, NOW())`,
+    [userId, platform, userData.id, userData.username, userData.avatar_url]
   );
 
   return user;
@@ -485,22 +674,22 @@ export async function oauthLinkCallback(req, res, next) {
 
     // Check if this platform identity is already linked to another user
     const existingIdentity = await query(
-      'SELECT user_id FROM hub_user_identities WHERE platform = $1 AND platform_user_id = $2',
+      'SELECT hub_user_id FROM hub_user_identities WHERE platform = $1 AND platform_user_id = $2',
       [platform, userData.id]
     );
 
-    if (existingIdentity.rows.length > 0 && existingIdentity.rows[0].user_id !== userId) {
+    if (existingIdentity.rows.length > 0 && existingIdentity.rows[0].hub_user_id !== userId) {
       return res.redirect(`${config.cors.origin}/dashboard/settings?error=platform_already_linked`);
     }
 
     // Upsert identity
     await query(
       `INSERT INTO hub_user_identities
-       (user_id, platform, platform_user_id, platform_username, platform_email, platform_avatar, access_token, refresh_token, created_at, last_used)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+       (hub_user_id, platform, platform_user_id, platform_username, avatar_url, linked_at, last_used)
+       VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
        ON CONFLICT (platform, platform_user_id)
-       DO UPDATE SET platform_username = $4, platform_avatar = $6, access_token = $7, refresh_token = $8, last_used = NOW()`,
-      [userId, platform, userData.id, userData.username, userData.email, userData.avatar_url, userData.access_token, userData.refresh_token]
+       DO UPDATE SET platform_username = $4, avatar_url = $5, last_used = NOW()`,
+      [userId, platform, userData.id, userData.username, userData.avatar_url]
     );
 
     logger.auth('OAuth account linked', { platform, userId, platformUserId: userData.id });
@@ -531,7 +720,7 @@ export async function unlinkOAuthAccount(req, res, next) {
     if (!userResult.rows[0]?.password_hash) {
       // Count linked platforms
       const countResult = await query(
-        'SELECT COUNT(*) as count FROM hub_user_identities WHERE user_id = $1',
+        'SELECT COUNT(*) as count FROM hub_user_identities WHERE hub_user_id = $1',
         [req.user.userId]
       );
 
@@ -541,7 +730,7 @@ export async function unlinkOAuthAccount(req, res, next) {
     }
 
     await query(
-      'DELETE FROM hub_user_identities WHERE user_id = $1 AND platform = $2',
+      'DELETE FROM hub_user_identities WHERE hub_user_id = $1 AND platform = $2',
       [req.user.userId, platform]
     );
 
@@ -732,11 +921,11 @@ export async function getCurrentUser(req, res, next) {
                 json_build_object(
                   'platform', ui.platform,
                   'username', ui.platform_username,
-                  'avatar', ui.platform_avatar
+                  'avatar', ui.avatar_url
                 )
               ) FILTER (WHERE ui.platform IS NOT NULL), '[]') as linked_platforms
        FROM hub_users u
-       LEFT JOIN hub_user_identities ui ON ui.user_id = u.id
+       LEFT JOIN hub_user_identities ui ON ui.hub_user_id = u.id
        WHERE u.id = $1
        GROUP BY u.id`,
       [req.user.userId]

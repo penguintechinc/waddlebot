@@ -72,6 +72,11 @@ const PLATFORM_CONFIGS = {
     fields: ['api_key', 'client_id', 'client_secret'],
     secrets: ['api_key', 'client_secret'],
     testEndpoint: 'https://www.googleapis.com/youtube/v3/channels?part=id&mine=true'
+  },
+  email: {
+    fields: ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_from', 'smtp_from_name', 'smtp_secure'],
+    secrets: ['smtp_password'],
+    testEndpoint: null
   }
 };
 
@@ -258,6 +263,9 @@ export async function testPlatformConnection(req, res) {
       case 'youtube':
         testResult = await testYouTubeConnection(credentials);
         break;
+      case 'email':
+        testResult = await testEmailConnection(credentials);
+        break;
       default:
         testResult = { success: false, message: 'Test not implemented' };
     }
@@ -431,5 +439,106 @@ async function testYouTubeConnection(credentials) {
     }
   } catch (error) {
     return { success: false, message: `Connection failed: ${error.message}` };
+  }
+}
+
+/**
+ * Test email (SMTP) connection
+ */
+async function testEmailConnection(credentials) {
+  if (!credentials.smtp_host || !credentials.smtp_port) {
+    return { success: false, message: 'SMTP host and port not configured' };
+  }
+
+  try {
+    // Dynamic import nodemailer
+    const nodemailer = await import('nodemailer');
+
+    const transportConfig = {
+      host: credentials.smtp_host,
+      port: parseInt(credentials.smtp_port, 10),
+      secure: credentials.smtp_secure === 'true',
+    };
+
+    if (credentials.smtp_user && credentials.smtp_password) {
+      transportConfig.auth = {
+        user: credentials.smtp_user,
+        pass: credentials.smtp_password
+      };
+    }
+
+    const transporter = nodemailer.default.createTransport(transportConfig);
+
+    // Verify connection
+    await transporter.verify();
+
+    // Update email_configured setting
+    await query(
+      `INSERT INTO hub_settings (setting_key, setting_value, updated_at)
+       VALUES ('email_configured', 'true', NOW())
+       ON CONFLICT (setting_key)
+       DO UPDATE SET setting_value = 'true', updated_at = NOW()`
+    );
+
+    return {
+      success: true,
+      message: `SMTP connection verified: ${credentials.smtp_host}:${credentials.smtp_port}`
+    };
+  } catch (error) {
+    return { success: false, message: `SMTP connection failed: ${error.message}` };
+  }
+}
+
+/**
+ * Get hub settings
+ */
+export async function getHubSettings(req, res) {
+  try {
+    const result = await query(
+      `SELECT setting_key, setting_value, updated_at FROM hub_settings`
+    );
+
+    const settings = {};
+    for (const row of result.rows) {
+      settings[row.setting_key] = {
+        value: row.setting_value,
+        updatedAt: row.updated_at
+      };
+    }
+
+    res.json({ success: true, settings });
+  } catch (error) {
+    console.error('Error getting hub settings:', error);
+    res.status(500).json({ success: false, message: 'Failed to get hub settings' });
+  }
+}
+
+/**
+ * Update hub settings
+ */
+export async function updateHubSettings(req, res) {
+  const { settings } = req.body;
+
+  if (!settings || typeof settings !== 'object') {
+    return res.status(400).json({ success: false, message: 'Invalid settings object' });
+  }
+
+  try {
+    for (const [key, value] of Object.entries(settings)) {
+      await query(
+        `INSERT INTO hub_settings (setting_key, setting_value, updated_at, updated_by)
+         VALUES ($1, $2, NOW(), $3)
+         ON CONFLICT (setting_key)
+         DO UPDATE SET setting_value = $2, updated_at = NOW(), updated_by = $3`,
+        [key, String(value), req.user?.id || null]
+      );
+    }
+
+    console.log(`Hub settings updated by user ${req.user?.username}`);
+
+    res.json({ success: true, message: 'Settings updated' });
+  } catch (error) {
+    console.error('Error updating hub settings:', error);
+    res.status(500).json({ success: false, message: 'Failed to update hub settings' });
   }
 }
