@@ -30,6 +30,8 @@ import AdminModules from './pages/admin/AdminModules';
 import AdminMarketplace from './pages/admin/AdminMarketplace';
 import AdminBrowserSources from './pages/admin/AdminBrowserSources';
 import AdminDomains from './pages/admin/AdminDomains';
+import AdminServers from './pages/admin/AdminServers';
+import AdminMirrorGroups from './pages/admin/AdminMirrorGroups';
 
 // Platform admin pages
 import PlatformDashboard from './pages/platform/PlatformDashboard';
@@ -117,6 +119,8 @@ function App() {
         <Route path="/admin/:communityId/marketplace" element={<AdminMarketplace />} />
         <Route path="/admin/:communityId/browser-sources" element={<AdminBrowserSources />} />
         <Route path="/admin/:communityId/domains" element={<AdminDomains />} />
+        <Route path="/admin/:communityId/servers" element={<AdminServers />} />
+        <Route path="/admin/:communityId/mirror-groups" element={<AdminMirrorGroups />} />
       </Route>
 
       {/* Platform admin routes */}

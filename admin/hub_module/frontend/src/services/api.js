@@ -71,9 +71,28 @@ export const communityApi = {
   leave: (id) => api.post(`/api/v1/communities/${id}/leave`),
   getChatHistory: (id, params) => api.get(`/api/v1/community/${id}/chat/history`, { params }),
   getChatChannels: (id) => api.get(`/api/v1/community/${id}/chat/channels`),
+  // Join functionality
+  join: (id, message) => api.post(`/api/v1/communities/${id}/join`, { message }),
+  getMyJoinRequests: () => api.get('/api/v1/communities/join-requests'),
+  cancelJoinRequest: (requestId) => api.delete(`/api/v1/communities/join-requests/${requestId}`),
+  // Server linking (user adding their server)
+  addServer: (id, data) => api.post(`/api/v1/communities/${id}/servers`, data),
+  getServers: (id) => api.get(`/api/v1/communities/${id}/servers`),
+  getMyServerLinkRequests: () => api.get('/api/v1/communities/server-link-requests'),
+  cancelServerLinkRequest: (requestId) => api.delete(`/api/v1/communities/server-link-requests/${requestId}`),
 };
 
 export const adminApi = {
+  // Community settings
+  getSettings: (communityId) => api.get(`/api/v1/admin/${communityId}/settings`),
+  updateSettings: (communityId, data) => api.put(`/api/v1/admin/${communityId}/settings`, data),
+  // Join requests
+  getJoinRequests: (communityId, params) => api.get(`/api/v1/admin/${communityId}/join-requests`, { params }),
+  approveJoinRequest: (communityId, requestId, note) =>
+    api.post(`/api/v1/admin/${communityId}/join-requests/${requestId}/approve`, { note }),
+  rejectJoinRequest: (communityId, requestId, note) =>
+    api.post(`/api/v1/admin/${communityId}/join-requests/${requestId}/reject`, { note }),
+  // Member management
   getMembers: (communityId, params) => api.get(`/api/v1/admin/${communityId}/members`, { params }),
   updateMemberRole: (communityId, userId, role) =>
     api.put(`/api/v1/admin/${communityId}/members/${userId}/role`, { role }),
@@ -95,6 +114,34 @@ export const adminApi = {
     api.delete(`/api/v1/admin/${communityId}/domains/${domainId}`),
   generateTempPassword: (communityId, data) =>
     api.post(`/api/v1/admin/${communityId}/temp-password`, data),
+  // Server linking management
+  getServers: (communityId, params) => api.get(`/api/v1/admin/${communityId}/servers`, { params }),
+  updateServer: (communityId, serverId, data) =>
+    api.put(`/api/v1/admin/${communityId}/servers/${serverId}`, data),
+  removeServer: (communityId, serverId) =>
+    api.delete(`/api/v1/admin/${communityId}/servers/${serverId}`),
+  getServerLinkRequests: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/server-link-requests`, { params }),
+  approveServerLinkRequest: (communityId, requestId, note) =>
+    api.post(`/api/v1/admin/${communityId}/server-link-requests/${requestId}/approve`, { note }),
+  rejectServerLinkRequest: (communityId, requestId, note) =>
+    api.post(`/api/v1/admin/${communityId}/server-link-requests/${requestId}/reject`, { note }),
+  // Mirror groups
+  getMirrorGroups: (communityId) => api.get(`/api/v1/admin/${communityId}/mirror-groups`),
+  getMirrorGroup: (communityId, groupId) =>
+    api.get(`/api/v1/admin/${communityId}/mirror-groups/${groupId}`),
+  createMirrorGroup: (communityId, data) =>
+    api.post(`/api/v1/admin/${communityId}/mirror-groups`, data),
+  updateMirrorGroup: (communityId, groupId, data) =>
+    api.put(`/api/v1/admin/${communityId}/mirror-groups/${groupId}`, data),
+  deleteMirrorGroup: (communityId, groupId) =>
+    api.delete(`/api/v1/admin/${communityId}/mirror-groups/${groupId}`),
+  addMirrorGroupMember: (communityId, groupId, data) =>
+    api.post(`/api/v1/admin/${communityId}/mirror-groups/${groupId}/members`, data),
+  updateMirrorGroupMember: (communityId, groupId, memberId, data) =>
+    api.put(`/api/v1/admin/${communityId}/mirror-groups/${groupId}/members/${memberId}`, data),
+  removeMirrorGroupMember: (communityId, groupId, memberId) =>
+    api.delete(`/api/v1/admin/${communityId}/mirror-groups/${groupId}/members/${memberId}`),
 };
 
 export const platformApi = {

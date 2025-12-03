@@ -10,6 +10,15 @@ const router = Router();
 // All routes require authentication and community admin role
 router.use(requireAuth);
 
+// Community settings
+router.get('/:communityId/settings', requireCommunityAdmin, adminController.getCommunitySettings);
+router.put('/:communityId/settings', requireCommunityAdmin, adminController.updateCommunitySettings);
+
+// Join request management
+router.get('/:communityId/join-requests', requireCommunityAdmin, adminController.getJoinRequests);
+router.post('/:communityId/join-requests/:requestId/approve', requireCommunityAdmin, adminController.approveJoinRequest);
+router.post('/:communityId/join-requests/:requestId/reject', requireCommunityAdmin, adminController.rejectJoinRequest);
+
 // Member management
 router.get('/:communityId/members', requireCommunityAdmin, adminController.getMembers);
 router.put('/:communityId/members/:userId/role', requireCommunityAdmin, adminController.updateMemberRole);
@@ -32,5 +41,27 @@ router.delete('/:communityId/domains/:domainId', requireCommunityAdmin, adminCon
 
 // Temp password generation
 router.post('/:communityId/temp-password', requireCommunityAdmin, adminController.generateTempPassword);
+
+// Server linking management
+router.get('/:communityId/servers', requireCommunityAdmin, adminController.getLinkedServers);
+router.put('/:communityId/servers/:serverId', requireCommunityAdmin, adminController.updateServer);
+router.delete('/:communityId/servers/:serverId', requireCommunityAdmin, adminController.removeServer);
+
+// Server link requests
+router.get('/:communityId/server-link-requests', requireCommunityAdmin, adminController.getServerLinkRequests);
+router.post('/:communityId/server-link-requests/:requestId/approve', requireCommunityAdmin, adminController.approveServerLinkRequest);
+router.post('/:communityId/server-link-requests/:requestId/reject', requireCommunityAdmin, adminController.rejectServerLinkRequest);
+
+// Mirror groups
+router.get('/:communityId/mirror-groups', requireCommunityAdmin, adminController.getMirrorGroups);
+router.post('/:communityId/mirror-groups', requireCommunityAdmin, adminController.createMirrorGroup);
+router.get('/:communityId/mirror-groups/:groupId', requireCommunityAdmin, adminController.getMirrorGroup);
+router.put('/:communityId/mirror-groups/:groupId', requireCommunityAdmin, adminController.updateMirrorGroup);
+router.delete('/:communityId/mirror-groups/:groupId', requireCommunityAdmin, adminController.deleteMirrorGroup);
+
+// Mirror group members
+router.post('/:communityId/mirror-groups/:groupId/members', requireCommunityAdmin, adminController.addMirrorGroupMember);
+router.put('/:communityId/mirror-groups/:groupId/members/:memberId', requireCommunityAdmin, adminController.updateMirrorGroupMember);
+router.delete('/:communityId/mirror-groups/:groupId/members/:memberId', requireCommunityAdmin, adminController.removeMirrorGroupMember);
 
 export default router;

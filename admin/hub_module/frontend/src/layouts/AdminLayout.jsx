@@ -12,6 +12,8 @@ import {
   ShieldCheckIcon,
   Cog6ToothIcon,
   BuildingStorefrontIcon,
+  ServerStackIcon,
+  ArrowsRightLeftIcon,
 } from '@heroicons/react/24/outline';
 
 function AdminLayout() {
@@ -24,6 +26,8 @@ function AdminLayout() {
     ? [
         { to: `/admin/${communityId}`, icon: HomeIcon, label: 'Overview', exact: true },
         { to: `/admin/${communityId}/members`, icon: UserGroupIcon, label: 'Members' },
+        { to: `/admin/${communityId}/servers`, icon: ServerStackIcon, label: 'Linked Servers' },
+        { to: `/admin/${communityId}/mirror-groups`, icon: ArrowsRightLeftIcon, label: 'Chat Mirroring' },
         { to: `/admin/${communityId}/modules`, icon: PuzzlePieceIcon, label: 'Modules' },
         { to: `/admin/${communityId}/browser-sources`, icon: ComputerDesktopIcon, label: 'Browser Sources' },
         { to: `/admin/${communityId}/domains`, icon: GlobeAltIcon, label: 'Custom Domains' },

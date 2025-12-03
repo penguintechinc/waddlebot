@@ -15,6 +15,21 @@ router.use(requireAuth);
 // User's communities
 router.get('/my', communityController.getMyCommunities);
 
+// Join requests
+router.get('/join-requests', communityController.getMyJoinRequests);
+router.delete('/join-requests/:requestId', communityController.cancelJoinRequest);
+
+// Server link requests (user's own)
+router.get('/server-link-requests', communityController.getMyServerLinkRequests);
+router.delete('/server-link-requests/:requestId', communityController.cancelServerLinkRequest);
+
+// Join community (public communities only, no membership required)
+router.post('/:id/join', communityController.joinCommunity);
+
+// Server linking (user adds their platform server to community)
+router.post('/:id/servers', communityController.addServerToCommunity);
+router.get('/:id/servers', requireMember, communityController.getCommunityServers);
+
 // Community detail (requires membership)
 router.get('/:id/dashboard', requireMember, communityController.getCommunityDashboard);
 router.get('/:id/leaderboard', requireMember, communityController.getLeaderboard);

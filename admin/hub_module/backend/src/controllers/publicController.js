@@ -80,8 +80,8 @@ export async function getCommunities(req, res, next) {
 
     // Get communities
     const result = await query(`
-      SELECT id, name, display_name, description, logo_url, primary_platform,
-             member_count, created_at
+      SELECT id, name, display_name, description, platform,
+             member_count, config, created_at
       FROM communities
       WHERE is_active = true AND is_public = true
       ORDER BY member_count DESC, name ASC
@@ -93,8 +93,8 @@ export async function getCommunities(req, res, next) {
       name: row.name,
       displayName: row.display_name || row.name,
       description: row.description,
-      logoUrl: row.logo_url,
-      primaryPlatform: row.primary_platform,
+      logoUrl: row.config?.logo_url || null,
+      platform: row.platform,
       memberCount: row.member_count || 0,
       createdAt: row.created_at?.toISOString(),
     }));
@@ -126,8 +126,8 @@ export async function getCommunity(req, res, next) {
     }
 
     const result = await query(`
-      SELECT id, name, display_name, description, logo_url, banner_url,
-             primary_platform, member_count, created_at
+      SELECT id, name, display_name, description, platform,
+             member_count, config, join_mode, created_at
       FROM communities
       WHERE id = $1 AND is_active = true AND is_public = true
     `, [communityId]);
@@ -144,10 +144,11 @@ export async function getCommunity(req, res, next) {
         name: row.name,
         displayName: row.display_name || row.name,
         description: row.description,
-        logoUrl: row.logo_url,
-        bannerUrl: row.banner_url,
-        primaryPlatform: row.primary_platform,
+        logoUrl: row.config?.logo_url || null,
+        bannerUrl: row.config?.banner_url || null,
+        platform: row.platform,
         memberCount: row.member_count || 0,
+        joinMode: row.join_mode || 'open',
         createdAt: row.created_at?.toISOString(),
       },
     });

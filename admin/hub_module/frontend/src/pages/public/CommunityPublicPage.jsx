@@ -1,12 +1,19 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { publicApi } from '../../services/api';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import { publicApi, communityApi } from '../../services/api';
+import { useAuth } from '../../contexts/AuthContext';
 
 function CommunityPublicPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
+  const { user, isAuthenticated } = useAuth();
   const [community, setCommunity] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [joining, setJoining] = useState(false);
+  const [joinMessage, setJoinMessage] = useState('');
+  const [joinResult, setJoinResult] = useState(null);
+  const [showJoinModal, setShowJoinModal] = useState(false);
 
   useEffect(() => {
     async function fetchCommunity() {
@@ -21,6 +28,34 @@ function CommunityPublicPage() {
     }
     fetchCommunity();
   }, [id]);
+
+  const handleJoin = async () => {
+    if (!isAuthenticated) {
+      navigate('/login', { state: { returnTo: `/communities/${id}` } });
+      return;
+    }
+
+    setJoining(true);
+    setJoinResult(null);
+
+    try {
+      const response = await communityApi.join(id, joinMessage);
+      setJoinResult(response.data);
+      setShowJoinModal(false);
+
+      if (response.data.joined) {
+        // Redirect to dashboard after successful join
+        setTimeout(() => navigate(`/dashboard/community/${id}`), 1500);
+      }
+    } catch (err) {
+      setJoinResult({
+        success: false,
+        message: err.response?.data?.error?.message || 'Failed to join community',
+      });
+    } finally {
+      setJoining(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -74,10 +109,21 @@ function CommunityPublicPage() {
               <span>Since {new Date(community.createdAt).toLocaleDateString()}</span>
             </div>
           </div>
-          <Link to="/login" className="btn btn-primary mt-4 md:mt-0">
-            Join Community
-          </Link>
+          <button
+            onClick={() => community.joinMode === 'approval' ? setShowJoinModal(true) : handleJoin()}
+            disabled={joining}
+            className="btn btn-primary mt-4 md:mt-0 disabled:opacity-50"
+          >
+            {joining ? 'Joining...' : community.joinMode === 'approval' ? 'Request to Join' : 'Join Community'}
+          </button>
         </div>
+
+        {/* Join Result Message */}
+        {joinResult && (
+          <div className={`mt-4 p-4 rounded-lg ${joinResult.success ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-red-500/20 text-red-300 border border-red-500/30'}`}>
+            {joinResult.message}
+          </div>
+        )}
 
         {/* Content */}
         <div className="py-8">
@@ -89,6 +135,40 @@ function CommunityPublicPage() {
           </div>
         </div>
       </div>
+
+      {/* Join Request Modal */}
+      {showJoinModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="card max-w-md w-full p-6">
+            <h3 className="text-xl font-semibold mb-4 text-sky-100">Request to Join</h3>
+            <p className="text-navy-400 mb-4">
+              This community requires approval to join. You can include a message with your request.
+            </p>
+            <textarea
+              value={joinMessage}
+              onChange={(e) => setJoinMessage(e.target.value)}
+              placeholder="Tell the admins why you want to join... (optional)"
+              className="w-full p-3 bg-navy-800 border border-navy-600 rounded-lg text-sky-100 placeholder-navy-500 focus:border-sky-500 focus:outline-none mb-4"
+              rows={3}
+            />
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowJoinModal(false)}
+                className="btn btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleJoin}
+                disabled={joining}
+                className="btn btn-primary disabled:opacity-50"
+              >
+                {joining ? 'Submitting...' : 'Submit Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

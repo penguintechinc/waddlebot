@@ -162,19 +162,26 @@ CREATE TABLE IF NOT EXISTS communities (
     name VARCHAR(100) UNIQUE NOT NULL,
     display_name VARCHAR(200),
     description TEXT,
-    platform VARCHAR(50),
-    platform_id VARCHAR(100),
-    logo_url TEXT,
-    banner_url TEXT,
+    platform VARCHAR(50) NOT NULL,
+    platform_server_id VARCHAR(255),
+    owner_id INTEGER REFERENCES hub_users(id),
+    owner_name VARCHAR(255),
+    member_count INTEGER DEFAULT 0,
     is_active BOOLEAN DEFAULT TRUE,
     is_public BOOLEAN DEFAULT TRUE,
-    owner_id INTEGER REFERENCES hub_users(id),
+    join_mode VARCHAR(20) DEFAULT 'open',
+    config JSONB DEFAULT '{}',
+    created_by VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP,
+    deleted_by VARCHAR(255)
 );
+COMMENT ON COLUMN communities.join_mode IS 'open = anyone can join, approval = requires admin/mod approval, invite = invite only';
 
 CREATE INDEX IF NOT EXISTS idx_communities_name ON communities(name);
-CREATE INDEX IF NOT EXISTS idx_communities_platform ON communities(platform, platform_id);
+CREATE INDEX IF NOT EXISTS idx_communities_platform ON communities(platform, platform_server_id);
+CREATE INDEX IF NOT EXISTS idx_communities_active ON communities(is_active, is_public);
 
 -- Community members
 CREATE TABLE IF NOT EXISTS community_members (
@@ -190,6 +197,105 @@ CREATE TABLE IF NOT EXISTS community_members (
 
 CREATE INDEX IF NOT EXISTS idx_community_members_community ON community_members(community_id);
 CREATE INDEX IF NOT EXISTS idx_community_members_user ON community_members(user_id);
+
+-- Join requests for approval workflow
+CREATE TABLE IF NOT EXISTS join_requests (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE,
+    message TEXT,
+    status VARCHAR(20) DEFAULT 'pending',
+    reviewed_by INTEGER REFERENCES hub_users(id),
+    reviewed_at TIMESTAMP,
+    review_note TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(community_id, user_id)
+);
+COMMENT ON COLUMN join_requests.status IS 'pending, approved, rejected';
+CREATE INDEX IF NOT EXISTS idx_join_requests_community ON join_requests(community_id, status);
+CREATE INDEX IF NOT EXISTS idx_join_requests_user ON join_requests(user_id);
+
+-- Community Servers (linked Discord/Twitch/Slack servers)
+CREATE TABLE IF NOT EXISTS community_servers (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    platform VARCHAR(50) NOT NULL,
+    platform_server_id VARCHAR(255) NOT NULL,
+    platform_server_name VARCHAR(255),
+    link_type VARCHAR(20) DEFAULT 'server',
+    added_by INTEGER REFERENCES hub_users(id),
+    approved_by INTEGER REFERENCES hub_users(id),
+    status VARCHAR(20) DEFAULT 'pending',
+    is_primary BOOLEAN DEFAULT FALSE,
+    config JSONB DEFAULT '{}',
+    verified_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(community_id, platform, platform_server_id)
+);
+COMMENT ON COLUMN community_servers.link_type IS 'server = whole server, channel = specific channels only';
+COMMENT ON COLUMN community_servers.status IS 'pending, approved, rejected';
+CREATE INDEX IF NOT EXISTS idx_community_servers_community ON community_servers(community_id, status);
+CREATE INDEX IF NOT EXISTS idx_community_servers_platform ON community_servers(platform, platform_server_id);
+
+-- Community Server Channels (for Discord/Slack specific channels)
+CREATE TABLE IF NOT EXISTS community_server_channels (
+    id SERIAL PRIMARY KEY,
+    community_server_id INTEGER REFERENCES community_servers(id) ON DELETE CASCADE,
+    platform_channel_id VARCHAR(255) NOT NULL,
+    platform_channel_name VARCHAR(255),
+    channel_type VARCHAR(50),
+    is_active BOOLEAN DEFAULT TRUE,
+    config JSONB DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(community_server_id, platform_channel_id)
+);
+CREATE INDEX IF NOT EXISTS idx_community_server_channels_server ON community_server_channels(community_server_id);
+
+-- Server Link Requests (for non-admin users requesting to link their server)
+CREATE TABLE IF NOT EXISTS server_link_requests (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    platform VARCHAR(50) NOT NULL,
+    platform_server_id VARCHAR(255) NOT NULL,
+    platform_server_name VARCHAR(255),
+    requested_by INTEGER REFERENCES hub_users(id),
+    status VARCHAR(20) DEFAULT 'pending',
+    reviewed_by INTEGER REFERENCES hub_users(id),
+    reviewed_at TIMESTAMP,
+    review_note TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_server_link_requests_community ON server_link_requests(community_id, status);
+
+-- Mirror Groups (cross-platform chat mirroring configuration)
+CREATE TABLE IF NOT EXISTS mirror_groups (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    config JSONB DEFAULT '{"messageTypes": ["chat"]}',
+    created_by INTEGER REFERENCES hub_users(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+COMMENT ON COLUMN mirror_groups.config IS 'Contains messageTypes array: chat, sub, follow, raid, donation, cheer';
+CREATE INDEX IF NOT EXISTS idx_mirror_groups_community ON mirror_groups(community_id, is_active);
+
+-- Mirror Group Members (channels in a mirror group)
+CREATE TABLE IF NOT EXISTS mirror_group_members (
+    id SERIAL PRIMARY KEY,
+    mirror_group_id INTEGER REFERENCES mirror_groups(id) ON DELETE CASCADE,
+    community_server_id INTEGER REFERENCES community_servers(id) ON DELETE CASCADE,
+    community_server_channel_id INTEGER REFERENCES community_server_channels(id) ON DELETE SET NULL,
+    direction VARCHAR(20) DEFAULT 'bidirectional',
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(mirror_group_id, community_server_id, community_server_channel_id)
+);
+COMMENT ON COLUMN mirror_group_members.direction IS 'send_only, receive_only, bidirectional';
+CREATE INDEX IF NOT EXISTS idx_mirror_group_members_group ON mirror_group_members(mirror_group_id);
+CREATE INDEX IF NOT EXISTS idx_mirror_group_members_server ON mirror_group_members(community_server_id);
 
 -- Create default super admin user (password: admin123)
 INSERT INTO hub_users (email, username, password_hash, is_super_admin, is_active, email_verified)
