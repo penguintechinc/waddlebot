@@ -296,6 +296,32 @@ services:
       retries: 3
     restart: unless-stopped
 
+  youtube-live-collector:
+    build:
+      context: .
+      dockerfile: trigger/receiver/youtube_live_module/Dockerfile
+    container_name: waddlebot-youtube-live
+    environment:
+      MODULE_NAME: youtube-live-collector
+      MODULE_PORT: 8006
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      ROUTER_API_URL: http://router:8000
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET}
+      YOUTUBE_WEBHOOK_CALLBACK_URL: ${YOUTUBE_WEBHOOK_CALLBACK_URL}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      - router
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8006/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
   # =============================================================================
   # INTERACTION MODULES (Internal)
   # =============================================================================

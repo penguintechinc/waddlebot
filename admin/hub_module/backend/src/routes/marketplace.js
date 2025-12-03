@@ -2,13 +2,13 @@
  * Marketplace Routes - Module marketplace for community admins
  */
 import { Router } from 'express';
-import { authenticate, requireCommunityAdmin } from '../middleware/auth.js';
+import { requireAuth, requireCommunityAdmin } from '../middleware/auth.js';
 import * as marketplaceController from '../controllers/marketplaceController.js';
 
 const router = Router();
 
 // All marketplace routes require authentication and community admin role
-router.use(authenticate);
+router.use(requireAuth);
 
 // Browse modules
 router.get(

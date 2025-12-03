@@ -3,6 +3,7 @@
  */
 import { Router } from 'express';
 import * as superadminController from '../controllers/superadminController.js';
+import * as platformConfigController from '../controllers/platformConfigController.js';
 import { requireAuth, requireSuperAdmin } from '../middleware/auth.js';
 
 const router = Router();
@@ -28,5 +29,10 @@ router.post('/marketplace/modules', superadminController.createModule);
 router.put('/marketplace/modules/:id', superadminController.updateModule);
 router.put('/marketplace/modules/:id/publish', superadminController.publishModule);
 router.delete('/marketplace/modules/:id', superadminController.deleteModule);
+
+// Platform configuration management
+router.get('/platform-config', platformConfigController.getPlatformConfigs);
+router.put('/platform-config/:platform', platformConfigController.updatePlatformConfig);
+router.post('/platform-config/:platform/test', platformConfigController.testPlatformConnection);
 
 export default router;

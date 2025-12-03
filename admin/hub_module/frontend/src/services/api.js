@@ -127,6 +127,10 @@ export const superAdminApi = {
   updateModule: (id, data) => api.put(`/api/v1/superadmin/marketplace/modules/${id}`, data),
   publishModule: (id, isPublished) => api.put(`/api/v1/superadmin/marketplace/modules/${id}/publish`, { isPublished }),
   deleteModule: (id) => api.delete(`/api/v1/superadmin/marketplace/modules/${id}`),
+  // Platform configuration
+  getPlatformConfigs: () => api.get('/api/v1/superadmin/platform-config'),
+  updatePlatformConfig: (platform, data) => api.put(`/api/v1/superadmin/platform-config/${platform}`, data),
+  testPlatformConnection: (platform) => api.post(`/api/v1/superadmin/platform-config/${platform}/test`),
 };
 
 // Marketplace API

@@ -130,6 +130,7 @@ section "Trigger Modules (Receivers)"
 test_docker_health "Twitch Receiver" "waddlebot-twitch"
 test_docker_health "Discord Receiver" "waddlebot-discord"
 test_docker_health "Slack Receiver" "waddlebot-slack"
+test_docker_health "YouTube Live Receiver" "waddlebot-youtube-live"
 
 # ============================================
 # ACTION MODULES (Interactive)

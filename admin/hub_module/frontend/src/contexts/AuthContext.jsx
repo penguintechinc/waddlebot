@@ -46,6 +46,39 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  const login = useCallback(async (email, password) => {
+    try {
+      setError(null);
+      const response = await api.post('/api/v1/auth/login', { email, password });
+      if (response.data.success) {
+        localStorage.setItem('token', response.data.token);
+        setUser(response.data.user);
+        return response.data;
+      }
+    } catch (err) {
+      const message = err.response?.data?.error?.message || err.response?.data?.error || 'Login failed';
+      setError(message);
+      throw new Error(message);
+    }
+  }, []);
+
+  const register = useCallback(async (email, password, username) => {
+    try {
+      setError(null);
+      const response = await api.post('/api/v1/auth/register', { email, password, username });
+      if (response.data.success) {
+        localStorage.setItem('token', response.data.token);
+        setUser(response.data.user);
+        return response.data;
+      }
+    } catch (err) {
+      const message = err.response?.data?.error?.message || err.response?.data?.error || 'Registration failed';
+      setError(message);
+      throw new Error(message);
+    }
+  }, []);
+
+  // Legacy admin login (backwards compatibility)
   const loginWithAdmin = useCallback(async (username, password) => {
     try {
       setError(null);
@@ -112,6 +145,8 @@ export function AuthProvider({ children }) {
     user,
     loading,
     error,
+    login,
+    register,
     loginWithOAuth,
     loginWithAdmin,
     loginWithTempPassword,
@@ -121,6 +156,7 @@ export function AuthProvider({ children }) {
     isAuthenticated: !!user,
     isAdmin: user?.isAdmin || user?.roles?.includes('admin'),
     isSuperAdmin: user?.isSuperAdmin || user?.roles?.includes('super_admin'),
+    isPlatformAdmin: user?.roles?.includes('platform-admin'),
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

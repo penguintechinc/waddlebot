@@ -41,6 +41,7 @@ import SuperAdminDashboard from './pages/superadmin/SuperAdminDashboard';
 import SuperAdminCommunities from './pages/superadmin/SuperAdminCommunities';
 import SuperAdminCreateCommunity from './pages/superadmin/SuperAdminCreateCommunity';
 import SuperAdminModuleRegistry from './pages/superadmin/SuperAdminModuleRegistry';
+import SuperAdminPlatformConfig from './pages/superadmin/SuperAdminPlatformConfig';
 
 // Loading spinner
 function LoadingSpinner() {
@@ -131,11 +132,11 @@ function App() {
         <Route path="/platform/communities" element={<PlatformCommunities />} />
       </Route>
 
-      {/* Super admin routes */}
+      {/* Super admin routes - uses DashboardLayout with sidebar admin section */}
       <Route
         element={
           <ProtectedRoute requireSuperAdmin>
-            <AdminLayout />
+            <DashboardLayout />
           </ProtectedRoute>
         }
       >
@@ -143,6 +144,7 @@ function App() {
         <Route path="/superadmin/communities" element={<SuperAdminCommunities />} />
         <Route path="/superadmin/communities/new" element={<SuperAdminCreateCommunity />} />
         <Route path="/superadmin/modules" element={<SuperAdminModuleRegistry />} />
+        <Route path="/superadmin/platform-config" element={<SuperAdminPlatformConfig />} />
       </Route>
 
       {/* Catch all - redirect to home */}

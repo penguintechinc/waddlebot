@@ -1,8 +1,14 @@
 /**
- * Auth Controller - OAuth and temp password authentication
+ * Auth Controller - Unified local login with OAuth platform linking
+ *
+ * Authentication Flow:
+ * 1. Local login: email/password -> creates/validates hub_users record
+ * 2. OAuth login: platform auth -> finds/creates hub_users record, links identity
+ * 3. Platform linking: adds platform identity to existing user
  */
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 import { query, transaction } from '../config/database.js';
@@ -13,7 +19,139 @@ import { logger } from '../utils/logger.js';
 const SALT_ROUNDS = 12;
 
 /**
- * Local admin login
+ * Register new user with local credentials
+ */
+export async function register(req, res, next) {
+  try {
+    const { email, password, username } = req.body;
+
+    if (!email || !password) {
+      return next(errors.badRequest('Email and password required'));
+    }
+
+    // Check if email already exists
+    const existingUser = await query(
+      'SELECT id FROM hub_users WHERE email = $1',
+      [email.toLowerCase()]
+    );
+
+    if (existingUser.rows.length > 0) {
+      return next(errors.conflict('Email already registered'));
+    }
+
+    // Hash password
+    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+
+    // Create user
+    const result = await query(
+      `INSERT INTO hub_users (email, password_hash, username, is_active, created_at)
+       VALUES ($1, $2, $3, true, NOW())
+       RETURNING id, email, username`,
+      [email.toLowerCase(), passwordHash, username || email.split('@')[0]]
+    );
+
+    const user = result.rows[0];
+
+    // Create session
+    const sessionToken = await createSession({
+      userId: user.id,
+      username: user.username,
+      email: user.email,
+    });
+
+    logger.auth('User registered', { userId: user.id, email: user.email });
+
+    res.json({
+      success: true,
+      token: sessionToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Local login with email/password
+ */
+export async function login(req, res, next) {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return next(errors.badRequest('Email and password required'));
+    }
+
+    // Find user
+    const result = await query(
+      `SELECT u.id, u.email, u.username, u.password_hash, u.avatar_url, u.is_active, u.is_super_admin,
+              array_agg(DISTINCT ui.platform) FILTER (WHERE ui.platform IS NOT NULL) as linked_platforms
+       FROM hub_users u
+       LEFT JOIN hub_user_identities ui ON ui.user_id = u.id
+       WHERE u.email = $1
+       GROUP BY u.id`,
+      [email.toLowerCase()]
+    );
+
+    if (result.rows.length === 0) {
+      logger.auth('Login failed - user not found', { email });
+      return next(errors.unauthorized('Invalid credentials'));
+    }
+
+    const user = result.rows[0];
+
+    if (!user.is_active) {
+      logger.auth('Login failed - user inactive', { email });
+      return next(errors.unauthorized('Account is inactive'));
+    }
+
+    // Verify password
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid) {
+      logger.auth('Login failed - invalid password', { email });
+      return next(errors.unauthorized('Invalid credentials'));
+    }
+
+    // Update last login
+    await query(
+      'UPDATE hub_users SET last_login = NOW() WHERE id = $1',
+      [user.id]
+    );
+
+    // Create session
+    const sessionToken = await createSession({
+      userId: user.id,
+      username: user.username,
+      email: user.email,
+      avatarUrl: user.avatar_url,
+      isSuperAdmin: user.is_super_admin,
+    });
+
+    logger.auth('Login successful', { userId: user.id, email: user.email });
+
+    res.json({
+      success: true,
+      token: sessionToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        avatarUrl: user.avatar_url,
+        isSuperAdmin: user.is_super_admin,
+        linkedPlatforms: user.linked_platforms || [],
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Legacy admin login - maps to hub_users with is_super_admin flag
  */
 export async function adminLogin(req, res, next) {
   try {
@@ -23,11 +161,11 @@ export async function adminLogin(req, res, next) {
       return next(errors.badRequest('Username and password required'));
     }
 
-    // Find admin user
+    // Find user by username or email
     const result = await query(
-      `SELECT id, username, password_hash, email, is_active, is_super_admin
-       FROM hub_admins
-       WHERE username = $1 AND is_active = true`,
+      `SELECT id, email, username, password_hash, avatar_url, is_active, is_super_admin
+       FROM hub_users
+       WHERE (username = $1 OR email = $1) AND is_active = true`,
       [username]
     );
 
@@ -36,10 +174,10 @@ export async function adminLogin(req, res, next) {
       return next(errors.unauthorized('Invalid credentials'));
     }
 
-    const admin = result.rows[0];
+    const user = result.rows[0];
 
     // Verify password
-    const valid = await bcrypt.compare(password, admin.password_hash);
+    const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
       logger.auth('Admin login failed - invalid password', { username });
       return next(errors.unauthorized('Invalid credentials'));
@@ -47,30 +185,31 @@ export async function adminLogin(req, res, next) {
 
     // Update last login
     await query(
-      'UPDATE hub_admins SET last_login = NOW() WHERE id = $1',
-      [admin.id]
+      'UPDATE hub_users SET last_login = NOW() WHERE id = $1',
+      [user.id]
     );
 
     // Create session
     const sessionToken = await createSession({
-      platform: 'admin',
-      platformUserId: admin.id.toString(),
-      username: admin.username,
-      isAdmin: true,
-      isSuperAdmin: admin.is_super_admin,
+      userId: user.id,
+      username: user.username,
+      email: user.email,
+      avatarUrl: user.avatar_url,
+      isSuperAdmin: user.is_super_admin,
     });
 
-    logger.auth('Admin login successful', { username, isSuperAdmin: admin.is_super_admin });
+    logger.auth('Admin login successful', { username, isSuperAdmin: user.is_super_admin });
 
     res.json({
       success: true,
       token: sessionToken,
       user: {
-        id: admin.id,
-        username: admin.username,
-        email: admin.email,
-        isAdmin: true,
-        isSuperAdmin: admin.is_super_admin,
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        avatarUrl: user.avatar_url,
+        isAdmin: user.is_super_admin, // Legacy compatibility
+        isSuperAdmin: user.is_super_admin,
       },
     });
   } catch (err) {
@@ -84,7 +223,8 @@ export async function adminLogin(req, res, next) {
 export async function startOAuth(req, res, next) {
   try {
     const { platform } = req.params;
-    const validPlatforms = ['discord', 'twitch', 'slack'];
+    const { mode } = req.query; // 'login' or 'link'
+    const validPlatforms = ['discord', 'twitch', 'slack', 'youtube'];
 
     if (!validPlatforms.includes(platform)) {
       return next(errors.badRequest('Invalid platform'));
@@ -93,14 +233,28 @@ export async function startOAuth(req, res, next) {
     const state = uuidv4();
     const redirectUri = `${config.identity.callbackBaseUrl}/api/v1/auth/oauth/${platform}/callback`;
 
-    // Get OAuth URL from Identity Core
-    const response = await axios.get(
-      `${config.identity.apiUrl}/auth/oauth/${platform}/authorize`,
-      { params: { redirect_uri: redirectUri, state } }
+    // Store state with mode for callback
+    await query(
+      `INSERT INTO hub_oauth_states (state, mode, platform, expires_at)
+       VALUES ($1, $2, $3, NOW() + INTERVAL '10 minutes')`,
+      [state, mode || 'login', platform]
     );
 
-    logger.auth('OAuth flow started', { platform, state });
-    res.json({ success: true, authorizeUrl: response.data.authorize_url, state });
+    // Get OAuth URL from Identity Core or direct platform config
+    let authorizeUrl;
+    try {
+      const response = await axios.get(
+        `${config.identity.apiUrl}/auth/oauth/${platform}/authorize`,
+        { params: { redirect_uri: redirectUri, state } }
+      );
+      authorizeUrl = response.data.authorize_url;
+    } catch {
+      // Fallback to generating URL directly from platform config
+      authorizeUrl = await generateOAuthUrl(platform, redirectUri, state);
+    }
+
+    logger.auth('OAuth flow started', { platform, state, mode: mode || 'login' });
+    res.json({ success: true, authorizeUrl, state });
   } catch (err) {
     logger.error('OAuth start error', { error: err.message });
     next(err);
@@ -113,37 +267,288 @@ export async function startOAuth(req, res, next) {
 export async function oauthCallback(req, res, next) {
   try {
     const { platform } = req.params;
-    const { code, state } = req.query;
+    const { code, state, error: oauthError } = req.query;
+
+    if (oauthError) {
+      logger.auth('OAuth error from provider', { platform, error: oauthError });
+      return res.redirect(`${config.cors.origin}/login?error=oauth_denied`);
+    }
 
     if (!code) {
       return next(errors.badRequest('Missing authorization code'));
     }
 
+    // Verify state
+    const stateResult = await query(
+      `SELECT mode FROM hub_oauth_states
+       WHERE state = $1 AND platform = $2 AND expires_at > NOW()`,
+      [state, platform]
+    );
+
+    if (stateResult.rows.length === 0) {
+      logger.auth('OAuth invalid state', { platform, state });
+      return res.redirect(`${config.cors.origin}/login?error=invalid_state`);
+    }
+
+    const { mode } = stateResult.rows[0];
+
+    // Clean up state
+    await query('DELETE FROM hub_oauth_states WHERE state = $1', [state]);
+
     const redirectUri = `${config.identity.callbackBaseUrl}/api/v1/auth/oauth/${platform}/callback`;
 
     // Exchange code with Identity Core
-    const response = await axios.post(
-      `${config.identity.apiUrl}/auth/oauth/${platform}/callback`,
-      { code, redirect_uri: redirectUri, state }
-    );
+    let userData;
+    try {
+      const response = await axios.post(
+        `${config.identity.apiUrl}/auth/oauth/${platform}/callback`,
+        { code, redirect_uri: redirectUri, state }
+      );
+      userData = response.data.user;
+    } catch {
+      // Fallback to direct platform exchange
+      userData = await exchangeOAuthCode(platform, code, redirectUri);
+    }
 
-    const userData = response.data.user;
+    // Find or create user
+    const user = await findOrCreateUserFromOAuth(platform, userData, mode);
 
-    // Create or update user session
+    // Create session
     const sessionToken = await createSession({
-      platform,
-      platformUserId: userData.id,
-      username: userData.username,
-      avatarUrl: userData.avatar_url,
+      userId: user.id,
+      username: user.username,
+      email: user.email,
+      avatarUrl: user.avatar_url,
+      isSuperAdmin: user.is_super_admin,
     });
 
-    logger.auth('OAuth login successful', { platform, userId: userData.id });
+    logger.auth('OAuth login successful', { platform, userId: user.id });
 
     // Redirect to frontend with token
     res.redirect(`${config.cors.origin}/auth/callback?token=${sessionToken}`);
   } catch (err) {
     logger.error('OAuth callback error', { error: err.message });
     res.redirect(`${config.cors.origin}/login?error=oauth_failed`);
+  }
+}
+
+/**
+ * Find or create user from OAuth data
+ */
+async function findOrCreateUserFromOAuth(platform, userData, mode) {
+  // Check if this platform identity already exists
+  const identityResult = await query(
+    `SELECT ui.user_id, u.id, u.email, u.username, u.avatar_url, u.is_super_admin
+     FROM hub_user_identities ui
+     JOIN hub_users u ON u.id = ui.user_id
+     WHERE ui.platform = $1 AND ui.platform_user_id = $2`,
+    [platform, userData.id]
+  );
+
+  if (identityResult.rows.length > 0) {
+    // Existing user, update their platform info
+    await query(
+      `UPDATE hub_user_identities
+       SET platform_username = $1, platform_avatar = $2, access_token = $3, refresh_token = $4, last_used = NOW()
+       WHERE platform = $5 AND platform_user_id = $6`,
+      [userData.username, userData.avatar_url, userData.access_token, userData.refresh_token, platform, userData.id]
+    );
+    return identityResult.rows[0];
+  }
+
+  // No existing identity, create new user + identity
+  const email = userData.email || `${userData.username}@${platform}.local`;
+  const username = userData.username;
+
+  // Check if email matches existing user
+  const existingUser = await query(
+    'SELECT id, email, username, avatar_url, is_super_admin FROM hub_users WHERE email = $1',
+    [email.toLowerCase()]
+  );
+
+  let userId;
+  let user;
+
+  if (existingUser.rows.length > 0) {
+    // Link to existing user
+    user = existingUser.rows[0];
+    userId = user.id;
+    logger.auth('Linking OAuth to existing user', { platform, userId, email });
+  } else {
+    // Create new user
+    const newUser = await query(
+      `INSERT INTO hub_users (email, username, avatar_url, is_active, created_at)
+       VALUES ($1, $2, $3, true, NOW())
+       RETURNING id, email, username, avatar_url, is_super_admin`,
+      [email.toLowerCase(), username, userData.avatar_url]
+    );
+    user = newUser.rows[0];
+    userId = user.id;
+    logger.auth('Created new user from OAuth', { platform, userId, email });
+  }
+
+  // Create identity link
+  await query(
+    `INSERT INTO hub_user_identities
+     (user_id, platform, platform_user_id, platform_username, platform_email, platform_avatar, access_token, refresh_token, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+    [userId, platform, userData.id, userData.username, userData.email, userData.avatar_url, userData.access_token, userData.refresh_token]
+  );
+
+  return user;
+}
+
+/**
+ * Link OAuth account to current user
+ */
+export async function linkOAuthAccount(req, res, next) {
+  try {
+    if (!req.user) {
+      return next(errors.unauthorized());
+    }
+
+    const { platform } = req.params;
+    const validPlatforms = ['discord', 'twitch', 'slack', 'youtube'];
+
+    if (!validPlatforms.includes(platform)) {
+      return next(errors.badRequest('Invalid platform'));
+    }
+
+    const state = uuidv4();
+    const redirectUri = `${config.identity.callbackBaseUrl}/api/v1/auth/oauth/${platform}/link-callback`;
+
+    // Store state with user ID for callback
+    await query(
+      `INSERT INTO hub_oauth_states (state, mode, platform, user_id, expires_at)
+       VALUES ($1, 'link', $2, $3, NOW() + INTERVAL '10 minutes')`,
+      [state, platform, req.user.userId]
+    );
+
+    // Get OAuth URL
+    let authorizeUrl;
+    try {
+      const response = await axios.get(
+        `${config.identity.apiUrl}/auth/oauth/${platform}/authorize`,
+        { params: { redirect_uri: redirectUri, state } }
+      );
+      authorizeUrl = response.data.authorize_url;
+    } catch {
+      authorizeUrl = await generateOAuthUrl(platform, redirectUri, state);
+    }
+
+    logger.auth('OAuth link flow started', { platform, userId: req.user.userId });
+    res.json({ success: true, authorizeUrl, state });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * OAuth link callback - link platform to existing user
+ */
+export async function oauthLinkCallback(req, res, next) {
+  try {
+    const { platform } = req.params;
+    const { code, state, error: oauthError } = req.query;
+
+    if (oauthError) {
+      return res.redirect(`${config.cors.origin}/dashboard/settings?error=link_denied`);
+    }
+
+    // Verify state and get user ID
+    const stateResult = await query(
+      `SELECT user_id FROM hub_oauth_states
+       WHERE state = $1 AND platform = $2 AND mode = 'link' AND expires_at > NOW()`,
+      [state, platform]
+    );
+
+    if (stateResult.rows.length === 0) {
+      return res.redirect(`${config.cors.origin}/dashboard/settings?error=invalid_state`);
+    }
+
+    const { user_id: userId } = stateResult.rows[0];
+    await query('DELETE FROM hub_oauth_states WHERE state = $1', [state]);
+
+    const redirectUri = `${config.identity.callbackBaseUrl}/api/v1/auth/oauth/${platform}/link-callback`;
+
+    // Exchange code
+    let userData;
+    try {
+      const response = await axios.post(
+        `${config.identity.apiUrl}/auth/oauth/${platform}/callback`,
+        { code, redirect_uri: redirectUri, state }
+      );
+      userData = response.data.user;
+    } catch {
+      userData = await exchangeOAuthCode(platform, code, redirectUri);
+    }
+
+    // Check if this platform identity is already linked to another user
+    const existingIdentity = await query(
+      'SELECT user_id FROM hub_user_identities WHERE platform = $1 AND platform_user_id = $2',
+      [platform, userData.id]
+    );
+
+    if (existingIdentity.rows.length > 0 && existingIdentity.rows[0].user_id !== userId) {
+      return res.redirect(`${config.cors.origin}/dashboard/settings?error=platform_already_linked`);
+    }
+
+    // Upsert identity
+    await query(
+      `INSERT INTO hub_user_identities
+       (user_id, platform, platform_user_id, platform_username, platform_email, platform_avatar, access_token, refresh_token, created_at, last_used)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+       ON CONFLICT (platform, platform_user_id)
+       DO UPDATE SET platform_username = $4, platform_avatar = $6, access_token = $7, refresh_token = $8, last_used = NOW()`,
+      [userId, platform, userData.id, userData.username, userData.email, userData.avatar_url, userData.access_token, userData.refresh_token]
+    );
+
+    logger.auth('OAuth account linked', { platform, userId, platformUserId: userData.id });
+    res.redirect(`${config.cors.origin}/dashboard/settings?linked=${platform}`);
+  } catch (err) {
+    logger.error('OAuth link callback error', { error: err.message });
+    res.redirect(`${config.cors.origin}/dashboard/settings?error=link_failed`);
+  }
+}
+
+/**
+ * Unlink OAuth account from current user
+ */
+export async function unlinkOAuthAccount(req, res, next) {
+  try {
+    if (!req.user) {
+      return next(errors.unauthorized());
+    }
+
+    const { platform } = req.params;
+
+    // Check user has password set (can't unlink all if no password)
+    const userResult = await query(
+      'SELECT password_hash FROM hub_users WHERE id = $1',
+      [req.user.userId]
+    );
+
+    if (!userResult.rows[0]?.password_hash) {
+      // Count linked platforms
+      const countResult = await query(
+        'SELECT COUNT(*) as count FROM hub_user_identities WHERE user_id = $1',
+        [req.user.userId]
+      );
+
+      if (parseInt(countResult.rows[0].count) <= 1) {
+        return next(errors.badRequest('Cannot unlink last platform without a password. Please set a password first.'));
+      }
+    }
+
+    await query(
+      'DELETE FROM hub_user_identities WHERE user_id = $1 AND platform = $2',
+      [req.user.userId, platform]
+    );
+
+    logger.auth('OAuth account unlinked', { platform, userId: req.user.userId });
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
   }
 }
 
@@ -187,8 +592,7 @@ export async function tempPasswordLogin(req, res, next) {
 
     // Create session with pending OAuth link
     const sessionToken = await createSession({
-      platform: 'temp',
-      platformUserId: tempPw.id.toString(),
+      userId: null,
       username: identifier,
       requiresOAuthLink: tempPw.force_oauth_link,
       communityId: tempPw.community_id,
@@ -207,7 +611,7 @@ export async function tempPasswordLogin(req, res, next) {
 }
 
 /**
- * Link OAuth account after temp password login
+ * Legacy link OAuth (temp password flow)
  */
 export async function linkOAuth(req, res, next) {
   try {
@@ -231,8 +635,7 @@ export async function linkOAuth(req, res, next) {
 
     // Create new session with OAuth identity
     const sessionToken = await createSession({
-      platform,
-      platformUserId,
+      userId: null,
       username,
     });
 
@@ -270,10 +673,11 @@ export async function refreshToken(req, res, next) {
 
     // Create new token
     const newToken = await createSession({
-      platform: decoded.platform,
-      platformUserId: decoded.platformUserId,
+      userId: decoded.userId,
       username: decoded.username,
+      email: decoded.email,
       avatarUrl: decoded.avatarUrl,
+      isSuperAdmin: decoded.isSuperAdmin,
     });
 
     // Invalidate old token
@@ -321,61 +725,55 @@ export async function getCurrentUser(req, res, next) {
       return res.json({ success: true, user: null });
     }
 
-    // For admin users, return admin info directly
-    if (req.user.platform === 'admin') {
-      // Get admin details from hub_admins
-      const adminResult = await query(
-        'SELECT id, username, email, is_super_admin FROM hub_admins WHERE id = $1 AND is_active = true',
-        [parseInt(req.user.platformUserId, 10)]
-      );
+    // Get user with linked platforms
+    const userResult = await query(
+      `SELECT u.id, u.email, u.username, u.avatar_url, u.is_super_admin, u.password_hash IS NOT NULL as has_password,
+              COALESCE(json_agg(
+                json_build_object(
+                  'platform', ui.platform,
+                  'username', ui.platform_username,
+                  'avatar', ui.platform_avatar
+                )
+              ) FILTER (WHERE ui.platform IS NOT NULL), '[]') as linked_platforms
+       FROM hub_users u
+       LEFT JOIN hub_user_identities ui ON ui.user_id = u.id
+       WHERE u.id = $1
+       GROUP BY u.id`,
+      [req.user.userId]
+    );
 
-      if (adminResult.rows.length === 0) {
-        return res.json({ success: true, user: null });
-      }
-
-      const admin = adminResult.rows[0];
-      return res.json({
-        success: true,
-        user: {
-          id: admin.id,
-          platform: 'admin',
-          platformUserId: admin.id.toString(),
-          username: admin.username,
-          email: admin.email,
-          roles: req.user.roles,
-          isAdmin: true,
-          isSuperAdmin: admin.is_super_admin,
-          communities: [], // Admins can access all communities
-        },
-      });
+    if (userResult.rows.length === 0) {
+      return res.json({ success: true, user: null });
     }
 
-    // Get user's communities for regular users
-    let communities = [];
-    if (req.user.id) {
-      const communitiesResult = await query(
-        `SELECT c.id, c.name, c.display_name, cm.role
-         FROM community_members cm
-         JOIN communities c ON c.id = cm.community_id
-         WHERE cm.user_id = $1 AND cm.is_active = true AND c.is_active = true`,
-        [req.user.id]
-      );
-      communities = communitiesResult.rows.map(r => ({
-        id: r.id,
-        name: r.name,
-        displayName: r.display_name || r.name,
-        role: r.role,
-      }));
-    }
+    const user = userResult.rows[0];
+
+    // Get user's communities
+    const communitiesResult = await query(
+      `SELECT c.id, c.name, c.display_name, cm.role
+       FROM community_members cm
+       JOIN communities c ON c.id = cm.community_id
+       WHERE cm.user_id = $1 AND cm.is_active = true AND c.is_active = true`,
+      [user.id]
+    );
+
+    const communities = communitiesResult.rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      displayName: r.display_name || r.name,
+      role: r.role,
+    }));
 
     res.json({
       success: true,
       user: {
-        id: req.user.id,
-        platform: req.user.platform,
-        platformUserId: req.user.platformUserId,
-        username: req.user.username,
-        avatarUrl: req.user.avatarUrl,
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        avatarUrl: user.avatar_url,
+        isSuperAdmin: user.is_super_admin,
+        hasPassword: user.has_password,
+        linkedPlatforms: user.linked_platforms,
         roles: req.user.roles,
         communities,
       },
@@ -386,36 +784,73 @@ export async function getCurrentUser(req, res, next) {
 }
 
 /**
+ * Set password for current user
+ */
+export async function setPassword(req, res, next) {
+  try {
+    if (!req.user) {
+      return next(errors.unauthorized());
+    }
+
+    const { currentPassword, newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 8) {
+      return next(errors.badRequest('Password must be at least 8 characters'));
+    }
+
+    // Get current user
+    const userResult = await query(
+      'SELECT password_hash FROM hub_users WHERE id = $1',
+      [req.user.userId]
+    );
+
+    if (userResult.rows.length === 0) {
+      return next(errors.notFound('User not found'));
+    }
+
+    const user = userResult.rows[0];
+
+    // If user has password, verify current password
+    if (user.password_hash) {
+      if (!currentPassword) {
+        return next(errors.badRequest('Current password required'));
+      }
+      const valid = await bcrypt.compare(currentPassword, user.password_hash);
+      if (!valid) {
+        return next(errors.unauthorized('Current password is incorrect'));
+      }
+    }
+
+    // Hash and save new password
+    const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    await query(
+      'UPDATE hub_users SET password_hash = $1 WHERE id = $2',
+      [passwordHash, req.user.userId]
+    );
+
+    logger.auth('Password set', { userId: req.user.userId });
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * Create session and JWT token
  */
-async function createSession({ platform, platformUserId, username, avatarUrl, requiresOAuthLink, communityId, isAdmin, isSuperAdmin }) {
-  // Look up or create user ID
-  let userId = null;
-
-  if (platform !== 'temp' && platform !== 'admin') {
-    // Check if user exists by platform identity
-    const userResult = await query(
-      `SELECT id FROM community_members WHERE platform = $1 AND platform_user_id = $2 LIMIT 1`,
-      [platform, platformUserId]
-    );
-    userId = userResult.rows[0]?.id;
-  }
-
+async function createSession({ userId, username, email, avatarUrl, isSuperAdmin, requiresOAuthLink, communityId }) {
   // Build roles array
   const roles = [];
-  if (isAdmin) roles.push('admin');
-  if (isSuperAdmin) roles.push('super_admin');
+  if (isSuperAdmin) roles.push('admin', 'super_admin');
 
   // Create JWT payload
   const payload = {
     userId,
-    platform,
-    platformUserId,
     username,
+    email,
     avatarUrl,
     requiresOAuthLink: requiresOAuthLink || false,
     communityId,
-    isAdmin: isAdmin || false,
     isSuperAdmin: isSuperAdmin || false,
     roles,
   };
@@ -430,10 +865,127 @@ async function createSession({ platform, platformUserId, username, avatarUrl, re
 
   await query(
     `INSERT INTO hub_sessions
-     (session_token, user_id, platform, platform_user_id, platform_username, avatar_url, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [token, userId, platform, platformUserId, username, avatarUrl, expiresAt]
+     (session_token, user_id, platform_username, avatar_url, expires_at)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [token, userId, username, avatarUrl, expiresAt]
   );
 
   return token;
+}
+
+/**
+ * Generate OAuth URL directly from platform config
+ */
+async function generateOAuthUrl(platform, redirectUri, state) {
+  // Get platform credentials from database or env
+  const result = await query(
+    `SELECT config_key, config_value, is_encrypted FROM platform_configs WHERE platform = $1`,
+    [platform]
+  );
+
+  const creds = {};
+  for (const row of result.rows) {
+    creds[row.config_key] = row.config_value;
+  }
+
+  // Fallback to env vars
+  const envPrefix = platform.toUpperCase();
+  if (!creds.client_id) creds.client_id = process.env[`${envPrefix}_CLIENT_ID`];
+
+  if (!creds.client_id) {
+    throw new Error(`No OAuth credentials configured for ${platform}`);
+  }
+
+  switch (platform) {
+    case 'discord':
+      return `https://discord.com/api/oauth2/authorize?client_id=${creds.client_id}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=identify%20email&state=${state}`;
+    case 'twitch':
+      return `https://id.twitch.tv/oauth2/authorize?client_id=${creds.client_id}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=user:read:email&state=${state}`;
+    case 'slack':
+      return `https://slack.com/oauth/v2/authorize?client_id=${creds.client_id}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=identity.basic,identity.email,identity.avatar&state=${state}`;
+    case 'youtube':
+      return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${creds.client_id}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=https://www.googleapis.com/auth/youtube.readonly%20email&state=${state}`;
+    default:
+      throw new Error(`Unknown platform: ${platform}`);
+  }
+}
+
+/**
+ * Exchange OAuth code directly with platform
+ */
+async function exchangeOAuthCode(platform, code, redirectUri) {
+  // Get platform credentials
+  const result = await query(
+    `SELECT config_key, config_value FROM platform_configs WHERE platform = $1`,
+    [platform]
+  );
+
+  const creds = {};
+  for (const row of result.rows) {
+    creds[row.config_key] = row.config_value;
+  }
+
+  const envPrefix = platform.toUpperCase();
+  if (!creds.client_id) creds.client_id = process.env[`${envPrefix}_CLIENT_ID`];
+  if (!creds.client_secret) creds.client_secret = process.env[`${envPrefix}_CLIENT_SECRET`];
+
+  switch (platform) {
+    case 'discord': {
+      const tokenResp = await axios.post(
+        'https://discord.com/api/oauth2/token',
+        new URLSearchParams({
+          client_id: creds.client_id,
+          client_secret: creds.client_secret,
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri,
+        }),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+      );
+      const tokens = tokenResp.data;
+      const userResp = await axios.get('https://discord.com/api/users/@me', {
+        headers: { Authorization: `Bearer ${tokens.access_token}` },
+      });
+      const user = userResp.data;
+      return {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        avatar_url: user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png` : null,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+      };
+    }
+    case 'twitch': {
+      const tokenResp = await axios.post(
+        'https://id.twitch.tv/oauth2/token',
+        new URLSearchParams({
+          client_id: creds.client_id,
+          client_secret: creds.client_secret,
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri,
+        }),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+      );
+      const tokens = tokenResp.data;
+      const userResp = await axios.get('https://api.twitch.tv/helix/users', {
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`,
+          'Client-Id': creds.client_id,
+        },
+      });
+      const user = userResp.data.data[0];
+      return {
+        id: user.id,
+        username: user.login,
+        email: user.email,
+        avatar_url: user.profile_image_url,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+      };
+    }
+    default:
+      throw new Error(`OAuth exchange not implemented for ${platform}`);
+  }
 }

@@ -10,6 +10,8 @@ import {
   DocumentTextIcon,
   ArrowLeftOnRectangleIcon,
   ShieldCheckIcon,
+  Cog6ToothIcon,
+  BuildingStorefrontIcon,
 } from '@heroicons/react/24/outline';
 
 function AdminLayout() {
@@ -35,13 +37,31 @@ function AdminLayout() {
     { to: '/platform/communities', icon: HomeIcon, label: 'Communities' },
   ];
 
+  // Super admin nav
+  const superAdminNav = [
+    { to: '/superadmin', icon: ChartBarIcon, label: 'Dashboard', exact: true },
+    { to: '/superadmin/communities', icon: HomeIcon, label: 'Communities' },
+    { to: '/superadmin/modules', icon: BuildingStorefrontIcon, label: 'Module Registry' },
+    { to: '/superadmin/platform-config', icon: Cog6ToothIcon, label: 'Platform Config' },
+  ];
+
   const isActive = (to, exact = false) => {
     if (exact) return location.pathname === to;
     return location.pathname.startsWith(to);
   };
 
-  const navItems = communityId ? communityAdminNav : platformAdminNav;
-  const title = communityId ? 'Community Admin' : 'Platform Admin';
+  // Determine which nav to show based on the path
+  const isSuperAdminPath = location.pathname.startsWith('/superadmin');
+  const navItems = communityId
+    ? communityAdminNav
+    : isSuperAdminPath
+      ? superAdminNav
+      : platformAdminNav;
+  const title = communityId
+    ? 'Community Admin'
+    : isSuperAdminPath
+      ? 'Super Admin'
+      : 'Platform Admin';
 
   return (
     <div className="min-h-screen bg-navy-950">

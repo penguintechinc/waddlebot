@@ -8,16 +8,31 @@ import {
   Cog6ToothIcon,
   ArrowLeftOnRectangleIcon,
   UserCircleIcon,
+  ChartBarIcon,
+  BuildingStorefrontIcon,
+  ShieldCheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
 } from '@heroicons/react/24/outline';
+import { useState } from 'react';
 
 function DashboardLayout() {
   const { user, logout, isPlatformAdmin, isSuperAdmin } = useAuth();
   const location = useLocation();
   const { id: communityId } = useParams();
+  const [adminCollapsed, setAdminCollapsed] = useState(false);
 
   const mainNav = [
     { to: '/dashboard', icon: HomeIcon, label: 'My Communities' },
     { to: '/dashboard/settings', icon: UserCircleIcon, label: 'Account Settings' },
+  ];
+
+  // Super Admin navigation
+  const superAdminNav = [
+    { to: '/superadmin', icon: ChartBarIcon, label: 'Dashboard', exact: true },
+    { to: '/superadmin/communities', icon: HomeIcon, label: 'Communities' },
+    { to: '/superadmin/modules', icon: BuildingStorefrontIcon, label: 'Module Registry' },
+    { to: '/superadmin/platform-config', icon: Cog6ToothIcon, label: 'Platform Config' },
   ];
 
   const communityNav = communityId
@@ -38,22 +53,6 @@ function DashboardLayout() {
           </Link>
 
           <div className="flex items-center space-x-4">
-            {isSuperAdmin && (
-              <Link
-                to="/superadmin"
-                className="text-sm font-medium text-gold-400 hover:text-gold-300"
-              >
-                Super Admin
-              </Link>
-            )}
-            {isPlatformAdmin && (
-              <Link
-                to="/platform"
-                className="text-sm font-medium text-gold-400 hover:text-gold-300"
-              >
-                Platform Admin
-              </Link>
-            )}
             <div className="flex items-center space-x-2">
               {user?.avatarUrl ? (
                 <img src={user.avatarUrl} alt={user.username} className="w-8 h-8 rounded-full" />
@@ -126,6 +125,49 @@ function DashboardLayout() {
                   <span className="text-sm font-medium">Admin Panel</span>
                 </Link>
               </>
+            )}
+
+            {/* Super Admin Section - Role-based */}
+            {isSuperAdmin && (
+              <div className="mt-6">
+                <button
+                  onClick={() => setAdminCollapsed(!adminCollapsed)}
+                  className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-navy-500 uppercase tracking-wider hover:text-navy-400 transition-colors"
+                >
+                  <span className="flex items-center space-x-2">
+                    <ShieldCheckIcon className="w-4 h-4" />
+                    <span>Super Admin</span>
+                  </span>
+                  {adminCollapsed ? (
+                    <ChevronRightIcon className="w-4 h-4" />
+                  ) : (
+                    <ChevronDownIcon className="w-4 h-4" />
+                  )}
+                </button>
+                {!adminCollapsed && (
+                  <div className="mt-1 space-y-1">
+                    {superAdminNav.map((item) => {
+                      const isActive = item.exact
+                        ? location.pathname === item.to
+                        : location.pathname.startsWith(item.to);
+                      return (
+                        <Link
+                          key={item.to}
+                          to={item.to}
+                          className={`flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
+                            isActive
+                              ? 'bg-gold-500/20 text-gold-400 border border-gold-500/30'
+                              : 'text-navy-300 hover:bg-navy-800 hover:text-gold-300'
+                          }`}
+                        >
+                          <item.icon className="w-5 h-5" />
+                          <span className="text-sm font-medium">{item.label}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             )}
           </nav>
         </aside>

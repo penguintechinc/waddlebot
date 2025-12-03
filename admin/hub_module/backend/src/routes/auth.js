@@ -1,23 +1,31 @@
 /**
- * Auth Routes - OAuth and temp password authentication
+ * Auth Routes - Unified local login with OAuth platform linking
  */
 import { Router } from 'express';
 import * as authController from '../controllers/authController.js';
-import { optionalAuth } from '../middleware/auth.js';
+import { requireAuth, optionalAuth } from '../middleware/auth.js';
 
 const router = Router();
+
+// Local auth (email/password)
+router.post('/register', authController.register);
+router.post('/login', authController.login);
+router.post('/admin', authController.adminLogin); // Legacy admin login
+
+// Password management (requires auth)
+router.post('/password', requireAuth, authController.setPassword);
 
 // OAuth flow
 router.get('/oauth/:platform', authController.startOAuth);
 router.get('/oauth/:platform/callback', authController.oauthCallback);
 
-// Admin local login
-router.post('/admin', authController.adminLogin);
+// OAuth linking (requires auth)
+router.get('/oauth/:platform/link', requireAuth, authController.linkOAuthAccount);
+router.get('/oauth/:platform/link-callback', authController.oauthLinkCallback);
+router.delete('/oauth/:platform', requireAuth, authController.unlinkOAuthAccount);
 
-// Temp password login
+// Temp password login (legacy)
 router.post('/temp-password', authController.tempPasswordLogin);
-
-// Link OAuth after temp password login (requires auth)
 router.post('/link-oauth', optionalAuth, authController.linkOAuth);
 
 // Session management
