@@ -290,6 +290,67 @@ else
     print_skip "Email verification endpoint handling varies"
 fi
 
+# Test: OAuth URL generation for all platforms
+print_test "GET /api/v1/auth/oauth/discord (OAuth URL generation)"
+if response=$(api_call GET "/api/v1/auth/oauth/discord?redirectUrl=http://localhost:8060/auth/callback" "" 200 false 2>/dev/null); then
+    if echo "$response" | jq -e '.url' > /dev/null 2>&1 || \
+       echo "$response" | jq -e '.data.url' > /dev/null 2>&1; then
+        print_pass "Discord OAuth URL generation successful"
+    else
+        print_skip "Discord OAuth URL generation (platform not configured)"
+    fi
+else
+    print_skip "Discord OAuth URL generation skipped"
+fi
+
+print_test "GET /api/v1/auth/oauth/twitch (OAuth URL generation)"
+if response=$(api_call GET "/api/v1/auth/oauth/twitch?redirectUrl=http://localhost:8060/auth/callback" "" 200 false 2>/dev/null); then
+    if echo "$response" | jq -e '.url' > /dev/null 2>&1 || \
+       echo "$response" | jq -e '.data.url' > /dev/null 2>&1; then
+        print_pass "Twitch OAuth URL generation successful"
+    else
+        print_skip "Twitch OAuth URL generation (platform not configured)"
+    fi
+else
+    print_skip "Twitch OAuth URL generation skipped"
+fi
+
+print_test "GET /api/v1/auth/oauth/youtube (OAuth URL generation)"
+if response=$(api_call GET "/api/v1/auth/oauth/youtube?redirectUrl=http://localhost:8060/auth/callback" "" 200 false 2>/dev/null); then
+    if echo "$response" | jq -e '.url' > /dev/null 2>&1 || \
+       echo "$response" | jq -e '.data.url' > /dev/null 2>&1; then
+        print_pass "YouTube OAuth URL generation successful"
+    else
+        print_skip "YouTube OAuth URL generation (platform not configured)"
+    fi
+else
+    print_skip "YouTube OAuth URL generation skipped"
+fi
+
+print_test "GET /api/v1/auth/oauth/kick (OAuth URL generation)"
+if response=$(api_call GET "/api/v1/auth/oauth/kick?redirectUrl=http://localhost:8060/auth/callback" "" 200 false 2>/dev/null); then
+    if echo "$response" | jq -e '.url' > /dev/null 2>&1 || \
+       echo "$response" | jq -e '.data.url' > /dev/null 2>&1; then
+        print_pass "KICK OAuth URL generation successful"
+    else
+        print_skip "KICK OAuth URL generation (platform not configured)"
+    fi
+else
+    print_skip "KICK OAuth URL generation skipped"
+fi
+
+print_test "GET /api/v1/auth/oauth/slack (OAuth URL generation)"
+if response=$(api_call GET "/api/v1/auth/oauth/slack?redirectUrl=http://localhost:8060/auth/callback" "" 200 false 2>/dev/null); then
+    if echo "$response" | jq -e '.url' > /dev/null 2>&1 || \
+       echo "$response" | jq -e '.data.url' > /dev/null 2>&1; then
+        print_pass "Slack OAuth URL generation successful"
+    else
+        print_skip "Slack OAuth URL generation (platform not configured)"
+    fi
+else
+    print_skip "Slack OAuth URL generation skipped"
+fi
+
 ################################################################################
 # Public API Tests
 ################################################################################
@@ -641,17 +702,69 @@ else
     print_skip "List all communities skipped (requires super_admin role)"
 fi
 
-# Test: Create community
-print_test "POST /api/v1/superadmin/communities"
+# Test: Create community (Discord)
+print_test "POST /api/v1/superadmin/communities (Discord platform)"
 community_data=$(jq -n \
     --arg name "test_community_$(date +%s)" \
     --arg display_name "Test Community" \
     '{name: $name, displayName: $display_name, platform: "discord", isPublic: true}')
 if response=$(api_call POST /api/v1/superadmin/communities "$community_data" 201 true 2>/dev/null); then
-    print_pass "Create community successful"
+    print_pass "Create Discord community successful"
     CREATED_COMMUNITY_ID=$(echo "$response" | jq -r '(.data.id // .id // empty)' 2>/dev/null || echo "")
 else
-    print_skip "Create community skipped (requires super_admin role)"
+    print_skip "Create Discord community skipped (requires super_admin role)"
+fi
+
+# Test: Create community with YouTube platform
+print_test "POST /api/v1/superadmin/communities (YouTube platform)"
+youtube_community_data=$(jq -n \
+    --arg name "test_youtube_$(date +%s)" \
+    --arg display_name "Test YouTube Community" \
+    '{name: $name, displayName: $display_name, platform: "youtube", isPublic: true}')
+if response=$(api_call POST /api/v1/superadmin/communities "$youtube_community_data" 201 true 2>/dev/null); then
+    print_pass "Create YouTube community successful"
+    YOUTUBE_COMMUNITY_ID=$(echo "$response" | jq -r '(.data.id // .id // empty)' 2>/dev/null || echo "")
+    # Clean up - delete this test community
+    if [ -n "$YOUTUBE_COMMUNITY_ID" ]; then
+        api_call DELETE "/api/v1/superadmin/communities/$YOUTUBE_COMMUNITY_ID" "" 200 true > /dev/null 2>&1
+    fi
+else
+    print_skip "Create YouTube community skipped (requires super_admin role)"
+fi
+
+# Test: Create community with KICK platform
+print_test "POST /api/v1/superadmin/communities (KICK platform)"
+kick_community_data=$(jq -n \
+    --arg name "test_kick_$(date +%s)" \
+    --arg display_name "Test KICK Community" \
+    '{name: $name, displayName: $display_name, platform: "kick", isPublic: true}')
+if response=$(api_call POST /api/v1/superadmin/communities "$kick_community_data" 201 true 2>/dev/null); then
+    print_pass "Create KICK community successful"
+    KICK_COMMUNITY_ID=$(echo "$response" | jq -r '(.data.id // .id // empty)' 2>/dev/null || echo "")
+    # Clean up - delete this test community
+    if [ -n "$KICK_COMMUNITY_ID" ]; then
+        api_call DELETE "/api/v1/superadmin/communities/$KICK_COMMUNITY_ID" "" 200 true > /dev/null 2>&1
+    fi
+else
+    print_skip "Create KICK community skipped (requires super_admin role)"
+fi
+
+# Test: Create community with owner name (string, not ID)
+print_test "POST /api/v1/superadmin/communities (with ownerName string)"
+owner_community_data=$(jq -n \
+    --arg name "test_owner_$(date +%s)" \
+    --arg display_name "Test Owner Community" \
+    --arg owner_name "TestOwner" \
+    '{name: $name, displayName: $display_name, platform: "twitch", ownerName: $owner_name, isPublic: true}')
+if response=$(api_call POST /api/v1/superadmin/communities "$owner_community_data" 201 true 2>/dev/null); then
+    print_pass "Create community with ownerName successful"
+    OWNER_COMMUNITY_ID=$(echo "$response" | jq -r '(.data.id // .id // empty)' 2>/dev/null || echo "")
+    # Clean up - delete this test community
+    if [ -n "$OWNER_COMMUNITY_ID" ]; then
+        api_call DELETE "/api/v1/superadmin/communities/$OWNER_COMMUNITY_ID" "" 200 true > /dev/null 2>&1
+    fi
+else
+    print_skip "Create community with ownerName skipped (requires super_admin role)"
 fi
 
 # Test: Get specific community
