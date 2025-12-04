@@ -203,6 +203,27 @@ export async function requireCommunityAdmin(req, res, next) {
   }
 }
 
+/**
+ * Require service API key for internal service-to-service calls
+ */
+export function requireServiceAuth(req, res, next) {
+  const apiKey = req.headers['x-api-key'] || req.headers['x-service-key'];
+
+  if (!apiKey) {
+    logger.authz('Access denied - no service API key', { path: req.path });
+    return next(errors.unauthorized('Service API key required'));
+  }
+
+  if (apiKey !== config.serviceApiKey) {
+    logger.authz('Access denied - invalid service API key', { path: req.path });
+    return next(errors.unauthorized('Invalid service API key'));
+  }
+
+  // Mark request as coming from internal service
+  req.isServiceRequest = true;
+  next();
+}
+
 export default {
   optionalAuth,
   requireAuth,
@@ -210,4 +231,5 @@ export default {
   requirePlatformAdmin,
   requireMember,
   requireCommunityAdmin,
+  requireServiceAuth,
 };

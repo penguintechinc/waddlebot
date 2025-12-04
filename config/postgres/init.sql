@@ -106,6 +106,38 @@ CREATE TABLE IF NOT EXISTS hub_user_identities (
 CREATE INDEX IF NOT EXISTS idx_hub_user_identities_user ON hub_user_identities(hub_user_id);
 CREATE INDEX IF NOT EXISTS idx_hub_user_identities_platform ON hub_user_identities(platform, platform_user_id);
 
+-- User profiles with about me and visibility settings
+CREATE TABLE IF NOT EXISTS hub_user_profiles (
+    id SERIAL PRIMARY KEY,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE UNIQUE,
+    display_name VARCHAR(100),
+    bio TEXT,
+    location VARCHAR(100),
+    location_city VARCHAR(100),
+    location_state VARCHAR(100),
+    location_country VARCHAR(100),
+    website_url VARCHAR(255),
+    custom_avatar_url TEXT,
+    banner_url TEXT,
+    social_links JSONB DEFAULT '{}',
+    visibility VARCHAR(30) DEFAULT 'shared_communities',
+    show_activity BOOLEAN DEFAULT TRUE,
+    show_communities BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_hub_user_profiles_user ON hub_user_profiles(hub_user_id);
+CREATE INDEX IF NOT EXISTS idx_hub_user_profiles_visibility ON hub_user_profiles(visibility);
+
+COMMENT ON TABLE hub_user_profiles IS 'Extended user profile with about me and visibility settings';
+COMMENT ON COLUMN hub_user_profiles.visibility IS 'Profile visibility: public, registered, shared_communities, community_leaders';
+COMMENT ON COLUMN hub_user_profiles.custom_avatar_url IS 'User-uploaded avatar, overrides platform avatar';
+COMMENT ON COLUMN hub_user_profiles.social_links IS 'DEPRECATED - linked platforms displayed from hub_user_identities instead';
+COMMENT ON COLUMN hub_user_profiles.location_city IS 'User city for profile display';
+COMMENT ON COLUMN hub_user_profiles.location_state IS 'User state/province for profile display';
+COMMENT ON COLUMN hub_user_profiles.location_country IS 'User country code (ISO 3166-1 alpha-2) for profile display';
+
 -- OAuth state storage for CSRF protection
 CREATE TABLE IF NOT EXISTS hub_oauth_states (
     id SERIAL PRIMARY KEY,
@@ -159,6 +191,10 @@ CREATE TABLE IF NOT EXISTS communities (
     name VARCHAR(100) UNIQUE NOT NULL,
     display_name VARCHAR(200),
     description TEXT,
+    about_extended TEXT,
+    social_links JSONB DEFAULT '{}',
+    website_url VARCHAR(500),
+    discord_invite_url VARCHAR(500),
     platform VARCHAR(50) NOT NULL,
     platform_server_id VARCHAR(255),
     owner_id INTEGER REFERENCES hub_users(id),
@@ -168,6 +204,7 @@ CREATE TABLE IF NOT EXISTS communities (
     is_public BOOLEAN DEFAULT TRUE,
     is_global BOOLEAN DEFAULT FALSE,
     join_mode VARCHAR(20) DEFAULT 'open',
+    visibility VARCHAR(20) DEFAULT 'public',
     config JSONB DEFAULT '{}',
     created_by VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -177,10 +214,14 @@ CREATE TABLE IF NOT EXISTS communities (
 );
 COMMENT ON COLUMN communities.join_mode IS 'open = anyone can join, approval = requires admin/mod approval, invite = invite only';
 COMMENT ON COLUMN communities.is_global IS 'Global community that all users are auto-added to. Cannot be deleted.';
+COMMENT ON COLUMN communities.visibility IS 'Profile visibility: public, registered, members_only';
+COMMENT ON COLUMN communities.about_extended IS 'Extended about section for community profile page';
+COMMENT ON COLUMN communities.social_links IS 'JSON object: {twitter, youtube, tiktok, instagram, etc}';
 
 CREATE INDEX IF NOT EXISTS idx_communities_name ON communities(name);
 CREATE INDEX IF NOT EXISTS idx_communities_platform ON communities(platform, platform_server_id);
 CREATE INDEX IF NOT EXISTS idx_communities_active ON communities(is_active, is_public);
+CREATE INDEX IF NOT EXISTS idx_communities_visibility ON communities(visibility);
 
 -- Community members
 CREATE TABLE IF NOT EXISTS community_members (
@@ -296,6 +337,92 @@ CREATE TABLE IF NOT EXISTS mirror_group_members (
 COMMENT ON COLUMN mirror_group_members.direction IS 'send_only, receive_only, bidirectional';
 CREATE INDEX IF NOT EXISTS idx_mirror_group_members_group ON mirror_group_members(mirror_group_id);
 CREATE INDEX IF NOT EXISTS idx_mirror_group_members_server ON mirror_group_members(community_server_id);
+
+-- ============================================================================
+-- USER ACTIVITY TRACKING & LEADERBOARD TABLES
+-- ============================================================================
+
+-- Track individual watch sessions (viewer presence on streams)
+CREATE TABLE IF NOT EXISTS activity_watch_sessions (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE SET NULL,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    platform_username VARCHAR(100),
+    channel_id VARCHAR(100) NOT NULL,
+    session_start TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    session_end TIMESTAMPTZ,
+    duration_seconds INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+COMMENT ON COLUMN activity_watch_sessions.hub_user_id IS 'NULL if platform user not linked to hub account';
+COMMENT ON COLUMN activity_watch_sessions.duration_seconds IS 'Calculated when session ends';
+
+CREATE INDEX IF NOT EXISTS idx_watch_sessions_community ON activity_watch_sessions(community_id);
+CREATE INDEX IF NOT EXISTS idx_watch_sessions_user ON activity_watch_sessions(hub_user_id);
+CREATE INDEX IF NOT EXISTS idx_watch_sessions_platform_user ON activity_watch_sessions(platform, platform_user_id);
+CREATE INDEX IF NOT EXISTS idx_watch_sessions_active ON activity_watch_sessions(is_active) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_watch_sessions_time ON activity_watch_sessions(session_start);
+
+-- Track message events for counting
+CREATE TABLE IF NOT EXISTS activity_message_events (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE SET NULL,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    platform_username VARCHAR(100),
+    channel_id VARCHAR(100),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+COMMENT ON COLUMN activity_message_events.platform IS 'twitch, kick, youtube, discord, slack, hub';
+
+CREATE INDEX IF NOT EXISTS idx_message_events_community ON activity_message_events(community_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_message_events_user ON activity_message_events(hub_user_id);
+CREATE INDEX IF NOT EXISTS idx_message_events_platform_user ON activity_message_events(platform, platform_user_id);
+CREATE INDEX IF NOT EXISTS idx_message_events_time ON activity_message_events(created_at);
+
+-- Pre-aggregated daily stats for efficient leaderboard queries
+CREATE TABLE IF NOT EXISTS activity_stats_daily (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE SET NULL,
+    platform_user_id VARCHAR(100),
+    platform_username VARCHAR(100),
+    stat_date DATE NOT NULL,
+    watch_time_seconds INTEGER DEFAULT 0,
+    message_count INTEGER DEFAULT 0,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(community_id, COALESCE(hub_user_id, -1), COALESCE(platform_user_id, ''), stat_date)
+);
+COMMENT ON TABLE activity_stats_daily IS 'Aggregated daily stats per user per community';
+
+CREATE INDEX IF NOT EXISTS idx_stats_daily_community_date ON activity_stats_daily(community_id, stat_date);
+CREATE INDEX IF NOT EXISTS idx_stats_daily_user ON activity_stats_daily(hub_user_id);
+CREATE INDEX IF NOT EXISTS idx_stats_daily_leaderboard ON activity_stats_daily(community_id, stat_date, watch_time_seconds DESC);
+CREATE INDEX IF NOT EXISTS idx_stats_daily_messages ON activity_stats_daily(community_id, stat_date, message_count DESC);
+
+-- Community leaderboard configuration
+CREATE TABLE IF NOT EXISTS community_leaderboard_config (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE UNIQUE,
+    enabled_platforms JSONB DEFAULT '["twitch", "kick", "youtube", "discord"]',
+    watch_time_enabled BOOLEAN DEFAULT true,
+    messages_enabled BOOLEAN DEFAULT true,
+    public_leaderboard BOOLEAN DEFAULT true,
+    min_watch_time_minutes INTEGER DEFAULT 5,
+    min_message_count INTEGER DEFAULT 10,
+    display_limit INTEGER DEFAULT 25,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+COMMENT ON TABLE community_leaderboard_config IS 'Per-community leaderboard settings';
+COMMENT ON COLUMN community_leaderboard_config.enabled_platforms IS 'Array of platforms to include in leaderboards';
+COMMENT ON COLUMN community_leaderboard_config.min_watch_time_minutes IS 'Minimum watch time to appear on leaderboard';
+COMMENT ON COLUMN community_leaderboard_config.min_message_count IS 'Minimum messages to appear on leaderboard';
 
 -- Coordination table for tracking live streams and platform connections
 CREATE TABLE IF NOT EXISTS coordination (

@@ -39,3 +39,7 @@ class Config:
 
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
     SECRET_KEY = os.getenv('SECRET_KEY', 'change-me-in-production')
+
+    # Hub integration for activity tracking
+    HUB_API_URL = os.getenv('HUB_API_URL', 'http://hub-module:8060')
+    SERVICE_API_KEY = os.getenv('SERVICE_API_KEY', '')

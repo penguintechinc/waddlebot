@@ -55,8 +55,10 @@ export const publicApi = {
   getStats: () => api.get('/api/v1/public/stats'),
   getCommunities: (params) => api.get('/api/v1/public/communities', { params }),
   getCommunity: (id) => api.get(`/api/v1/public/communities/${id}`),
+  getCommunityProfile: (id) => api.get(`/api/v1/public/communities/${id}/profile`),
   getLiveStreams: (params) => api.get('/api/v1/public/live', { params }),
   getStreamDetails: (entityId) => api.get(`/api/v1/public/streams/${entityId}`),
+  getSignupSettings: () => api.get('/api/v1/public/signup-settings'),
 };
 
 export const communityApi = {
@@ -67,6 +69,7 @@ export const communityApi = {
   getEvents: (id, params) => api.get(`/api/v1/communities/${id}/events`, { params }),
   getMemories: (id, params) => api.get(`/api/v1/communities/${id}/memories`, { params }),
   getModules: (id) => api.get(`/api/v1/communities/${id}/modules`),
+  getMembers: (id, params) => api.get(`/api/v1/communities/${id}/members`, { params }),
   updateProfile: (id, data) => api.put(`/api/v1/communities/${id}/profile`, data),
   leave: (id) => api.post(`/api/v1/communities/${id}/leave`),
   getChatHistory: (id, params) => api.get(`/api/v1/community/${id}/chat/history`, { params }),
@@ -80,6 +83,12 @@ export const communityApi = {
   getServers: (id) => api.get(`/api/v1/communities/${id}/servers`),
   getMyServerLinkRequests: () => api.get('/api/v1/communities/server-link-requests'),
   cancelServerLinkRequest: (requestId) => api.delete(`/api/v1/communities/server-link-requests/${requestId}`),
+  // Activity leaderboards
+  getWatchTimeLeaderboard: (id, params) =>
+    api.get(`/api/v1/communities/${id}/leaderboard/watch-time`, { params }),
+  getMessageLeaderboard: (id, params) =>
+    api.get(`/api/v1/communities/${id}/leaderboard/messages`, { params }),
+  getMyActivityStats: (id) => api.get(`/api/v1/communities/${id}/activity/my-stats`),
 };
 
 export const adminApi = {
@@ -142,6 +151,30 @@ export const adminApi = {
     api.put(`/api/v1/admin/${communityId}/mirror-groups/${groupId}/members/${memberId}`, data),
   removeMirrorGroupMember: (communityId, groupId, memberId) =>
     api.delete(`/api/v1/admin/${communityId}/mirror-groups/${groupId}/members/${memberId}`),
+  // Leaderboard configuration
+  getLeaderboardConfig: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/leaderboard-config`),
+  updateLeaderboardConfig: (communityId, data) =>
+    api.put(`/api/v1/admin/${communityId}/leaderboard-config`, data),
+  // Community profile management
+  updateCommunityProfile: (communityId, data) =>
+    api.put(`/api/v1/admin/${communityId}/profile`, data),
+  uploadCommunityLogo: (communityId, file) => {
+    const formData = new FormData();
+    formData.append('logo', file);
+    return api.post(`/api/v1/admin/${communityId}/logo`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  deleteCommunityLogo: (communityId) => api.delete(`/api/v1/admin/${communityId}/logo`),
+  uploadCommunityBanner: (communityId, file) => {
+    const formData = new FormData();
+    formData.append('banner', file);
+    return api.post(`/api/v1/admin/${communityId}/banner`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  deleteCommunityBanner: (communityId) => api.delete(`/api/v1/admin/${communityId}/banner`),
 };
 
 export const platformApi = {
@@ -181,6 +214,8 @@ export const superAdminApi = {
   // Hub settings
   getHubSettings: () => api.get('/api/v1/superadmin/settings'),
   updateHubSettings: (data) => api.put('/api/v1/superadmin/settings', data),
+  // Storage testing
+  testStorageConnection: () => api.post('/api/v1/superadmin/platform-config/storage/test'),
 };
 
 // Marketplace API
@@ -193,14 +228,30 @@ export const marketplaceApi = {
   addReview: (communityId, moduleId, data) => api.post(`/api/v1/admin/${communityId}/marketplace/modules/${moduleId}/review`, data),
 };
 
-// User Identity API
+// User Identity & Profile API
 export const userApi = {
+  // Identity management
   getIdentities: () => api.get('/api/v1/user/identities'),
   linkIdentity: (platform) => api.post(`/api/v1/user/identities/link/${platform}`),
   unlinkIdentity: (platform) => api.delete(`/api/v1/user/identities/${platform}`),
   getPrimaryIdentity: () => api.get('/api/v1/user/identities/primary'),
   setPrimaryIdentity: (platform) => api.put('/api/v1/user/identities/primary', { platform }),
+  // Profile management
+  getMyProfile: () => api.get('/api/v1/user/profile'),
   updateProfile: (data) => api.put('/api/v1/user/profile', data),
+  uploadAvatar: (file) => {
+    const formData = new FormData();
+    formData.append('avatar', file);
+    return api.post('/api/v1/user/profile/avatar', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  deleteAvatar: () => api.delete('/api/v1/user/profile/avatar'),
+  getLinkedPlatforms: () => api.get('/api/v1/user/linked-platforms'),
+  // View other profiles
+  getPublicProfile: (userId) => api.get(`/api/v1/public/users/${userId}/profile`),
+  getMemberProfile: (communityId, userId) =>
+    api.get(`/api/v1/communities/${communityId}/members/${userId}/profile`),
 };
 
 // Stream API

@@ -1,9 +1,10 @@
 /**
  * Platform Configuration Controller
- * Manages platform credentials (Discord, Twitch, Slack, YouTube)
+ * Manages platform credentials (Discord, Twitch, Slack, YouTube) and storage settings
  */
 import { query } from '../config/database.js';
 import crypto from 'crypto';
+import { testS3Connection, invalidateStorageConfigCache } from '../services/storageService.js';
 
 // Encryption key from environment (use a 32-byte key for AES-256)
 const ENCRYPTION_KEY = process.env.PLATFORM_ENCRYPTION_KEY ||
@@ -81,6 +82,11 @@ const PLATFORM_CONFIGS = {
   email: {
     fields: ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_from', 'smtp_from_name', 'smtp_secure'],
     secrets: ['smtp_password'],
+    testEndpoint: null
+  },
+  storage: {
+    fields: ['storage_type', 's3_endpoint', 's3_bucket', 's3_access_key', 's3_secret_key', 's3_region', 's3_public_url'],
+    secrets: ['s3_access_key', 's3_secret_key'],
     testEndpoint: null
   }
 };
@@ -273,6 +279,9 @@ export async function testPlatformConnection(req, res) {
         break;
       case 'email':
         testResult = await testEmailConnection(credentials);
+        break;
+      case 'storage':
+        testResult = await testStorageConnection(credentials);
         break;
       default:
         testResult = { success: false, message: 'Test not implemented' };
@@ -578,11 +587,48 @@ export async function updateHubSettings(req, res) {
       );
     }
 
+    // Invalidate storage config cache if storage settings changed
+    const storageKeys = ['storage_type', 's3_endpoint', 's3_bucket', 's3_access_key', 's3_secret_key', 's3_region', 's3_public_url'];
+    if (Object.keys(settings).some(key => storageKeys.includes(key))) {
+      invalidateStorageConfigCache();
+    }
+
     console.log(`Hub settings updated by user ${req.user?.username}`);
 
     res.json({ success: true, message: 'Settings updated' });
   } catch (error) {
     console.error('Error updating hub settings:', error);
     res.status(500).json({ success: false, message: 'Failed to update hub settings' });
+  }
+}
+
+/**
+ * Test storage (S3/MinIO) connection
+ */
+async function testStorageConnection(credentials) {
+  if (credentials.storage_type !== 's3') {
+    return { success: true, message: 'Local storage enabled (no connection test needed)' };
+  }
+
+  if (!credentials.s3_endpoint || !credentials.s3_bucket) {
+    return { success: false, message: 'S3 endpoint and bucket not configured' };
+  }
+
+  if (!credentials.s3_access_key || !credentials.s3_secret_key) {
+    return { success: false, message: 'S3 access credentials not configured' };
+  }
+
+  try {
+    const result = await testS3Connection({
+      s3Endpoint: credentials.s3_endpoint,
+      s3Bucket: credentials.s3_bucket,
+      s3AccessKey: credentials.s3_access_key,
+      s3SecretKey: credentials.s3_secret_key,
+      s3Region: credentials.s3_region || 'us-east-1',
+    });
+
+    return result;
+  } catch (error) {
+    return { success: false, message: `Storage connection failed: ${error.message}` };
   }
 }

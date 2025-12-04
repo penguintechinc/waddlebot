@@ -8,6 +8,7 @@ import {
   Cog6ToothIcon,
   ArrowLeftOnRectangleIcon,
   UserCircleIcon,
+  UserIcon,
   ChartBarIcon,
   BuildingStorefrontIcon,
   ShieldCheckIcon,
@@ -24,6 +25,7 @@ function DashboardLayout() {
 
   const mainNav = [
     { to: '/dashboard', icon: HomeIcon, label: 'My Communities' },
+    { to: '/dashboard/profile', icon: UserIcon, label: 'My Profile' },
     { to: '/dashboard/settings', icon: UserCircleIcon, label: 'Account Settings' },
   ];
 
@@ -38,6 +40,7 @@ function DashboardLayout() {
   const communityNav = communityId
     ? [
         { to: `/dashboard/community/${communityId}`, icon: HomeIcon, label: 'Overview' },
+        { to: `/dashboard/community/${communityId}/members`, icon: UserGroupIcon, label: 'Members' },
         { to: `/dashboard/community/${communityId}/settings`, icon: Cog6ToothIcon, label: 'Settings' },
       ]
     : [];

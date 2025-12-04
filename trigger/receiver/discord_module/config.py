@@ -19,3 +19,10 @@ class Config:
     ROUTER_API_URL = os.getenv('ROUTER_API_URL', 'http://router-service:8000/api/v1/router')
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
     SECRET_KEY = os.getenv('SECRET_KEY', 'change-me-in-production')
+
+    # Discord Bot Configuration
+    DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN', '')
+    DISCORD_APPLICATION_ID = os.getenv('DISCORD_APPLICATION_ID', '')
+
+    # Redis for interaction context storage (optional)
+    REDIS_URL = os.getenv('REDIS_URL', '')

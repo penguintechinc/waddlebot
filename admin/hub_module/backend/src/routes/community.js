@@ -5,6 +5,8 @@ import { Router } from 'express';
 import * as communityController from '../controllers/communityController.js';
 import * as streamController from '../controllers/streamController.js';
 import * as chatController from '../controllers/chatController.js';
+import * as activityController from '../controllers/activityController.js';
+import * as profileController from '../controllers/profileController.js';
 import { requireAuth, requireMember } from '../middleware/auth.js';
 
 const router = Router();
@@ -37,6 +39,12 @@ router.get('/:id/activity', requireMember, communityController.getActivityFeed);
 router.get('/:id/events', requireMember, communityController.getEvents);
 router.get('/:id/memories', requireMember, communityController.getMemories);
 router.get('/:id/modules', requireMember, communityController.getInstalledModules);
+router.get('/:id/members', requireMember, communityController.getCommunityMembers);
+
+// Activity leaderboards (requires membership)
+router.get('/:id/leaderboard/watch-time', requireMember, activityController.getWatchTimeLeaderboard);
+router.get('/:id/leaderboard/messages', requireMember, activityController.getMessageLeaderboard);
+router.get('/:id/activity/my-stats', requireMember, activityController.getMyActivityStats);
 
 // Chat routes
 router.get('/:id/chat/history', requireMember, chatController.getChatHistory);
@@ -50,5 +58,8 @@ router.get('/:communityId/streams/:entityId', requireMember, streamController.ge
 // Profile management
 router.put('/:id/profile', requireMember, communityController.updateProfile);
 router.post('/:id/leave', requireMember, communityController.leaveCommunity);
+
+// Member profiles (requires membership)
+router.get('/:id/members/:userId/profile', requireMember, profileController.getMemberProfile);
 
 export default router;

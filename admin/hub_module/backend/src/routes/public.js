@@ -3,6 +3,9 @@
  */
 import { Router } from 'express';
 import * as publicController from '../controllers/publicController.js';
+import * as profileController from '../controllers/profileController.js';
+import * as communityProfileController from '../controllers/communityProfileController.js';
+import { optionalAuth } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -12,6 +15,7 @@ router.get('/stats', publicController.getStats);
 // Communities
 router.get('/communities', publicController.getCommunities);
 router.get('/communities/:id', publicController.getCommunity);
+router.get('/communities/:id/profile', optionalAuth, communityProfileController.getCommunityProfile);
 
 // Live streams
 router.get('/live', publicController.getLiveStreams);
@@ -19,5 +23,8 @@ router.get('/live/:entityId', publicController.getStreamDetails);
 
 // Signup settings (for login page to determine if signup is available)
 router.get('/signup-settings', publicController.getSignupSettings);
+
+// User profiles (optional auth to check visibility permissions)
+router.get('/users/:userId/profile', optionalAuth, profileController.getPublicProfile);
 
 export default router;

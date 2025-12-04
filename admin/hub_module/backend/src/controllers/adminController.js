@@ -88,7 +88,7 @@ export async function updateMemberRole(req, res, next) {
     const userId = parseInt(req.params.userId, 10);
     const { role } = req.body;
 
-    const validRoles = ['community-admin', 'moderator', 'member'];
+    const validRoles = ['community-admin', 'moderator', 'vip', 'member'];
     if (!validRoles.includes(role)) {
       return next(errors.badRequest('Invalid role'));
     }

@@ -11,6 +11,7 @@ import HomePage from './pages/public/HomePage';
 import CommunitiesPage from './pages/public/CommunitiesPage';
 import CommunityPublicPage from './pages/public/CommunityPublicPage';
 import LiveStreamsPage from './pages/public/LiveStreamsPage';
+import UserPublicProfile from './pages/public/UserPublicProfile';
 
 // Auth pages
 import LoginPage from './pages/auth/LoginPage';
@@ -21,7 +22,10 @@ import DashboardHome from './pages/dashboard/DashboardHome';
 import CommunityDashboard from './pages/dashboard/CommunityDashboard';
 import CommunitySettings from './pages/dashboard/CommunitySettings';
 import CommunityChat from './pages/dashboard/CommunityChat';
+import CommunityLeaderboard from './pages/dashboard/CommunityLeaderboard';
+import CommunityMembers from './pages/dashboard/CommunityMembers';
 import AccountSettings from './pages/dashboard/AccountSettings';
+import UserProfileEdit from './pages/dashboard/UserProfileEdit';
 
 // Admin pages
 import AdminHome from './pages/admin/AdminHome';
@@ -32,6 +36,8 @@ import AdminBrowserSources from './pages/admin/AdminBrowserSources';
 import AdminDomains from './pages/admin/AdminDomains';
 import AdminServers from './pages/admin/AdminServers';
 import AdminMirrorGroups from './pages/admin/AdminMirrorGroups';
+import AdminLeaderboardConfig from './pages/admin/AdminLeaderboardConfig';
+import AdminCommunityProfile from './pages/admin/AdminCommunityProfile';
 
 // Platform admin pages
 import PlatformDashboard from './pages/platform/PlatformDashboard';
@@ -86,6 +92,7 @@ function App() {
         <Route path="/communities" element={<CommunitiesPage />} />
         <Route path="/communities/:id" element={<CommunityPublicPage />} />
         <Route path="/live" element={<LiveStreamsPage />} />
+        <Route path="/users/:userId" element={<UserPublicProfile />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/auth/callback" element={<OAuthCallback />} />
       </Route>
@@ -100,9 +107,12 @@ function App() {
       >
         <Route path="/dashboard" element={<DashboardHome />} />
         <Route path="/dashboard/settings" element={<AccountSettings />} />
+        <Route path="/dashboard/profile" element={<UserProfileEdit />} />
         <Route path="/dashboard/community/:id" element={<CommunityDashboard />} />
         <Route path="/dashboard/community/:id/settings" element={<CommunitySettings />} />
         <Route path="/dashboard/community/:id/chat" element={<CommunityChat />} />
+        <Route path="/dashboard/community/:id/leaderboard" element={<CommunityLeaderboard />} />
+        <Route path="/dashboard/community/:id/members" element={<CommunityMembers />} />
       </Route>
 
       {/* Admin routes (community admin) */}
@@ -121,6 +131,8 @@ function App() {
         <Route path="/admin/:communityId/domains" element={<AdminDomains />} />
         <Route path="/admin/:communityId/servers" element={<AdminServers />} />
         <Route path="/admin/:communityId/mirror-groups" element={<AdminMirrorGroups />} />
+        <Route path="/admin/:communityId/leaderboard" element={<AdminLeaderboardConfig />} />
+        <Route path="/admin/:communityId/profile" element={<AdminCommunityProfile />} />
       </Route>
 
       {/* Platform admin routes */}

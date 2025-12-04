@@ -2,10 +2,19 @@
  * Admin Routes - Community admin access
  */
 import { Router } from 'express';
+import multer from 'multer';
 import * as adminController from '../controllers/adminController.js';
+import * as activityController from '../controllers/activityController.js';
+import * as communityProfileController from '../controllers/communityProfileController.js';
 import { requireAuth, requireCommunityAdmin } from '../middleware/auth.js';
 
 const router = Router();
+
+// Configure multer for image uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max for banners
+});
 
 // All routes require authentication and community admin role
 router.use(requireAuth);
@@ -63,5 +72,16 @@ router.delete('/:communityId/mirror-groups/:groupId', requireCommunityAdmin, adm
 router.post('/:communityId/mirror-groups/:groupId/members', requireCommunityAdmin, adminController.addMirrorGroupMember);
 router.put('/:communityId/mirror-groups/:groupId/members/:memberId', requireCommunityAdmin, adminController.updateMirrorGroupMember);
 router.delete('/:communityId/mirror-groups/:groupId/members/:memberId', requireCommunityAdmin, adminController.removeMirrorGroupMember);
+
+// Leaderboard configuration
+router.get('/:communityId/leaderboard-config', requireCommunityAdmin, activityController.getLeaderboardConfig);
+router.put('/:communityId/leaderboard-config', requireCommunityAdmin, activityController.updateLeaderboardConfig);
+
+// Community profile management
+router.put('/:communityId/profile', requireCommunityAdmin, communityProfileController.updateCommunityProfile);
+router.post('/:communityId/logo', requireCommunityAdmin, upload.single('logo'), communityProfileController.uploadCommunityLogo);
+router.delete('/:communityId/logo', requireCommunityAdmin, communityProfileController.deleteCommunityLogo);
+router.post('/:communityId/banner', requireCommunityAdmin, upload.single('banner'), communityProfileController.uploadCommunityBanner);
+router.delete('/:communityId/banner', requireCommunityAdmin, communityProfileController.deleteCommunityBanner);
 
 export default router;

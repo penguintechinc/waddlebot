@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { communityApi, streamApi } from '../../services/api';
 import LiveStreamGrid from '../../components/streams/LiveStreamGrid';
+import LeaderboardCard from '../../components/leaderboard/LeaderboardCard';
 
 function CommunityDashboard() {
   const { id } = useParams();
@@ -140,6 +141,20 @@ function CommunityDashboard() {
 
         {/* Sidebar */}
         <div className="space-y-6">
+          {/* Leaderboards */}
+          <LeaderboardCard
+            communityId={id}
+            type="watch-time"
+            title="Top Viewers"
+            limit={5}
+          />
+          <LeaderboardCard
+            communityId={id}
+            type="messages"
+            title="Top Chatters"
+            limit={5}
+          />
+
           {/* Live Streams */}
           {liveStreams.length > 0 && (
             <div className="card">

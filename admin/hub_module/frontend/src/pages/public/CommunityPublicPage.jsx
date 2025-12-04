@@ -2,6 +2,17 @@ import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { publicApi, communityApi } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
+import {
+  GlobeAltIcon,
+  LockClosedIcon,
+} from '@heroicons/react/24/outline';
+
+const SOCIAL_ICONS = {
+  twitter: { name: 'Twitter/X', color: '#1DA1F2' },
+  youtube: { name: 'YouTube', color: '#FF0000' },
+  tiktok: { name: 'TikTok', color: '#000000' },
+  instagram: { name: 'Instagram', color: '#E4405F' },
+};
 
 function CommunityPublicPage() {
   const { id } = useParams();
@@ -18,10 +29,14 @@ function CommunityPublicPage() {
   useEffect(() => {
     async function fetchCommunity() {
       try {
-        const response = await publicApi.getCommunity(id);
+        const response = await publicApi.getCommunityProfile(id);
         setCommunity(response.data.community);
       } catch (err) {
-        setError(err.response?.data?.error || 'Community not found');
+        if (err.response?.status === 403) {
+          setError('restricted');
+        } else {
+          setError(err.response?.data?.error || 'Community not found');
+        }
       } finally {
         setLoading(false);
       }
@@ -65,15 +80,56 @@ function CommunityPublicPage() {
     );
   }
 
+  if (error === 'restricted') {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-20 text-center">
+        <LockClosedIcon className="w-16 h-16 mx-auto text-navy-500 mb-4" />
+        <h1 className="text-2xl font-bold mb-2 text-sky-100">Community Restricted</h1>
+        <p className="text-navy-400 mb-6">
+          This community has restricted who can view their profile.
+        </p>
+        <Link to="/communities" className="btn btn-primary">
+          Browse Communities
+        </Link>
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div className="max-w-xl mx-auto px-4 py-20 text-center">
-        <div className="text-6xl mb-4">😔</div>
+        <div className="text-6xl mb-4">🐧</div>
         <h1 className="text-2xl font-bold mb-2 text-sky-100">Community Not Found</h1>
         <p className="text-navy-400 mb-6">{error}</p>
         <Link to="/communities" className="btn btn-primary">
           Browse Communities
         </Link>
+      </div>
+    );
+  }
+
+  // Handle restricted view (minimal info returned)
+  if (community?.restricted) {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-20 text-center">
+        <div className="w-24 h-24 rounded-xl bg-navy-800 mx-auto mb-6 flex items-center justify-center">
+          {community.logoUrl ? (
+            <img src={community.logoUrl} alt="" className="w-full h-full rounded-xl object-cover" />
+          ) : (
+            <span className="text-4xl">🐧</span>
+          )}
+        </div>
+        <h1 className="text-2xl font-bold mb-2 text-sky-100">{community.displayName || community.name}</h1>
+        <p className="text-navy-400 mb-6">
+          {community.visibility === 'members_only'
+            ? 'This community is only visible to members.'
+            : 'You need to be logged in to view this community.'}
+        </p>
+        {!isAuthenticated && (
+          <Link to="/login" className="btn btn-primary">
+            Log In to View
+          </Link>
+        )}
       </div>
     );
   }
@@ -126,13 +182,70 @@ function CommunityPublicPage() {
         )}
 
         {/* Content */}
-        <div className="py-8">
-          <h2 className="text-xl font-semibold mb-4 text-sky-100">About</h2>
-          <div className="card p-6">
-            <p className="text-navy-400">
-              {community.description || 'This community has not added a description yet.'}
-            </p>
+        <div className="py-8 space-y-8">
+          {/* About Section */}
+          <div>
+            <h2 className="text-xl font-semibold mb-4 text-sky-100">About</h2>
+            <div className="card p-6">
+              {community.aboutExtended ? (
+                <p className="text-navy-300 whitespace-pre-wrap">{community.aboutExtended}</p>
+              ) : (
+                <p className="text-navy-500">
+                  {community.description || 'This community has not added a description yet.'}
+                </p>
+              )}
+            </div>
           </div>
+
+          {/* Links Section */}
+          {(community.websiteUrl || community.discordInviteUrl || Object.keys(community.socialLinks || {}).length > 0) && (
+            <div>
+              <h2 className="text-xl font-semibold mb-4 text-sky-100">Links</h2>
+              <div className="card p-6">
+                <div className="flex flex-wrap gap-3">
+                  {community.websiteUrl && (
+                    <a
+                      href={community.websiteUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-navy-700 hover:bg-navy-600 rounded-lg text-sky-200 transition-colors"
+                    >
+                      <GlobeAltIcon className="w-5 h-5" />
+                      Website
+                    </a>
+                  )}
+                  {community.discordInviteUrl && (
+                    <a
+                      href={community.discordInviteUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-white transition-colors"
+                      style={{ backgroundColor: '#5865F2' }}
+                    >
+                      <span className="font-bold">D</span>
+                      Discord
+                    </a>
+                  )}
+                  {Object.entries(community.socialLinks || {}).map(([key, url]) => {
+                    if (!url) return null;
+                    const info = SOCIAL_ICONS[key] || { name: key, color: '#6B7280' };
+                    return (
+                      <a
+                        key={key}
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-white transition-opacity hover:opacity-80"
+                        style={{ backgroundColor: info.color }}
+                      >
+                        {info.name}
+                      </a>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

@@ -9,6 +9,39 @@ import { logger } from '../utils/logger.js';
 const activeChannels = new Map();
 
 /**
+ * Record hub chat message activity for leaderboards
+ * This is a fire-and-forget operation that shouldn't block chat
+ */
+async function recordHubChatActivity(communityId, userId, username) {
+  try {
+    // Insert message event
+    await query(
+      `INSERT INTO activity_message_events
+       (community_id, hub_user_id, platform, platform_user_id, platform_username, channel_id)
+       VALUES ($1, $2, 'hub', $3, $4, 'hub-chat')`,
+      [communityId, userId, String(userId), username]
+    );
+
+    // Update daily stats (upsert)
+    await query(
+      `INSERT INTO activity_stats_daily
+       (community_id, hub_user_id, platform_user_id, platform_username, stat_date, message_count)
+       VALUES ($1, $2, $3, $4, CURRENT_DATE, 1)
+       ON CONFLICT (community_id, hub_user_id, platform_user_id, stat_date)
+       DO UPDATE SET message_count = activity_stats_daily.message_count + 1, updated_at = NOW()`,
+      [communityId, userId, String(userId), username]
+    );
+  } catch (err) {
+    // Don't let activity tracking failures affect chat
+    logger.error('Failed to record hub chat activity', {
+      error: err.message,
+      communityId,
+      userId,
+    });
+  }
+}
+
+/**
  * Handle chat-related socket events
  */
 export function handleChatEvents(io, socket) {
@@ -174,6 +207,9 @@ export function handleChatEvents(io, socket) {
 
       // Broadcast to all users in the room (including sender)
       io.to(roomName).emit('chat:message', message);
+
+      // Record activity for leaderboards (fire-and-forget)
+      recordHubChatActivity(communityId, socket.userId, socket.username);
 
       logger.audit('Chat message sent', {
         messageId: message.id,

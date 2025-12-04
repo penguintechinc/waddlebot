@@ -31,6 +31,7 @@ function AdminMembers() {
       case 'community-owner': return 'badge-gold';
       case 'community-admin': return 'bg-purple-500/20 text-purple-300 border border-purple-500/30';
       case 'moderator': return 'badge-sky';
+      case 'vip': return 'bg-amber-500/20 text-amber-300 border border-amber-500/30';
       default: return 'bg-navy-700 text-navy-300 border border-navy-600';
     }
   };

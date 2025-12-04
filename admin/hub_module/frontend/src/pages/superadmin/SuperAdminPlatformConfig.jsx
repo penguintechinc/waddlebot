@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { superAdminApi } from '../../services/api';
-import { Settings, Save, RefreshCw, Check, X, Eye, EyeOff, AlertCircle, Mail, Shield } from 'lucide-react';
+import { Settings, Save, RefreshCw, Check, X, Eye, EyeOff, AlertCircle, Mail, Shield, HardDrive } from 'lucide-react';
 
 // Platform icons as simple SVG components
 const DiscordIcon = () => (
@@ -104,6 +104,18 @@ export default function SuperAdminPlatformConfig() {
     signup_require_email_verification: true,
     signup_allowed_domains: '',
   });
+  const [storageForm, setStorageForm] = useState({
+    storage_type: 'local',
+    s3_endpoint: '',
+    s3_bucket: '',
+    s3_access_key: '',
+    s3_secret_key: '',
+    s3_region: '',
+    s3_public_url: '',
+  });
+  const [savingStorage, setSavingStorage] = useState(false);
+  const [testingStorage, setTestingStorage] = useState(false);
+  const [storageTestResult, setStorageTestResult] = useState(null);
 
   useEffect(() => {
     loadConfigs();
@@ -119,6 +131,15 @@ export default function SuperAdminPlatformConfig() {
         signup_enabled: settings.signup_enabled?.value === 'true',
         signup_require_email_verification: settings.signup_require_email_verification?.value !== 'false',
         signup_allowed_domains: settings.signup_allowed_domains?.value || '',
+      });
+      setStorageForm({
+        storage_type: settings.storage_type?.value || 'local',
+        s3_endpoint: settings.s3_endpoint?.value || '',
+        s3_bucket: settings.s3_bucket?.value || '',
+        s3_access_key: settings.s3_access_key?.value || '',
+        s3_secret_key: settings.s3_secret_key?.value || '',
+        s3_region: settings.s3_region?.value || '',
+        s3_public_url: settings.s3_public_url?.value || '',
       });
     } catch {
       // Settings may not exist yet
@@ -237,6 +258,53 @@ export default function SuperAdminPlatformConfig() {
   };
 
   const isEmailConfigured = hubSettings.email_configured?.value === 'true';
+
+  const handleSaveStorage = async () => {
+    try {
+      setSavingStorage(true);
+      setError(null);
+
+      await superAdminApi.updateHubSettings({
+        settings: {
+          storage_type: storageForm.storage_type,
+          s3_endpoint: storageForm.s3_endpoint,
+          s3_bucket: storageForm.s3_bucket,
+          s3_access_key: storageForm.s3_access_key,
+          s3_secret_key: storageForm.s3_secret_key,
+          s3_region: storageForm.s3_region,
+          s3_public_url: storageForm.s3_public_url,
+        }
+      });
+
+      setSuccess('Storage settings saved successfully');
+      loadHubSettings();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to save storage settings');
+    } finally {
+      setSavingStorage(false);
+    }
+  };
+
+  const handleTestStorage = async () => {
+    try {
+      setTestingStorage(true);
+      setStorageTestResult(null);
+
+      const response = await superAdminApi.testStorageConnection();
+      setStorageTestResult({
+        success: response.data.success,
+        message: response.data.message,
+      });
+    } catch (err) {
+      setStorageTestResult({
+        success: false,
+        message: err.response?.data?.error?.message || 'Storage connection test failed',
+      });
+    } finally {
+      setTestingStorage(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -410,6 +478,186 @@ export default function SuperAdminPlatformConfig() {
             </div>
           );
         })}
+      </div>
+
+      {/* Storage Settings Section */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <div className="flex items-center gap-4 p-4 border-b border-gray-200 dark:border-gray-700">
+          <div className="p-3 rounded-lg bg-orange-500 text-white">
+            <HardDrive className="w-6 h-6" />
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              File Storage
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Configure where profile images and uploads are stored
+            </p>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-6">
+          {/* Storage Type Toggle */}
+          <div>
+            <label className="block font-medium text-gray-900 dark:text-white mb-2">
+              Storage Type
+            </label>
+            <div className="flex gap-4">
+              <label className={`flex items-center gap-2 px-4 py-3 border rounded-lg cursor-pointer transition-colors ${storageForm.storage_type === 'local' ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20' : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'}`}>
+                <input
+                  type="radio"
+                  name="storage_type"
+                  value="local"
+                  checked={storageForm.storage_type === 'local'}
+                  onChange={(e) => setStorageForm(prev => ({ ...prev, storage_type: e.target.value }))}
+                  className="sr-only"
+                />
+                <HardDrive className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                <span className="text-gray-900 dark:text-white">Local Storage</span>
+              </label>
+              <label className={`flex items-center gap-2 px-4 py-3 border rounded-lg cursor-pointer transition-colors ${storageForm.storage_type === 's3' ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20' : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'}`}>
+                <input
+                  type="radio"
+                  name="storage_type"
+                  value="s3"
+                  checked={storageForm.storage_type === 's3'}
+                  onChange={(e) => setStorageForm(prev => ({ ...prev, storage_type: e.target.value }))}
+                  className="sr-only"
+                />
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                </svg>
+                <span className="text-gray-900 dark:text-white">S3-Compatible (MinIO/AWS)</span>
+              </label>
+            </div>
+          </div>
+
+          {/* S3 Settings */}
+          {storageForm.storage_type === 's3' && (
+            <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    S3 Endpoint
+                  </label>
+                  <input
+                    type="text"
+                    value={storageForm.s3_endpoint}
+                    onChange={(e) => setStorageForm(prev => ({ ...prev, s3_endpoint: e.target.value }))}
+                    placeholder="http://minio:9000"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Bucket Name
+                  </label>
+                  <input
+                    type="text"
+                    value={storageForm.s3_bucket}
+                    onChange={(e) => setStorageForm(prev => ({ ...prev, s3_bucket: e.target.value }))}
+                    placeholder="waddlebot-assets"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Access Key
+                  </label>
+                  <input
+                    type="password"
+                    value={storageForm.s3_access_key}
+                    onChange={(e) => setStorageForm(prev => ({ ...prev, s3_access_key: e.target.value }))}
+                    placeholder="Access Key ID"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Secret Key
+                  </label>
+                  <input
+                    type="password"
+                    value={storageForm.s3_secret_key}
+                    onChange={(e) => setStorageForm(prev => ({ ...prev, s3_secret_key: e.target.value }))}
+                    placeholder="Secret Access Key"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Region
+                  </label>
+                  <input
+                    type="text"
+                    value={storageForm.s3_region}
+                    onChange={(e) => setStorageForm(prev => ({ ...prev, s3_region: e.target.value }))}
+                    placeholder="us-east-1"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Public URL (for links)
+                  </label>
+                  <input
+                    type="text"
+                    value={storageForm.s3_public_url}
+                    onChange={(e) => setStorageForm(prev => ({ ...prev, s3_public_url: e.target.value }))}
+                    placeholder="http://localhost:9000/waddlebot-assets"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Storage Test Result */}
+          {storageTestResult && (
+            <div className={`p-3 rounded-lg ${storageTestResult.success ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400' : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'}`}>
+              <div className="flex items-center gap-2">
+                {storageTestResult.success ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
+                {storageTestResult.message}
+              </div>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex items-center gap-3 pt-4">
+            <button
+              onClick={handleSaveStorage}
+              disabled={savingStorage}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {savingStorage ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )}
+              Save Storage Settings
+            </button>
+            {storageForm.storage_type === 's3' && (
+              <button
+                onClick={handleTestStorage}
+                disabled={testingStorage}
+                className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+              >
+                {testingStorage ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-4 h-4" />
+                )}
+                Test Connection
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Signup Settings Section */}

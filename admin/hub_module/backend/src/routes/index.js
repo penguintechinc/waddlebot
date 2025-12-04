@@ -11,6 +11,7 @@ import adminRoutes from './admin.js';
 import marketplaceRoutes from './marketplace.js';
 import platformRoutes from './platform.js';
 import superadminRoutes from './superadmin.js';
+import internalRoutes from './internal.js';
 
 const router = Router();
 
@@ -38,5 +39,8 @@ router.use('/platform', platformRoutes);
 
 // Super admin routes (super_admin role required)
 router.use('/superadmin', superadminRoutes);
+
+// Internal routes (service-to-service, API key auth)
+router.use('/internal', internalRoutes);
 
 export default router;

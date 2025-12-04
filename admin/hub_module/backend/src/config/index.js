@@ -66,6 +66,9 @@ export const config = {
     maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
   },
 
+  // Internal Service API Key (for service-to-service communication)
+  serviceApiKey: process.env.SERVICE_API_KEY || 'dev-service-key-change-in-production',
+
   // Logging
   logging: {
     level: process.env.LOG_LEVEL || 'info',

@@ -24,3 +24,11 @@ class Config:
     )
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
     SECRET_KEY = os.getenv('SECRET_KEY', 'change-me-in-production')
+
+    # Slack Bot Configuration
+    SLACK_BOT_TOKEN = os.getenv('SLACK_BOT_TOKEN', '')
+    SLACK_SIGNING_SECRET = os.getenv('SLACK_SIGNING_SECRET', '')
+    SLACK_APP_TOKEN = os.getenv('SLACK_APP_TOKEN', '')  # For Socket Mode
+
+    # Use Socket Mode instead of HTTP webhooks (for development)
+    USE_SOCKET_MODE = os.getenv('USE_SOCKET_MODE', 'false').lower() == 'true'

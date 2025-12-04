@@ -191,6 +191,97 @@ export async function getLeaderboard(req, res, next) {
 }
 
 /**
+ * Get community members (for member browsing)
+ * Allows community members to view other members
+ */
+export async function getCommunityMembers(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.id, 10);
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '25', 10)));
+    const offset = (page - 1) * limit;
+    const search = req.query.search?.trim();
+    const roleFilter = req.query.role;
+
+    if (isNaN(communityId)) {
+      return next(errors.badRequest('Invalid community ID'));
+    }
+
+    // Build query with optional filters
+    let whereClause = 'WHERE cm.community_id = $1 AND cm.is_active = true';
+    const params = [communityId];
+    let paramIndex = 2;
+
+    if (search) {
+      whereClause += ` AND u.username ILIKE $${paramIndex}`;
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    if (roleFilter) {
+      // Support multiple roles separated by comma
+      const roles = roleFilter.split(',').map(r => r.trim()).filter(Boolean);
+      if (roles.length > 0) {
+        whereClause += ` AND cm.role = ANY($${paramIndex}::text[])`;
+        params.push(roles);
+        paramIndex++;
+      }
+    }
+
+    // Count total
+    const countResult = await query(
+      `SELECT COUNT(*) as count
+       FROM community_members cm
+       LEFT JOIN hub_users u ON u.id = cm.user_id
+       ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0]?.count || 0, 10);
+
+    // Get paginated members
+    // Sort by role hierarchy (owner > admin > mod > vip > member), then by join date
+    const result = await query(
+      `SELECT cm.user_id, u.username, u.avatar_url, cm.role, cm.joined_at
+       FROM community_members cm
+       LEFT JOIN hub_users u ON u.id = cm.user_id
+       ${whereClause}
+       ORDER BY
+         CASE cm.role
+           WHEN 'community-owner' THEN 1
+           WHEN 'community-admin' THEN 2
+           WHEN 'moderator' THEN 3
+           WHEN 'vip' THEN 4
+           ELSE 5
+         END,
+         cm.joined_at ASC
+       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      [...params, limit, offset]
+    );
+
+    const members = result.rows.map(row => ({
+      userId: row.user_id,
+      username: row.username,
+      avatarUrl: row.avatar_url,
+      role: row.role,
+      joinedAt: row.joined_at?.toISOString(),
+    }));
+
+    res.json({
+      success: true,
+      members,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * Get community activity feed
  */
 export async function getActivityFeed(req, res, next) {
