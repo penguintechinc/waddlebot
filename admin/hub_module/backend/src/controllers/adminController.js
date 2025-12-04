@@ -5,6 +5,7 @@ import { query } from '../config/database.js';
 import { config } from '../config/index.js';
 import { errors } from '../middleware/errorHandler.js';
 import { logger } from '../utils/logger.js';
+import { formatReputation, clampReputation, REPUTATION_MIN, REPUTATION_MAX } from '../utils/reputation.js';
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -27,7 +28,7 @@ export async function getMembers(req, res, next) {
     let paramIndex = 2;
 
     if (search) {
-      whereClause += ` AND (cm.display_name ILIKE $${paramIndex} OR cm.platform_user_id ILIKE $${paramIndex})`;
+      whereClause += ` AND (u.username ILIKE $${paramIndex} OR u.email ILIKE $${paramIndex})`;
       params.push(`%${search}%`);
       paramIndex++;
     }
@@ -39,31 +40,33 @@ export async function getMembers(req, res, next) {
     }
 
     const countResult = await query(
-      `SELECT COUNT(*) as count FROM community_members cm ${whereClause}`,
+      `SELECT COUNT(*) as count FROM community_members cm
+       LEFT JOIN hub_users u ON u.id = cm.user_id
+       ${whereClause}`,
       params
     );
     const total = parseInt(countResult.rows[0]?.count || 0, 10);
 
     const result = await query(
-      `SELECT cm.id, cm.user_id, cm.display_name, cm.platform, cm.platform_user_id,
-              cm.role, cm.reputation_score, cm.joined_at, cm.last_activity
+      `SELECT cm.id, cm.user_id, u.username, u.email, u.avatar_url,
+              cm.role, cm.reputation, cm.joined_at
        FROM community_members cm
+       LEFT JOIN hub_users u ON u.id = cm.user_id
        ${whereClause}
-       ORDER BY cm.reputation_score DESC, cm.joined_at ASC
+       ORDER BY cm.reputation DESC, cm.joined_at ASC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, limit, offset]
     );
 
     const members = result.rows.map(row => ({
       id: row.id,
-      odId: row.user_id,
-      displayName: row.display_name,
-      platform: row.platform,
-      platformUserId: row.platform_user_id,
+      userId: row.user_id,
+      username: row.username,
+      email: row.email,
+      avatarUrl: row.avatar_url,
       role: row.role,
-      reputationScore: row.reputation_score || 0,
+      reputation: formatReputation(row.reputation),
       joinedAt: row.joined_at?.toISOString(),
-      lastActivity: row.last_activity?.toISOString(),
     }));
 
     res.json({
@@ -132,50 +135,87 @@ export async function updateMemberRole(req, res, next) {
 
 /**
  * Adjust member reputation
+ * Community admins can adjust reputation within the credit score bounds (300-850)
  */
 export async function adjustReputation(req, res, next) {
   try {
     const communityId = parseInt(req.params.communityId, 10);
     const userId = parseInt(req.params.userId, 10);
-    const { amount, reason } = req.body;
+    const { amount, reason, setTo } = req.body;
 
-    if (typeof amount !== 'number' || amount === 0) {
-      return next(errors.badRequest('Invalid amount'));
+    // Support both relative adjustment (amount) and absolute set (setTo)
+    if (setTo !== undefined) {
+      // Absolute set - clamp to valid range
+      const newScore = clampReputation(setTo);
+
+      const result = await query(
+        `UPDATE community_members
+         SET reputation = $1
+         WHERE community_id = $2 AND user_id = $3
+         RETURNING reputation`,
+        [newScore, communityId, userId]
+      );
+
+      if (result.rows.length === 0) {
+        return next(errors.notFound('Member not found'));
+      }
+
+      logger.audit('Reputation set', {
+        adminId: req.user.id,
+        communityId,
+        targetUserId: userId,
+        newScore,
+        reason,
+      });
+
+      res.json({
+        success: true,
+        reputation: formatReputation(result.rows[0].reputation),
+      });
+    } else {
+      // Relative adjustment
+      if (typeof amount !== 'number' || amount === 0) {
+        return next(errors.badRequest('Invalid amount - provide amount (relative) or setTo (absolute)'));
+      }
+
+      // Get current reputation and calculate new value with clamp
+      const currentResult = await query(
+        `SELECT reputation FROM community_members
+         WHERE community_id = $1 AND user_id = $2`,
+        [communityId, userId]
+      );
+
+      if (currentResult.rows.length === 0) {
+        return next(errors.notFound('Member not found'));
+      }
+
+      const currentRep = currentResult.rows[0].reputation || 600;
+      const newScore = clampReputation(currentRep + amount);
+
+      const result = await query(
+        `UPDATE community_members
+         SET reputation = $1
+         WHERE community_id = $2 AND user_id = $3
+         RETURNING reputation`,
+        [newScore, communityId, userId]
+      );
+
+      logger.audit('Reputation adjusted', {
+        adminId: req.user.id,
+        communityId,
+        targetUserId: userId,
+        change: amount,
+        oldScore: currentRep,
+        newScore,
+        reason,
+      });
+
+      res.json({
+        success: true,
+        reputation: formatReputation(result.rows[0].reputation),
+        change: newScore - currentRep,
+      });
     }
-
-    // Update reputation
-    const result = await query(
-      `UPDATE community_members
-       SET reputation_score = reputation_score + $1, updated_at = NOW()
-       WHERE community_id = $2 AND user_id = $3
-       RETURNING reputation_score`,
-      [amount, communityId, userId]
-    );
-
-    if (result.rows.length === 0) {
-      return next(errors.notFound('Member not found'));
-    }
-
-    // Log activity
-    await query(
-      `INSERT INTO community_activity
-       (community_id, activity_type, user_id, description, metadata)
-       VALUES ($1, 'reputation_adjust', $2, $3, $4)`,
-      [communityId, userId, reason || 'Reputation adjusted', JSON.stringify({ amount, by: req.user.id })]
-    );
-
-    logger.audit('Reputation adjusted', {
-      adminId: req.user.id,
-      communityId,
-      targetUserId: userId,
-      amount,
-      reason,
-    });
-
-    res.json({
-      success: true,
-      newScore: result.rows[0].reputation_score,
-    });
   } catch (err) {
     next(err);
   }

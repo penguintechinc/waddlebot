@@ -73,6 +73,11 @@ const PLATFORM_CONFIGS = {
     secrets: ['api_key', 'client_secret'],
     testEndpoint: 'https://www.googleapis.com/youtube/v3/channels?part=id&mine=true'
   },
+  kick: {
+    fields: ['client_id', 'client_secret', 'webhook_secret'],
+    secrets: ['client_secret', 'webhook_secret'],
+    testEndpoint: 'https://kick.com/api/v2/channels'
+  },
   email: {
     fields: ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_from', 'smtp_from_name', 'smtp_secure'],
     secrets: ['smtp_password'],
@@ -263,6 +268,9 @@ export async function testPlatformConnection(req, res) {
       case 'youtube':
         testResult = await testYouTubeConnection(credentials);
         break;
+      case 'kick':
+        testResult = await testKickConnection(credentials);
+        break;
       case 'email':
         testResult = await testEmailConnection(credentials);
         break;
@@ -436,6 +444,42 @@ async function testYouTubeConnection(credentials) {
         success: false,
         message: `YouTube API error: ${error.error?.message || response.status}`
       };
+    }
+  } catch (error) {
+    return { success: false, message: `Connection failed: ${error.message}` };
+  }
+}
+
+/**
+ * Test KICK connection
+ */
+async function testKickConnection(credentials) {
+  if (!credentials.client_id || !credentials.client_secret) {
+    return { success: false, message: 'Client ID and secret not configured' };
+  }
+
+  try {
+    // Get app access token from KICK
+    const tokenResponse = await fetch('https://id.kick.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: credentials.client_id,
+        client_secret: credentials.client_secret,
+        grant_type: 'client_credentials'
+      })
+    });
+
+    if (tokenResponse.ok) {
+      const data = await tokenResponse.json();
+      return {
+        success: true,
+        message: 'KICK credentials validated',
+        data: { expiresIn: data.expires_in }
+      };
+    } else {
+      const error = await tokenResponse.json().catch(() => ({}));
+      return { success: false, message: `KICK API error: ${error.message || tokenResponse.status}` };
     }
   } catch (error) {
     return { success: false, message: `Connection failed: ${error.message}` };

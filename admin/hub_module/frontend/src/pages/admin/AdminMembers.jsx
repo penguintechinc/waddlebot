@@ -75,15 +75,29 @@ function AdminMembers() {
               members.map((member) => (
                 <tr key={member.id}>
                   <td>
-                    <div className="font-medium text-sky-100">{member.displayName}</div>
-                    <div className="text-xs text-navy-500">{member.platform}</div>
+                    <div className="flex items-center space-x-3">
+                      {member.avatarUrl ? (
+                        <img src={member.avatarUrl} alt="" className="w-8 h-8 rounded-full" />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-navy-700 flex items-center justify-center text-sm">
+                          {member.username?.[0]?.toUpperCase() || '?'}
+                        </div>
+                      )}
+                      <div>
+                        <div className="font-medium text-sky-100">{member.username || 'Unknown'}</div>
+                        <div className="text-xs text-navy-500">{member.email}</div>
+                      </div>
+                    </div>
                   </td>
                   <td>
                     <span className={`badge ${roleColor(member.role)}`}>
                       {member.role.replace('community-', '')}
                     </span>
                   </td>
-                  <td className="text-gold-400 font-medium">{member.reputationScore}</td>
+                  <td>
+                    <div className="text-gold-400 font-medium">{member.reputation?.score || 600}</div>
+                    <div className="text-xs text-navy-500 capitalize">{member.reputation?.label || 'Fair'}</div>
+                  </td>
                   <td className="text-sm text-navy-400">
                     {new Date(member.joinedAt).toLocaleDateString()}
                   </td>

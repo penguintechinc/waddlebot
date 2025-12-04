@@ -4,6 +4,7 @@
 import { query } from '../config/database.js';
 import { errors } from '../middleware/errorHandler.js';
 import { logger } from '../utils/logger.js';
+import { formatReputation, clampReputation } from '../utils/reputation.js';
 import {
   verifyPlatformAdmin,
   isUserCommunityAdmin,
@@ -70,7 +71,7 @@ export async function getCommunityDashboard(req, res, next) {
 
     // Get user's membership
     const memberResult = await query(
-      `SELECT role, reputation_score, joined_at
+      `SELECT role, reputation, joined_at
        FROM community_members
        WHERE community_id = $1 AND user_id = $2 AND is_active = true`,
       [communityId, req.user.id]
@@ -82,25 +83,49 @@ export async function getCommunityDashboard(req, res, next) {
 
     const membership = memberResult.rows[0];
 
-    // Get recent activity
-    const activityResult = await query(
-      `SELECT id, activity_type, description, metadata, created_at
-       FROM community_activity
-       WHERE community_id = $1
-       ORDER BY created_at DESC
-       LIMIT 10`,
-      [communityId]
-    );
+    // Get live streams from linked servers if any
+    let liveStreams = [];
+    try {
+      const streamsResult = await query(
+        `SELECT co.entity_id, co.channel_id, co.viewer_count, co.stream_title, co.game_name
+         FROM coordination co
+         JOIN community_servers cs ON cs.platform = co.platform AND cs.platform_server_id = co.server_id
+         WHERE cs.community_id = $1 AND cs.status = 'approved' AND co.is_live = true
+         ORDER BY co.viewer_count DESC
+         LIMIT 5`,
+        [communityId]
+      );
+      liveStreams = streamsResult.rows.map(row => ({
+        entityId: row.entity_id,
+        channelName: row.channel_id,
+        viewerCount: row.viewer_count || 0,
+        title: row.stream_title || '',
+        game: row.game_name || '',
+      }));
+    } catch {
+      // coordination table might not have all columns yet
+    }
 
-    // Get live streams if any
-    const streamsResult = await query(
-      `SELECT entity_id, channel_id, viewer_count, stream_title, game_name
-       FROM coordination
-       WHERE community_id = $1 AND is_live = true
-       ORDER BY viewer_count DESC
-       LIMIT 5`,
-      [communityId]
-    );
+    // Get recent chat messages as activity
+    let recentActivity = [];
+    try {
+      const activityResult = await query(
+        `SELECT id, sender_username, message_content, created_at
+         FROM hub_chat_messages
+         WHERE community_id = $1
+         ORDER BY created_at DESC
+         LIMIT 10`,
+        [communityId]
+      );
+      recentActivity = activityResult.rows.map(row => ({
+        id: row.id,
+        type: 'chat',
+        description: `${row.sender_username}: ${row.message_content?.substring(0, 100)}`,
+        createdAt: row.created_at?.toISOString(),
+      }));
+    } catch {
+      // hub_chat_messages might be empty
+    }
 
     res.json({
       success: true,
@@ -117,23 +142,11 @@ export async function getCommunityDashboard(req, res, next) {
       },
       membership: {
         role: membership.role,
-        reputationScore: membership.reputation_score || 0,
+        reputation: formatReputation(membership.reputation),
         joinedAt: membership.joined_at?.toISOString(),
       },
-      recentActivity: activityResult.rows.map(row => ({
-        id: row.id,
-        type: row.activity_type,
-        description: row.description,
-        metadata: row.metadata,
-        createdAt: row.created_at?.toISOString(),
-      })),
-      liveStreams: streamsResult.rows.map(row => ({
-        entityId: row.entity_id,
-        channelName: row.channel_id,
-        viewerCount: row.viewer_count || 0,
-        title: row.stream_title || '',
-        game: row.game_name || '',
-      })),
+      recentActivity,
+      liveStreams,
     });
   } catch (err) {
     next(err);
@@ -153,11 +166,11 @@ export async function getLeaderboard(req, res, next) {
     }
 
     const result = await query(
-      `SELECT cm.user_id, cm.display_name, cm.reputation_score, cm.role,
-              cm.platform, cm.platform_user_id
+      `SELECT cm.user_id, u.username, u.avatar_url, cm.reputation, cm.role
        FROM community_members cm
+       LEFT JOIN hub_users u ON u.id = cm.user_id
        WHERE cm.community_id = $1 AND cm.is_active = true
-       ORDER BY cm.reputation_score DESC
+       ORDER BY cm.reputation DESC
        LIMIT $2`,
       [communityId, limit]
     );
@@ -165,10 +178,10 @@ export async function getLeaderboard(req, res, next) {
     const leaderboard = result.rows.map((row, index) => ({
       rank: index + 1,
       userId: row.user_id,
-      displayName: row.display_name,
-      reputationScore: row.reputation_score || 0,
+      username: row.username,
+      avatarUrl: row.avatar_url,
+      reputation: formatReputation(row.reputation),
       role: row.role,
-      platform: row.platform,
     }));
 
     res.json({ success: true, leaderboard });

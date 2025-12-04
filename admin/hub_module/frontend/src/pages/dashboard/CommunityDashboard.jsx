@@ -105,8 +105,10 @@ function CommunityDashboard() {
               <div className="text-navy-400 text-sm">Members</div>
             </div>
             <div className="card p-4 border-l-4 border-l-gold-400">
-              <div className="text-2xl font-bold text-gold-400">{membership.reputationScore}</div>
-              <div className="text-navy-400 text-sm">Your Rep</div>
+              <div className="text-2xl font-bold text-gold-400">{membership.reputation?.score || 600}</div>
+              <div className="text-navy-400 text-sm capitalize">
+                {membership.reputation?.label || 'Fair'} Rep
+              </div>
             </div>
             <div className="card p-4 border-l-4 border-l-purple-400">
               <div className="text-2xl font-bold text-purple-400">{liveStreams.length}</div>

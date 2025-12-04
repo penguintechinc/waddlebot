@@ -101,6 +101,9 @@ export async function register(req, res, next) {
 
     const user = result.rows[0];
 
+    // Auto-add user to global community
+    await addUserToGlobalCommunity(user.id);
+
     // Send verification email if required
     if (requireVerification) {
       const emailResult = await sendVerificationEmail(user.email, user.username, verificationToken);
@@ -413,7 +416,7 @@ export async function startOAuth(req, res, next) {
   try {
     const { platform } = req.params;
     const { mode } = req.query; // 'login' or 'link'
-    const validPlatforms = ['discord', 'twitch', 'slack', 'youtube'];
+    const validPlatforms = ['discord', 'twitch', 'slack', 'youtube', 'kick'];
 
     if (!validPlatforms.includes(platform)) {
       return next(errors.badRequest('Invalid platform'));
@@ -574,6 +577,9 @@ async function findOrCreateUserFromOAuth(platform, userData, mode) {
     user = newUser.rows[0];
     userId = user.id;
     logger.auth('Created new user from OAuth', { platform, userId, email });
+
+    // Auto-add new user to global community
+    await addUserToGlobalCommunity(userId);
   }
 
   // Create identity link
@@ -597,7 +603,7 @@ export async function linkOAuthAccount(req, res, next) {
     }
 
     const { platform } = req.params;
-    const validPlatforms = ['discord', 'twitch', 'slack', 'youtube'];
+    const validPlatforms = ['discord', 'twitch', 'slack', 'youtube', 'kick'];
 
     if (!validPlatforms.includes(platform)) {
       return next(errors.badRequest('Invalid platform'));
@@ -1094,6 +1100,8 @@ async function generateOAuthUrl(platform, redirectUri, state) {
       return `https://slack.com/oauth/v2/authorize?client_id=${creds.client_id}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=identity.basic,identity.email,identity.avatar&state=${state}`;
     case 'youtube':
       return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${creds.client_id}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=https://www.googleapis.com/auth/youtube.readonly%20email&state=${state}`;
+    case 'kick':
+      return `https://id.kick.com/oauth/authorize?client_id=${creds.client_id}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=user:read%20channel:read%20chat:read%20chat:write&state=${state}`;
     default:
       throw new Error(`Unknown platform: ${platform}`);
   }
@@ -1174,7 +1182,153 @@ async function exchangeOAuthCode(platform, code, redirectUri) {
         refresh_token: tokens.refresh_token,
       };
     }
+    case 'youtube': {
+      // Google OAuth for YouTube
+      const tokenResp = await axios.post(
+        'https://oauth2.googleapis.com/token',
+        new URLSearchParams({
+          client_id: creds.client_id,
+          client_secret: creds.client_secret,
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri,
+        }),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+      );
+      const tokens = tokenResp.data;
+
+      // Get user info from Google
+      const userInfoResp = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {
+        headers: { Authorization: `Bearer ${tokens.access_token}` },
+      });
+      const userInfo = userInfoResp.data;
+
+      // Get YouTube channel info
+      let channelName = userInfo.name;
+      try {
+        const ytResp = await axios.get('https://www.googleapis.com/youtube/v3/channels', {
+          params: { part: 'snippet', mine: true },
+          headers: { Authorization: `Bearer ${tokens.access_token}` },
+        });
+        if (ytResp.data.items && ytResp.data.items.length > 0) {
+          channelName = ytResp.data.items[0].snippet.title;
+        }
+      } catch {
+        // YouTube channel not required, use Google name
+      }
+
+      return {
+        id: userInfo.id,
+        username: channelName || userInfo.email.split('@')[0],
+        email: userInfo.email,
+        avatar_url: userInfo.picture,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+      };
+    }
+    case 'slack': {
+      const tokenResp = await axios.post(
+        'https://slack.com/api/oauth.v2.access',
+        new URLSearchParams({
+          client_id: creds.client_id,
+          client_secret: creds.client_secret,
+          code,
+          redirect_uri: redirectUri,
+        }),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+      );
+      const data = tokenResp.data;
+      if (!data.ok) {
+        throw new Error(`Slack OAuth error: ${data.error}`);
+      }
+
+      // Get user identity
+      const identityResp = await axios.get('https://slack.com/api/users.identity', {
+        headers: { Authorization: `Bearer ${data.authed_user.access_token}` },
+      });
+      const identity = identityResp.data;
+
+      return {
+        id: identity.user.id,
+        username: identity.user.name,
+        email: identity.user.email,
+        avatar_url: identity.user.image_192 || identity.user.image_72,
+        access_token: data.authed_user.access_token,
+        refresh_token: null,
+      };
+    }
+    case 'kick': {
+      // KICK OAuth token exchange
+      const tokenResp = await axios.post(
+        'https://id.kick.com/oauth/token',
+        new URLSearchParams({
+          client_id: creds.client_id,
+          client_secret: creds.client_secret,
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri,
+        }),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+      );
+      const tokens = tokenResp.data;
+
+      // Get user info from KICK
+      const userResp = await axios.get('https://kick.com/api/v2/user', {
+        headers: { Authorization: `Bearer ${tokens.access_token}` },
+      });
+      const user = userResp.data;
+
+      return {
+        id: user.id.toString(),
+        username: user.username,
+        email: user.email || null,
+        avatar_url: user.profile_pic || user.avatar || null,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+      };
+    }
     default:
       throw new Error(`OAuth exchange not implemented for ${platform}`);
+  }
+}
+
+/**
+ * Add user to global community as a member
+ * Called automatically when new users register or sign in via OAuth
+ */
+async function addUserToGlobalCommunity(userId) {
+  try {
+    // Find the global community
+    const globalCommunity = await query(
+      'SELECT id FROM communities WHERE is_global = true AND is_active = true LIMIT 1'
+    );
+
+    if (globalCommunity.rows.length === 0) {
+      logger.debug('No global community found, skipping auto-add');
+      return;
+    }
+
+    const communityId = globalCommunity.rows[0].id;
+
+    // Add user as member (ignore if already exists)
+    await query(
+      `INSERT INTO community_members (community_id, user_id, role, is_active, joined_at)
+       VALUES ($1, $2, 'member', true, NOW())
+       ON CONFLICT (community_id, user_id) DO NOTHING`,
+      [communityId, userId]
+    );
+
+    // Update member count
+    await query(
+      `UPDATE communities SET member_count = (
+        SELECT COUNT(*) FROM community_members WHERE community_id = $1 AND is_active = true
+      ) WHERE id = $1`,
+      [communityId]
+    );
+
+    logger.debug('User added to global community', { userId, communityId });
+  } catch (err) {
+    // Don't fail registration if global community add fails
+    logger.error('Failed to add user to global community', { userId, error: err.message });
   }
 }
