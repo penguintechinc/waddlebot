@@ -80,7 +80,7 @@ export async function getUser(req, res, next) {
 
     // Get user memberships
     const membershipsResult = await query(
-      `SELECT cm.community_id, c.name as community_name, cm.role, cm.reputation_score,
+      `SELECT cm.community_id, c.name as community_name, cm.role, cm.reputation,
               cm.platform, cm.platform_user_id, cm.display_name, cm.joined_at, cm.last_activity
        FROM community_members cm
        JOIN communities c ON c.id = cm.community_id
@@ -97,7 +97,7 @@ export async function getUser(req, res, next) {
       communityId: row.community_id,
       communityName: row.community_name,
       role: row.role,
-      reputationScore: row.reputation_score || 0,
+      reputationScore: row.reputation || 0,
       joinedAt: row.joined_at?.toISOString(),
       lastActivity: row.last_activity?.toISOString(),
     }));

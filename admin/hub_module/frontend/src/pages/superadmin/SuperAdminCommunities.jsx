@@ -109,6 +109,8 @@ function SuperAdminCommunities() {
             <option value="discord">Discord</option>
             <option value="twitch">Twitch</option>
             <option value="slack">Slack</option>
+            <option value="youtube">YouTube</option>
+            <option value="kick">KICK</option>
           </select>
           <select
             value={isActive}
@@ -167,6 +169,8 @@ function SuperAdminCommunities() {
                     <span className={`badge ${
                       community.platform === 'discord' ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' :
                       community.platform === 'twitch' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' :
+                      community.platform === 'youtube' ? 'bg-red-500/20 text-red-300 border border-red-500/30' :
+                      community.platform === 'kick' ? 'bg-green-500/20 text-green-300 border border-green-500/30' :
                       'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                     }`}>
                       {community.platform}

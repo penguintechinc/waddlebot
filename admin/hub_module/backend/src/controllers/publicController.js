@@ -163,33 +163,24 @@ export async function getCommunity(req, res, next) {
 export async function getLiveStreams(req, res, next) {
   try {
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '20', 10)));
-    const communityId = req.query.communityId ? parseInt(req.query.communityId, 10) : null;
-
-    let whereClause = 'WHERE c.is_live = true AND c.platform = $1';
-    const params = ['twitch'];
-
-    if (communityId) {
-      whereClause += ' AND c.community_id = $2';
-      params.push(communityId);
-    }
 
     const result = await query(`
       SELECT c.entity_id, c.channel_id, c.server_id, c.viewer_count, c.live_since,
-             c.stream_title, c.game_name, c.thumbnail_url, c.metadata
+             c.stream_title, c.game_name, c.thumbnail_url
       FROM coordination c
-      ${whereClause}
+      WHERE c.is_live = true AND c.platform = $1
       ORDER BY c.viewer_count DESC
-      LIMIT $${params.length + 1}
-    `, [...params, limit]);
+      LIMIT $2
+    `, ['twitch', limit]);
 
     const streams = result.rows.map(row => ({
       entityId: row.entity_id,
       channelName: row.channel_id || row.server_id,
       viewerCount: row.viewer_count || 0,
       liveSince: row.live_since?.toISOString(),
-      title: row.stream_title || row.metadata?.title || '',
-      game: row.game_name || row.metadata?.game || '',
-      thumbnailUrl: row.thumbnail_url || row.metadata?.thumbnail_url || '',
+      title: row.stream_title || '',
+      game: row.game_name || '',
+      thumbnailUrl: row.thumbnail_url || '',
     }));
 
     res.json({
@@ -211,7 +202,7 @@ export async function getStreamDetails(req, res, next) {
 
     const result = await query(`
       SELECT entity_id, platform, channel_id, server_id, is_live, viewer_count,
-             live_since, last_activity, stream_title, game_name, thumbnail_url, metadata
+             live_since, last_updated, stream_title, game_name, thumbnail_url
       FROM coordination
       WHERE entity_id = $1
     `, [entityId]);
@@ -230,11 +221,10 @@ export async function getStreamDetails(req, res, next) {
         isLive: row.is_live,
         viewerCount: row.viewer_count || 0,
         liveSince: row.live_since?.toISOString(),
-        lastActivity: row.last_activity?.toISOString(),
-        title: row.stream_title || row.metadata?.title || '',
-        game: row.game_name || row.metadata?.game || '',
-        thumbnailUrl: row.thumbnail_url || row.metadata?.thumbnail_url || '',
-        profileImage: row.metadata?.profile_image || '',
+        lastActivity: row.last_updated?.toISOString(),
+        title: row.stream_title || '',
+        game: row.game_name || '',
+        thumbnailUrl: row.thumbnail_url || '',
       },
     });
   } catch (err) {

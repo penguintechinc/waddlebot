@@ -156,6 +156,12 @@ export async function requireCommunityAdmin(req, res, next) {
     return next(errors.badRequest('Invalid community ID'));
   }
 
+  // Super admins have access to all communities
+  if (req.user?.isSuperAdmin || req.user?.roles?.includes('super_admin')) {
+    req.communityRole = 'super-admin';
+    return next();
+  }
+
   // Platform admins have access to all communities
   if (req.user?.roles?.includes('platform-admin')) {
     req.communityRole = 'platform-admin';

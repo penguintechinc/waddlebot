@@ -129,6 +129,8 @@ function SuperAdminCreateCommunity() {
                 <option value="discord">Discord</option>
                 <option value="twitch">Twitch</option>
                 <option value="slack">Slack</option>
+                <option value="youtube">YouTube</option>
+                <option value="kick">KICK</option>
               </select>
             </div>
 

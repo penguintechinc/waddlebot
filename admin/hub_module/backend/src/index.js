@@ -138,7 +138,7 @@ async function initializeDatabase() {
         display_name VARCHAR(255),
         avatar_url TEXT,
         role VARCHAR(50) DEFAULT 'member',
-        reputation_score INTEGER DEFAULT 0,
+        reputation INTEGER DEFAULT 600,
         is_active BOOLEAN DEFAULT true,
         joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -216,21 +216,44 @@ async function initializeDatabase() {
       )
     `);
 
-    // Check if default admin exists
+    // Check if default admin exists in hub_users (unified auth system)
     const adminCheck = await query(
-      'SELECT id FROM hub_admins WHERE username = $1',
-      ['admin']
+      'SELECT id FROM hub_users WHERE email = $1',
+      ['admin@localhost']
     );
 
     if (adminCheck.rows.length === 0) {
       // Create default admin with password 'admin123'
       const passwordHash = await bcrypt.hash('admin123', 12);
-      await query(
-        `INSERT INTO hub_admins (username, password_hash, email, is_super_admin)
-         VALUES ($1, $2, $3, $4)`,
-        ['admin', passwordHash, 'admin@waddlebot.local', true]
+      const adminResult = await query(
+        `INSERT INTO hub_users (email, username, password_hash, is_super_admin, is_active, email_verified)
+         VALUES ($1, $2, $3, true, true, true)
+         RETURNING id`,
+        ['admin@localhost', 'admin', passwordHash]
       );
-      logger.system('Default admin user created (username: admin, password: admin123)');
+      const adminId = adminResult.rows[0].id;
+      logger.system('Default admin user created (email: admin@localhost, password: admin123)');
+
+      // Add admin to global community if it exists
+      const globalCommunity = await query(
+        'SELECT id FROM communities WHERE is_global = true LIMIT 1'
+      );
+      if (globalCommunity.rows.length > 0) {
+        await query(
+          `INSERT INTO community_members (community_id, user_id, role, is_active, joined_at)
+           VALUES ($1, $2, 'member', true, NOW())
+           ON CONFLICT (community_id, user_id) DO NOTHING`,
+          [globalCommunity.rows[0].id, adminId]
+        );
+        // Update member count
+        await query(
+          `UPDATE communities SET member_count = (
+            SELECT COUNT(*) FROM community_members WHERE community_id = $1 AND is_active = true
+          ) WHERE id = $1`,
+          [globalCommunity.rows[0].id]
+        );
+        logger.system('Admin user added to global community');
+      }
     }
 
     logger.system('Database initialized successfully');

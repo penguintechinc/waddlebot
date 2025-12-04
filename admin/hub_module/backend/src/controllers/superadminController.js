@@ -136,6 +136,14 @@ export async function createCommunity(req, res, next) {
       return next(errors.badRequest('Name and platform are required'));
     }
 
+    // Validate ownerId is a number if provided
+    const parsedOwnerId = ownerId ? parseInt(ownerId, 10) : null;
+    if (ownerId && isNaN(parsedOwnerId)) {
+      // If ownerId is not a number, it might be a username - use it as ownerName instead
+      req.body.ownerName = req.body.ownerName || ownerId;
+      req.body.ownerId = null;
+    }
+
     // Check if community name already exists
     const existingResult = await query(
       'SELECT id FROM communities WHERE name = $1',
@@ -147,6 +155,9 @@ export async function createCommunity(req, res, next) {
     }
 
     // Use transaction to ensure community and owner membership are created together
+    const finalOwnerId = parsedOwnerId || null;
+    const finalOwnerName = req.body.ownerName || ownerName || null;
+
     const result = await transaction(async (client) => {
       // Create the community
       const communityResult = await client.query(
@@ -160,8 +171,8 @@ export async function createCommunity(req, res, next) {
           description || '',
           platform,
           platformServerId || null,
-          ownerId || null,
-          ownerName || null,
+          finalOwnerId,
+          finalOwnerName,
           isPublic !== false,
           req.user.id,
         ]
@@ -169,17 +180,14 @@ export async function createCommunity(req, res, next) {
 
       const newCommunity = communityResult.rows[0];
 
-      // Add creator as community-owner member
+      // Add creator as community-owner member (reputation starts at 600 like credit score)
       await client.query(
         `INSERT INTO community_members
-         (community_id, user_id, platform, platform_user_id, display_name, role, reputation_score, is_active, joined_at)
-         VALUES ($1, $2, $3, $4, $5, 'community-owner', 100, true, NOW())`,
+         (community_id, user_id, role, reputation, is_active, joined_at)
+         VALUES ($1, $2, 'owner', 600, true, NOW())`,
         [
           newCommunity.id,
           req.user.id || null,
-          'admin',
-          req.user.id,
-          ownerName || req.user.username || 'Admin',
         ]
       );
 
@@ -291,6 +299,16 @@ export async function updateCommunity(req, res, next) {
 export async function deleteCommunity(req, res, next) {
   try {
     const communityId = parseInt(req.params.id, 10);
+
+    // Check if this is a global community (cannot be deleted)
+    const globalCheck = await query(
+      'SELECT is_global FROM communities WHERE id = $1',
+      [communityId]
+    );
+
+    if (globalCheck.rows.length > 0 && globalCheck.rows[0].is_global) {
+      return next(errors.forbidden('Global communities cannot be deleted'));
+    }
 
     const result = await query(
       `UPDATE communities SET is_active = false, deleted_at = NOW(), deleted_by = $1

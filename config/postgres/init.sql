@@ -43,9 +43,6 @@ $$ language 'plpgsql';
 -- Insert some development data (optional)
 -- This would be handled by the application initialization
 
--- Log the initialization
-INSERT INTO pg_stat_statements_info (dealloc) VALUES (0) ON CONFLICT DO NOTHING;
-
 -- Platform configuration table (for storing OAuth credentials)
 CREATE TABLE IF NOT EXISTS platform_configs (
     id SERIAL PRIMARY KEY,
@@ -92,21 +89,21 @@ CREATE INDEX IF NOT EXISTS idx_hub_users_username ON hub_users(username);
 -- Platform identities linked to users
 CREATE TABLE IF NOT EXISTS hub_user_identities (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE,
     platform VARCHAR(50) NOT NULL,
     platform_user_id VARCHAR(100) NOT NULL,
     platform_username VARCHAR(100),
     platform_email VARCHAR(255),
-    platform_avatar TEXT,
+    avatar_url TEXT,
     access_token TEXT,
     refresh_token TEXT,
     token_expires_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(platform, platform_user_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_hub_user_identities_user ON hub_user_identities(user_id);
+CREATE INDEX IF NOT EXISTS idx_hub_user_identities_user ON hub_user_identities(hub_user_id);
 CREATE INDEX IF NOT EXISTS idx_hub_user_identities_platform ON hub_user_identities(platform, platform_user_id);
 
 -- OAuth state storage for CSRF protection
@@ -169,6 +166,7 @@ CREATE TABLE IF NOT EXISTS communities (
     member_count INTEGER DEFAULT 0,
     is_active BOOLEAN DEFAULT TRUE,
     is_public BOOLEAN DEFAULT TRUE,
+    is_global BOOLEAN DEFAULT FALSE,
     join_mode VARCHAR(20) DEFAULT 'open',
     config JSONB DEFAULT '{}',
     created_by VARCHAR(255),
@@ -178,6 +176,7 @@ CREATE TABLE IF NOT EXISTS communities (
     deleted_by VARCHAR(255)
 );
 COMMENT ON COLUMN communities.join_mode IS 'open = anyone can join, approval = requires admin/mod approval, invite = invite only';
+COMMENT ON COLUMN communities.is_global IS 'Global community that all users are auto-added to. Cannot be deleted.';
 
 CREATE INDEX IF NOT EXISTS idx_communities_name ON communities(name);
 CREATE INDEX IF NOT EXISTS idx_communities_platform ON communities(platform, platform_server_id);
@@ -189,11 +188,12 @@ CREATE TABLE IF NOT EXISTS community_members (
     community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
     user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE,
     role VARCHAR(50) DEFAULT 'member',
-    reputation INTEGER DEFAULT 0,
+    reputation INTEGER DEFAULT 600,
     is_active BOOLEAN DEFAULT TRUE,
     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(community_id, user_id)
 );
+COMMENT ON COLUMN community_members.reputation IS 'Credit score style reputation (300-850 range, starts at 600)';
 
 CREATE INDEX IF NOT EXISTS idx_community_members_community ON community_members(community_id);
 CREATE INDEX IF NOT EXISTS idx_community_members_user ON community_members(user_id);
@@ -297,10 +297,48 @@ COMMENT ON COLUMN mirror_group_members.direction IS 'send_only, receive_only, bi
 CREATE INDEX IF NOT EXISTS idx_mirror_group_members_group ON mirror_group_members(mirror_group_id);
 CREATE INDEX IF NOT EXISTS idx_mirror_group_members_server ON mirror_group_members(community_server_id);
 
--- Create default super admin user (password: admin123)
-INSERT INTO hub_users (email, username, password_hash, is_super_admin, is_active, email_verified)
-VALUES ('admin@localhost', 'admin', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X4.0xGQH0IH9q8g.G', true, true, true)
-ON CONFLICT (email) DO NOTHING;
+-- Coordination table for tracking live streams and platform connections
+CREATE TABLE IF NOT EXISTS coordination (
+    id SERIAL PRIMARY KEY,
+    entity_id VARCHAR(255) NOT NULL,
+    platform VARCHAR(50) NOT NULL,
+    server_id VARCHAR(255),
+    channel_id VARCHAR(255),
+    channel_name VARCHAR(255),
+    is_live BOOLEAN DEFAULT FALSE,
+    viewer_count INTEGER DEFAULT 0,
+    live_since TIMESTAMP,
+    stream_title TEXT,
+    game_name VARCHAR(255),
+    thumbnail_url TEXT,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(platform, channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_coordination_platform ON coordination(platform);
+CREATE INDEX IF NOT EXISTS idx_coordination_live ON coordination(is_live);
+CREATE INDEX IF NOT EXISTS idx_coordination_server ON coordination(server_id);
+
+-- NOTE: Default admin user is created by the hub module on startup
+-- This ensures the password hash is compatible with the Node.js bcrypt implementation
+
+-- Create global community (all users auto-added, cannot be deleted)
+INSERT INTO communities (name, display_name, description, platform, is_active, is_public, is_global, join_mode, config)
+VALUES (
+    'waddlebot-global',
+    'WaddleBot Global',
+    'The global WaddleBot community. All users are automatically members.',
+    'hub',
+    true,
+    true,
+    true,
+    'open',
+    '{"logo_url": null, "banner_url": null, "is_system": true}'
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- NOTE: Admin user is added to global community by the hub module when it creates the admin user
+-- All new users are automatically added to the global community via authController.js
 
 -- Development notice
 DO $$
@@ -309,5 +347,6 @@ BEGIN
     RAISE NOTICE 'Database: waddlebot';
     RAISE NOTICE 'Main user: waddlebot / waddlebot123';
     RAISE NOTICE 'Dev user: waddlebot_dev / dev123';
+    RAISE NOTICE 'Global community created: waddlebot-global';
 END
 $$;

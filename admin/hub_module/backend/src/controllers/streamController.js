@@ -27,43 +27,42 @@ export async function getLiveStreams(req, res, next) {
       return next(errors.forbidden('Not a member of this community'));
     }
 
-    // Get live streams from coordination table
+    // Get live streams from coordination table via linked community_servers
     const result = await query(
       `SELECT
-        c.entity_id,
-        c.platform,
-        c.server_id,
-        c.channel_id,
-        c.is_live,
-        c.live_since,
-        c.viewer_count,
-        c.metadata,
-        s.server_id as twitch_channel_name
-       FROM coordination c
-       LEFT JOIN servers s ON s.id = c.server_id
-       WHERE c.community_id = $1
-         AND c.platform = 'twitch'
-         AND c.is_live = true
-       ORDER BY c.viewer_count DESC`,
+        co.entity_id,
+        co.platform,
+        co.server_id,
+        co.channel_id,
+        co.channel_name,
+        co.is_live,
+        co.live_since,
+        co.viewer_count,
+        co.stream_title,
+        co.game_name,
+        co.thumbnail_url
+       FROM coordination co
+       JOIN community_servers cs ON cs.platform = co.platform AND cs.platform_server_id = co.server_id
+       WHERE cs.community_id = $1
+         AND cs.status = 'approved'
+         AND co.platform = 'twitch'
+         AND co.is_live = true
+       ORDER BY co.viewer_count DESC`,
       [communityId]
     );
 
-    const streams = result.rows.map(row => {
-      const metadata = row.metadata || {};
-      return {
-        entityId: row.entity_id,
-        platform: row.platform,
-        channelId: row.channel_id,
-        channelName: row.twitch_channel_name || row.channel_id,
-        isLive: row.is_live,
-        liveSince: row.live_since?.toISOString(),
-        viewerCount: row.viewer_count || 0,
-        title: metadata.stream_title || metadata.title || '',
-        game: metadata.game_name || metadata.game || '',
-        thumbnailUrl: metadata.thumbnail_url || '',
-        language: metadata.language || 'en',
-      };
-    });
+    const streams = result.rows.map(row => ({
+      entityId: row.entity_id,
+      platform: row.platform,
+      channelId: row.channel_id,
+      channelName: row.channel_name || row.channel_id,
+      isLive: row.is_live,
+      liveSince: row.live_since?.toISOString(),
+      viewerCount: row.viewer_count || 0,
+      title: row.stream_title || '',
+      game: row.game_name || '',
+      thumbnailUrl: row.thumbnail_url || '',
+    }));
 
     logger.info('Fetched live streams', {
       communityId,
@@ -80,6 +79,7 @@ export async function getLiveStreams(req, res, next) {
 
 /**
  * Get featured/pinned streams for a community
+ * Currently returns top streams by viewer count
  */
 export async function getFeaturedStreams(req, res, next) {
   try {
@@ -100,46 +100,43 @@ export async function getFeaturedStreams(req, res, next) {
       return next(errors.forbidden('Not a member of this community'));
     }
 
-    // Get featured streams (streams with priority > 0)
+    // Get featured streams (top streams by viewer count)
     const result = await query(
       `SELECT
-        c.entity_id,
-        c.platform,
-        c.server_id,
-        c.channel_id,
-        c.is_live,
-        c.live_since,
-        c.viewer_count,
-        c.priority,
-        c.metadata,
-        s.server_id as twitch_channel_name
-       FROM coordination c
-       LEFT JOIN servers s ON s.id = c.server_id
-       WHERE c.community_id = $1
-         AND c.platform = 'twitch'
-         AND c.is_live = true
-         AND c.priority > 0
-       ORDER BY c.priority DESC, c.viewer_count DESC`,
+        co.entity_id,
+        co.platform,
+        co.server_id,
+        co.channel_id,
+        co.channel_name,
+        co.is_live,
+        co.live_since,
+        co.viewer_count,
+        co.stream_title,
+        co.game_name,
+        co.thumbnail_url
+       FROM coordination co
+       JOIN community_servers cs ON cs.platform = co.platform AND cs.platform_server_id = co.server_id
+       WHERE cs.community_id = $1
+         AND cs.status = 'approved'
+         AND co.platform = 'twitch'
+         AND co.is_live = true
+       ORDER BY co.viewer_count DESC
+       LIMIT 5`,
       [communityId]
     );
 
-    const streams = result.rows.map(row => {
-      const metadata = row.metadata || {};
-      return {
-        entityId: row.entity_id,
-        platform: row.platform,
-        channelId: row.channel_id,
-        channelName: row.twitch_channel_name || row.channel_id,
-        isLive: row.is_live,
-        liveSince: row.live_since?.toISOString(),
-        viewerCount: row.viewer_count || 0,
-        priority: row.priority || 0,
-        title: metadata.stream_title || metadata.title || '',
-        game: metadata.game_name || metadata.game || '',
-        thumbnailUrl: metadata.thumbnail_url || '',
-        language: metadata.language || 'en',
-      };
-    });
+    const streams = result.rows.map(row => ({
+      entityId: row.entity_id,
+      platform: row.platform,
+      channelId: row.channel_id,
+      channelName: row.channel_name || row.channel_id,
+      isLive: row.is_live,
+      liveSince: row.live_since?.toISOString(),
+      viewerCount: row.viewer_count || 0,
+      title: row.stream_title || '',
+      game: row.game_name || '',
+      thumbnailUrl: row.thumbnail_url || '',
+    }));
 
     logger.info('Fetched featured streams', {
       communityId,
@@ -180,20 +177,21 @@ export async function getStreamDetails(req, res, next) {
     // Get stream details
     const result = await query(
       `SELECT
-        c.entity_id,
-        c.platform,
-        c.server_id,
-        c.channel_id,
-        c.is_live,
-        c.live_since,
-        c.viewer_count,
-        c.priority,
-        c.metadata,
-        c.last_activity,
-        s.server_id as twitch_channel_name
-       FROM coordination c
-       LEFT JOIN servers s ON s.id = c.server_id
-       WHERE c.community_id = $1 AND c.entity_id = $2`,
+        co.entity_id,
+        co.platform,
+        co.server_id,
+        co.channel_id,
+        co.channel_name,
+        co.is_live,
+        co.live_since,
+        co.viewer_count,
+        co.stream_title,
+        co.game_name,
+        co.thumbnail_url,
+        co.last_updated
+       FROM coordination co
+       JOIN community_servers cs ON cs.platform = co.platform AND cs.platform_server_id = co.server_id
+       WHERE cs.community_id = $1 AND co.entity_id = $2 AND cs.status = 'approved'`,
       [communityId, entityId]
     );
 
@@ -202,23 +200,19 @@ export async function getStreamDetails(req, res, next) {
     }
 
     const row = result.rows[0];
-    const metadata = row.metadata || {};
 
     const stream = {
       entityId: row.entity_id,
       platform: row.platform,
       channelId: row.channel_id,
-      channelName: row.twitch_channel_name || row.channel_id,
+      channelName: row.channel_name || row.channel_id,
       isLive: row.is_live,
       liveSince: row.live_since?.toISOString(),
       viewerCount: row.viewer_count || 0,
-      priority: row.priority || 0,
-      lastActivity: row.last_activity?.toISOString(),
-      title: metadata.stream_title || metadata.title || '',
-      game: metadata.game_name || metadata.game || '',
-      thumbnailUrl: metadata.thumbnail_url || '',
-      language: metadata.language || 'en',
-      tags: metadata.tags || [],
+      lastActivity: row.last_updated?.toISOString(),
+      title: row.stream_title || '',
+      game: row.game_name || '',
+      thumbnailUrl: row.thumbnail_url || '',
     };
 
     logger.info('Fetched stream details', {
