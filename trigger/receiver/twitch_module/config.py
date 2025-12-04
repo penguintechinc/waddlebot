@@ -30,6 +30,19 @@ class Config:
     TWITCH_CLIENT_SECRET = os.getenv('TWITCH_CLIENT_SECRET', '')
     TWITCH_ACCESS_TOKEN = os.getenv('TWITCH_ACCESS_TOKEN', '')
 
+    # Twitch Bot (IRC) configuration
+    TWITCH_BOT_TOKEN = os.getenv('TWITCH_BOT_TOKEN', '')  # OAuth token for chat
+    TWITCH_BOT_NICK = os.getenv('TWITCH_BOT_NICK', 'WaddleBot')
+    TWITCH_BOT_ENABLED = os.getenv('TWITCH_BOT_ENABLED', 'true').lower() == 'true'
+
+    # EventSub configuration
+    EVENTSUB_SECRET = os.getenv('EVENTSUB_SECRET', '')
+    EVENTSUB_CALLBACK_URL = os.getenv('EVENTSUB_CALLBACK_URL', '')
+    EVENTSUB_ENABLED = os.getenv('EVENTSUB_ENABLED', 'true').lower() == 'true'
+
+    # Channel refresh interval (seconds)
+    CHANNEL_REFRESH_INTERVAL = int(os.getenv('CHANNEL_REFRESH_INTERVAL', '300'))
+
     # Hub integration for activity tracking
     HUB_API_URL = os.getenv('HUB_API_URL', 'http://hub-module:8060')
     SERVICE_API_KEY = os.getenv('SERVICE_API_KEY', '')

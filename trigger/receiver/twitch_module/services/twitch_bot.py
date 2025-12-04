@@ -3,7 +3,7 @@ Twitch Bot Service - TwitchIO IRC integration
 Supports !prefix commands via chat
 """
 import asyncio
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List
 import httpx
 from twitchio.ext import commands
 
@@ -165,7 +165,7 @@ class TwitchBotService(commands.Bot):
                 await channel.send(content)
             else:
                 # Split into multiple messages
-                parts = [content[i:i+max_len] for i in range(0, len(content), max_len)]
+                parts = [content[i:i + max_len] for i in range(0, len(content), max_len)]
                 for part in parts[:3]:  # Max 3 messages to avoid spam
                     await channel.send(part)
                     await asyncio.sleep(0.5)  # Rate limit protection

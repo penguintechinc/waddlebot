@@ -130,8 +130,8 @@ class EventSubHandler:
     ) -> Optional[Dict[str, Any]]:
         """Build router event data from EventSub event"""
         broadcaster_id = (
-            event.get('broadcaster_user_id') or
-            subscription.get('condition', {}).get('broadcaster_user_id', '')
+            event.get('broadcaster_user_id')
+            or subscription.get('condition', {}).get('broadcaster_user_id', '')
         )
         broadcaster_name = event.get('broadcaster_user_login', '')
 

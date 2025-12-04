@@ -50,11 +50,32 @@ The complete event processing flow from message reception to response delivery:
 15. **Response Handling**: Return result to collector for user response and OBS integration
 16. **Logging**: Record execution, performance metrics, usage stats, string match statistics, and module responses
 
-## Command Prefix Architecture
+## Command Architecture
 
-WaddleBot uses two command prefix systems to distinguish between local container modules and community serverless modules:
+WaddleBot supports multiple command input methods across platforms:
 
-### `!` (Local Container Modules)
+### Command Support Matrix
+
+| Platform | Slash Commands | Prefix Commands | Modals | Buttons | Autocomplete |
+|----------|---------------|-----------------|--------|---------|--------------|
+| Discord  | `/command`    | `!command`      | Yes    | Yes     | Yes          |
+| Slack    | `/waddlebot`  | `!command`      | Yes    | Yes     | No           |
+| Twitch   | N/A           | `!command`      | N/A    | N/A     | N/A          |
+
+### Slash Commands (`/`)
+
+Platform-native slash commands with rich UI support:
+
+- **Discord**: Native `/command` with options, autocomplete, and ephemeral responses
+- **Slack**: `/waddlebot command` with Block Kit responses and modals
+- **Rich Interactions**: Modals, buttons, select menus, and forms
+- **Deferred Responses**: Support for long-running operations (15 min timeout)
+
+### Prefix Commands (`!` and `#`)
+
+Traditional text-based commands in chat messages:
+
+#### `!` (Local Container Modules)
 
 Interaction modules running in local Docker containers:
 
@@ -63,7 +84,7 @@ Interaction modules running in local Docker containers:
 - **Stateful**: Can maintain state and persistent connections
 - **Examples**: `!help`, `!stats`, `!admin`, `!so`, `!alias`, `!inventory`
 
-### `#` (Community Modules)
+#### `#` (Community Modules)
 
 Marketplace modules running in Lambda/OpenWhisk:
 
@@ -71,6 +92,15 @@ Marketplace modules running in Lambda/OpenWhisk:
 - **Community-contributed**: Marketplace-managed modules
 - **Stateless**: Functions with cold start considerations
 - **Examples**: `#weather`, `#translate`, `#game`
+
+### Interactions (Modals, Buttons, Selects)
+
+Interactive UI components for Discord and Slack:
+
+- **Modals**: Form dialogs for collecting user input
+- **Buttons**: Clickable action buttons with custom IDs
+- **Select Menus**: Dropdown selections (single or multi-select)
+- **Custom ID Format**: `module:action:context` (e.g., `inventory:buy:item_123`)
 
 ## Activity Processing Flow (Legacy)
 
@@ -94,33 +124,56 @@ All events sent to router must include a message_type field to determine process
 
 ### Supported Message Types
 
-- **chatMessage**: User chat messages that may contain commands
-- **subscription**: User subscriptions/follows
+#### Command Types
+- **chatMessage**: User chat messages that may contain `!` or `#` prefix commands
+- **slashCommand**: Platform slash commands (`/command` on Discord, `/waddlebot` on Slack)
+
+#### Interaction Types
+- **interaction**: Generic interaction event (button, modal, select)
+- **modal_submit**: Modal form submission with user input
+- **button_click**: Button interaction click
+- **select_menu**: Select menu option selection
+
+#### Subscription/Monetization Events
+- **subscription**: User subscriptions
+- **gift_subscription**: Gift subscriptions
 - **follow**: User follows
 - **donation**: User donations/tips
 - **cheer**: Twitch bits/cheers
+- **resub**: Subscription renewals
+
+#### Stream Events
 - **raid**: Twitch raids
 - **host**: Twitch hosts
-- **subgift**: Subscription gifts
-- **resub**: Subscription renewals
-- **reaction**: Message reactions
+- **stream_online**: Stream goes live
+- **stream_offline**: Stream ends
+
+#### Member Events
 - **member_join**: User joins server/channel
 - **member_leave**: User leaves server/channel
 - **voice_join**: User joins voice channel
 - **voice_leave**: User leaves voice channel
 - **voice_time**: Voice channel time tracking
 - **boost**: Discord server boosts
+- **channel_join**: Channel joins
+
+#### Moderation Events
 - **ban**: User bans
 - **kick**: User kicks
 - **timeout**: User timeouts
 - **warn**: User warnings
+
+#### Other Events
+- **reaction**: Message reactions
 - **file_share**: File uploads
 - **app_mention**: Bot mentions
-- **channel_join**: Channel joins
 
 ### Processing Behavior
 
-- **chatMessage**: Full command processing and string matching
+- **chatMessage**: Full command processing with `!`/`#` prefix detection and string matching
+- **slashCommand**: Route to command processor, translate to `!command` format for module execution
+- **interaction**: Route based on `custom_id` format (`module:action:context`)
+- **Stream events**: Activity tracking and event-triggered module execution
 - **Non-chat events**: Direct reputation processing and event-triggered modules
 - **Event-specific modules**: Modules configured to respond to specific event types
 - **Reputation tracking**: All events can contribute to reputation scores

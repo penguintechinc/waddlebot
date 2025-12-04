@@ -140,55 +140,90 @@ All modules communicate through the Router Module, which handles command routing
 
 ## Trigger Modules (Receivers)
 
-### Twitch Module (`trigger/receiver/twitch_module_flask/`)
+### Twitch Module (`trigger/receiver/twitch_module/`)
 
-**Purpose**: Twitch EventSub webhook receiver and OAuth integration
+**Purpose**: Twitch IRC bot with prefix commands and EventSub webhook receiver
 
 **Key Features**:
-- **EventSub Webhooks**: Handles follow, subscribe, cheer, raid, gift subscription events
+- **IRC Bot (TwitchIO)**: Persistent IRC connection for `!prefix` commands in chat
+- **EventSub Webhooks**: Handles follow, subscribe, cheer, raid, gift subscription, stream online/offline events
+- **Channel Management**: Dynamic channel join/leave with database-driven refresh
 - **OAuth Integration**: Complete OAuth flow with token management and refresh
-- **API Integration**: Twitch Helix API for user info and subscription management
+- **Viewer Tracking**: Optional viewer activity tracking for leaderboards
 - **Activity Points**: follow=10, sub=50, bits=variable, raid=30, subgift=60, ban=-10
 
+**Command Support**:
+| Type | Format | Example |
+|------|--------|---------|
+| Prefix | `!command` | `!help`, `!so streamer` |
+
 **Technical Details**:
-- Webhook signature verification (HMAC-SHA256)
+- TwitchIO 2.8+ for IRC bot functionality
+- Webhook signature verification (HMAC-SHA256) for EventSub
 - Automatic token refresh and management
+- Mod/subscriber/VIP badge detection
 - Coordination system for horizontal scaling across multiple containers
 
 ---
 
-### Discord Module (`trigger/receiver/discord_module_flask/`)
+### Discord Module (`trigger/receiver/discord_module/`)
 
-**Purpose**: Discord bot with py-cord integration for events and slash commands
+**Purpose**: Discord bot with py-cord integration for slash commands, prefix commands, modals, and buttons
 
 **Key Features**:
-- **py-cord Integration**: Uses py-cord library for Discord bot functionality
+- **py-cord Integration**: Uses py-cord 2.4+ library for full Discord bot functionality
+- **Slash Commands**: Native Discord slash commands with autocomplete support
+- **Prefix Commands**: Traditional `!command` support via message listener
+- **Modals**: Interactive form dialogs for user input (e.g., feedback forms)
+- **Buttons**: Interactive button components with custom handlers
+- **Select Menus**: Dropdown selection components
 - **Event Handling**: Messages, reactions, member joins, voice states, server boosts
-- **Slash Commands**: Built-in slash command support with py-cord
 - **Voice Tracking**: Tracks voice channel participation with time-based points
 - **Activity Points**: message=5, reaction=2, member_join=10, voice_join=8, voice_time=1/min, boost=100
 
+**Command Support**:
+| Type | Format | Example |
+|------|--------|---------|
+| Slash | `/command` | `/help`, `/shoutout user` |
+| Prefix | `!command` | `!help`, `!so user` |
+
 **Technical Details**:
-- Native Discord bot with gateway connections
+- Native Discord bot with persistent gateway connections
+- Interaction handler for modals, buttons, and select menus
+- Redis caching for interaction context storage
 - Voice channel time tracking with point accumulation
 - Server boost event handling
+- Deferred responses for long-running commands
 
 ---
 
-### Slack Module (`trigger/receiver/slack_module_flask/`)
+### Slack Module (`trigger/receiver/slack_module/`)
 
-**Purpose**: Slack app integration with Event API and slash commands
+**Purpose**: Slack app with Slack Bolt integration for slash commands, prefix commands, modals, and buttons
 
 **Key Features**:
-- **Event API**: Handles messages, reactions, file shares, channel joins
-- **Slash Commands**: Custom `/waddlebot` command with help, status, points subcommands
-- **Slack SDK**: Uses official Slack SDK for Python
-- **User Caching**: Caches user information for performance
+- **Slack Bolt Framework**: Uses slack-bolt 1.18+ for event-driven architecture
+- **Slash Commands**: Custom `/waddlebot` command with subcommand routing
+- **Prefix Commands**: Traditional `!command` support via message events
+- **Modals**: Interactive form dialogs using Block Kit
+- **Buttons**: Interactive button components with action handlers
+- **Block Kit**: Full Block Kit support for rich message formatting
+- **Event API**: Handles messages, reactions, file shares, channel joins, app mentions
+- **Socket Mode**: Optional Socket Mode for development without public URLs
 - **Activity Points**: message=5, file_share=15, reaction=3, member_join=10, app_mention=8
 
+**Command Support**:
+| Type | Format | Example |
+|------|--------|---------|
+| Slash | `/waddlebot command` | `/waddlebot help`, `/waddlebot shoutout @user` |
+| Prefix | `!command` | `!help`, `!so @user` |
+
 **Technical Details**:
-- Socket mode support for real-time events
-- OAuth flow for workspace installation
+- Slack Bolt async handlers for all event types
+- Block Kit builder for dynamic UI generation
+- Signature verification for webhook security
+- Socket Mode support for real-time events (development)
+- HTTP mode for production webhook endpoints
 - User information caching for performance
 
 ---

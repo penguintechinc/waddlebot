@@ -15,7 +15,13 @@ from enum import Enum
 class MessageType(str, Enum):
     """Message/event types"""
     CHAT_MESSAGE = "chatMessage"
+    SLASH_COMMAND = "slashCommand"
+    INTERACTION = "interaction"
+    MODAL_SUBMIT = "modal_submit"
+    BUTTON_CLICK = "button_click"
+    SELECT_MENU = "select_menu"
     SUBSCRIPTION = "subscription"
+    GIFT_SUBSCRIPTION = "gift_subscription"
     FOLLOW = "follow"
     DONATION = "donation"
     CHEER = "cheer"
@@ -37,6 +43,8 @@ class MessageType(str, Enum):
     FILE_SHARE = "file_share"
     APP_MENTION = "app_mention"
     CHANNEL_JOIN = "channel_join"
+    STREAM_ONLINE = "stream_online"
+    STREAM_OFFLINE = "stream_offline"
 
 
 class Platform(str, Enum):
