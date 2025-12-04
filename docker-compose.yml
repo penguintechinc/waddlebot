@@ -323,6 +323,31 @@ services:
       retries: 3
     restart: unless-stopped
 
+  kick-collector:
+    build:
+      context: .
+      dockerfile: trigger/receiver/kick_module_flask/Dockerfile
+    container_name: waddlebot-kick
+    environment:
+      MODULE_NAME: kick-collector
+      MODULE_PORT: 8007
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      ROUTER_API_URL: http://router:8000
+      KICK_CLIENT_ID: ${KICK_CLIENT_ID}
+      KICK_CLIENT_SECRET: ${KICK_CLIENT_SECRET}
+      KICK_WEBHOOK_SECRET: ${KICK_WEBHOOK_SECRET}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      - router
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8007/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
   # =============================================================================
   # INTERACTION MODULES (Internal)
   # =============================================================================

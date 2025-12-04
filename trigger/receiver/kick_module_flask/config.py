@@ -11,7 +11,7 @@ class Config:
 
     MODULE_NAME = 'kick_module'
     MODULE_VERSION = '1.0.0'
-    MODULE_PORT = int(os.getenv('MODULE_PORT', '8006'))
+    MODULE_PORT = int(os.getenv('MODULE_PORT', '8007'))
     DATABASE_URL = os.getenv(
         'DATABASE_URL',
         'postgresql://waddlebot:password@localhost:5432/waddlebot'

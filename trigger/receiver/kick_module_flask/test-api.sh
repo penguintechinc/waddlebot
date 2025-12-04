@@ -10,13 +10,13 @@
 #
 # Options:
 #   --help              Show this help message
-#   --url URL           Override base URL (default: http://localhost:8006)
+#   --url URL           Override base URL (default: http://localhost:8007)
 #   --verbose           Enable verbose curl output
 #   --no-color          Disable colored output
 #   --timeout SECONDS   Set request timeout (default: 10)
 #
 # Environment Variables:
-#   KICK_URL            Base URL for KICK module (default: http://localhost:8006)
+#   KICK_URL            Base URL for KICK module (default: http://localhost:8007)
 #   TEST_TIMEOUT        Request timeout in seconds (default: 10)
 #
 # Exit Codes:
@@ -35,7 +35,7 @@ set -eo pipefail
 #=============================================================================
 
 # Default configuration
-KICK_URL="${KICK_URL:-http://localhost:8006}"
+KICK_URL="${KICK_URL:-http://localhost:8007}"
 TEST_TIMEOUT="${TEST_TIMEOUT:-10}"
 VERBOSE=false
 USE_COLOR=true

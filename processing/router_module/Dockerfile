@@ -1,4 +1,4 @@
-# Build from parent directory: docker build -f router_module_flask/Dockerfile -t waddlebot/router:latest .
+# Build from parent directory: docker build -f processing/router_module/Dockerfile -t waddlebot/router:latest .
 
 FROM python:3.13-slim
 
@@ -11,8 +11,8 @@ COPY libs/flask_core /app/libs/flask_core
 RUN cd /app/libs/flask_core && pip install --no-cache-dir .
 
 # Copy module files
-COPY router_module_flask/requirements.txt /app/
-COPY router_module_flask /app/
+COPY processing/router_module/requirements.txt /app/
+COPY processing/router_module /app/
 
 # Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt
