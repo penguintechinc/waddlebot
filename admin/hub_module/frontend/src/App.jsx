@@ -38,6 +38,10 @@ import AdminServers from './pages/admin/AdminServers';
 import AdminMirrorGroups from './pages/admin/AdminMirrorGroups';
 import AdminLeaderboardConfig from './pages/admin/AdminLeaderboardConfig';
 import AdminCommunityProfile from './pages/admin/AdminCommunityProfile';
+import ReputationSettings from './pages/admin/ReputationSettings';
+import AdminAIInsights from './pages/admin/AdminAIInsights';
+import AdminAIResearcherConfig from './pages/admin/AdminAIResearcherConfig';
+import AdminBotDetection from './pages/admin/AdminBotDetection';
 
 // Platform admin pages
 import PlatformDashboard from './pages/platform/PlatformDashboard';
@@ -133,6 +137,10 @@ function App() {
         <Route path="/admin/:communityId/mirror-groups" element={<AdminMirrorGroups />} />
         <Route path="/admin/:communityId/leaderboard" element={<AdminLeaderboardConfig />} />
         <Route path="/admin/:communityId/profile" element={<AdminCommunityProfile />} />
+        <Route path="/admin/:communityId/reputation" element={<ReputationSettings />} />
+        <Route path="/admin/:communityId/ai-insights" element={<AdminAIInsights />} />
+        <Route path="/admin/:communityId/ai-config" element={<AdminAIResearcherConfig />} />
+        <Route path="/admin/:communityId/bot-detection" element={<AdminBotDetection />} />
       </Route>
 
       {/* Platform admin routes */}

@@ -43,3 +43,7 @@ class Config:
     # Hub integration for activity tracking
     HUB_API_URL = os.getenv('HUB_API_URL', 'http://hub-module:8060')
     SERVICE_API_KEY = os.getenv('SERVICE_API_KEY', '')
+
+    # Reputation module integration
+    REPUTATION_API_URL = os.getenv('REPUTATION_API_URL', 'http://reputation:8021')
+    REPUTATION_ENABLED = os.getenv('REPUTATION_ENABLED', 'true').lower() == 'true'

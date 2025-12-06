@@ -15,6 +15,8 @@ import {
   ServerStackIcon,
   ArrowsRightLeftIcon,
   TrophyIcon,
+  ScaleIcon,
+  SparklesIcon,
 } from '@heroicons/react/24/outline';
 
 function AdminLayout() {
@@ -30,6 +32,10 @@ function AdminLayout() {
         { to: `/admin/${communityId}/servers`, icon: ServerStackIcon, label: 'Linked Servers' },
         { to: `/admin/${communityId}/mirror-groups`, icon: ArrowsRightLeftIcon, label: 'Chat Mirroring' },
         { to: `/admin/${communityId}/leaderboard`, icon: TrophyIcon, label: 'Leaderboards' },
+        { to: `/admin/${communityId}/reputation`, icon: ScaleIcon, label: 'Reputation' },
+        { to: `/admin/${communityId}/ai-insights`, icon: SparklesIcon, label: 'AI Insights' },
+        { to: `/admin/${communityId}/ai-config`, icon: Cog6ToothIcon, label: 'AI Config' },
+        { to: `/admin/${communityId}/bot-detection`, icon: ShieldCheckIcon, label: 'Bot Detection' },
         { to: `/admin/${communityId}/modules`, icon: PuzzlePieceIcon, label: 'Modules' },
         { to: `/admin/${communityId}/browser-sources`, icon: ComputerDesktopIcon, label: 'Browser Sources' },
         { to: `/admin/${communityId}/domains`, icon: GlobeAltIcon, label: 'Custom Domains' },

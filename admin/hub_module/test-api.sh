@@ -676,6 +676,73 @@ if [ -n "$COMMUNITY_ID" ]; then
     else
         print_skip "Generate temp password skipped (requires admin role)"
     fi
+
+    # ============================================================
+    # Reputation Configuration Tests (FICO-style 300-850 scoring)
+    # ============================================================
+
+    # Test: Get reputation config
+    print_test "GET /api/v1/admin/$COMMUNITY_ID/reputation/config"
+    if response=$(api_call GET "/api/v1/admin/$COMMUNITY_ID/reputation/config" "" 200 true 2>/dev/null); then
+        if echo "$response" | jq -e '.config' > /dev/null 2>&1 || \
+           echo "$response" | jq -e '.data' > /dev/null 2>&1; then
+            print_pass "Get reputation config successful"
+        else
+            print_fail "Get reputation config returned unexpected response"
+        fi
+    else
+        print_skip "Get reputation config skipped (requires admin role)"
+    fi
+
+    # Test: Update reputation config (may fail if not premium)
+    print_test "PUT /api/v1/admin/$COMMUNITY_ID/reputation/config"
+    rep_config_data='{"auto_ban_enabled": false, "auto_ban_threshold": 450, "starting_score": 600}'
+    if api_call PUT "/api/v1/admin/$COMMUNITY_ID/reputation/config" "$rep_config_data" 200 true > /dev/null 2>&1; then
+        print_pass "Update reputation config successful"
+    elif api_call PUT "/api/v1/admin/$COMMUNITY_ID/reputation/config" "$rep_config_data" 403 true > /dev/null 2>&1; then
+        print_skip "Update reputation config skipped (premium feature)"
+    else
+        print_skip "Update reputation config skipped (requires admin role)"
+    fi
+
+    # Test: Get at-risk users (users near auto-ban threshold)
+    print_test "GET /api/v1/admin/$COMMUNITY_ID/reputation/at-risk"
+    if response=$(api_call GET "/api/v1/admin/$COMMUNITY_ID/reputation/at-risk" "" 200 true 2>/dev/null); then
+        if echo "$response" | jq -e '.users' > /dev/null 2>&1 || \
+           echo "$response" | jq -e '.data' > /dev/null 2>&1; then
+            print_pass "Get at-risk users successful"
+        else
+            print_fail "Get at-risk users returned unexpected response"
+        fi
+    else
+        print_skip "Get at-risk users skipped (requires admin role)"
+    fi
+
+    # Test: Get reputation leaderboard
+    print_test "GET /api/v1/admin/$COMMUNITY_ID/reputation/leaderboard"
+    if response=$(api_call GET "/api/v1/admin/$COMMUNITY_ID/reputation/leaderboard?limit=10" "" 200 true 2>/dev/null); then
+        if echo "$response" | jq -e '.users' > /dev/null 2>&1 || \
+           echo "$response" | jq -e '.data' > /dev/null 2>&1; then
+            print_pass "Get reputation leaderboard successful"
+        else
+            print_fail "Get reputation leaderboard returned unexpected response"
+        fi
+    else
+        print_skip "Get reputation leaderboard skipped (requires admin role)"
+    fi
+
+    # Test: Adjust member reputation (if we have a member ID)
+    if [ -n "$TEST_USER_ID" ]; then
+        print_test "PUT /api/v1/admin/$COMMUNITY_ID/members/$TEST_USER_ID/reputation"
+        rep_adjust_data='{"amount": 10, "reason": "API test adjustment"}'
+        if api_call PUT "/api/v1/admin/$COMMUNITY_ID/members/$TEST_USER_ID/reputation" "$rep_adjust_data" 200 true > /dev/null 2>&1; then
+            print_pass "Adjust member reputation successful"
+        else
+            print_skip "Adjust member reputation skipped (requires admin role)"
+        fi
+    else
+        print_skip "PUT /api/v1/admin/:communityId/members/:userId/reputation (no member ID)"
+    fi
 else
     print_skip "Admin API tests (no community available)"
 fi

@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 ################################################################################
-# WaddleBot Reputation Core Module API Test Script
+# WaddleBot AI Researcher Core Module API Test Script
 ################################################################################
 #
-# Comprehensive test suite for the Reputation Core Module API endpoints.
-# Tests health checks, status, and module configuration.
+# Comprehensive test suite for the AI Researcher Core Module API endpoints.
+# Tests health checks, status, research endpoints, and admin configuration.
 #
 # Usage:
 #   ./test-api.sh [OPTIONS]
 #
 # Options:
 #   --help              Show this help message
-#   --url URL           Set reputation module URL (default: http://localhost:8054)
+#   --url URL           Set AI researcher module URL (default: http://localhost:8055)
 #   --api-key KEY       Set API key for authenticated endpoints
 #   --verbose           Enable verbose output
 #   --skip-auth         Skip tests requiring authentication
 #
 # Environment Variables:
-#   REPUTATION_URL      Base URL for reputation module (default: http://localhost:8054)
-#   REPUTATION_API_KEY  API key for authenticated endpoints
-#   VERBOSE             Enable verbose output (true/false)
+#   AI_RESEARCHER_URL      Base URL for AI researcher module (default: http://localhost:8055)
+#   API_KEY                API key for authenticated endpoints
+#   VERBOSE                Enable verbose output (true/false)
 #
 # Exit Codes:
 #   0 - All tests passed
@@ -43,8 +43,8 @@ TESTS_FAILED=0
 TESTS_SKIPPED=0
 
 # Configuration
-REPUTATION_URL="${REPUTATION_URL:-http://localhost:8054}"
-REPUTATION_API_KEY="${REPUTATION_API_KEY:-}"
+AI_RESEARCHER_URL="${AI_RESEARCHER_URL:-http://localhost:8055}"
+API_KEY="${API_KEY:-}"
 VERBOSE="${VERBOSE:-false}"
 SKIP_AUTH=false
 
@@ -104,12 +104,12 @@ make_request() {
     local data="${3:-}"
     local auth_required="${4:-false}"
 
-    local url="${REPUTATION_URL}${endpoint}"
+    local url="${AI_RESEARCHER_URL}${endpoint}"
     local headers=(-H "Content-Type: application/json")
 
     # Add API key header if required and available
-    if [[ "$auth_required" == "true" ]] && [[ -n "$REPUTATION_API_KEY" ]]; then
-        headers+=(-H "X-API-Key: ${REPUTATION_API_KEY}")
+    if [[ "$auth_required" == "true" ]] && [[ -n "$API_KEY" ]]; then
+        headers+=(-H "X-API-Key: ${API_KEY}")
     fi
 
     log_verbose "Request: $method $url"
@@ -152,7 +152,7 @@ run_test() {
     ((TESTS_RUN++))
 
     # Skip authenticated tests if no API key and skip_auth is set
-    if [[ "$auth_required" == "true" ]] && [[ -z "$REPUTATION_API_KEY" ]] && [[ "$SKIP_AUTH" == "true" ]]; then
+    if [[ "$auth_required" == "true" ]] && [[ -z "$API_KEY" ]] && [[ "$SKIP_AUTH" == "true" ]]; then
         log_skip "$test_name (no API key)"
         ((TESTS_SKIPPED++))
         return 0
@@ -232,8 +232,8 @@ check_health_response() {
     local module
     module=$(echo "$response" | jq -r '.module')
 
-    if [[ "$module" != "reputation_module" ]]; then
-        log_error "Wrong module name: $module (expected 'reputation_module')"
+    if [[ "$module" != "ai_researcher_module" ]]; then
+        log_error "Wrong module name: $module (expected 'ai_researcher_module')"
         return 1
     fi
 
@@ -294,7 +294,7 @@ check_metrics_response() {
     fi
 
     # Verify module name in metrics
-    if ! echo "$response" | grep -q 'module="reputation_module"'; then
+    if ! echo "$response" | grep -q 'module="ai_researcher_module"'; then
         log_error "Missing module label in metrics"
         return 1
     fi
@@ -334,8 +334,40 @@ check_status_response() {
     local module
     module=$(echo "$response" | jq -r '.data.module')
 
-    if [[ "$module" != "reputation_module" ]]; then
-        log_error "Wrong module name: $module (expected 'reputation_module')"
+    if [[ "$module" != "ai_researcher_module" ]]; then
+        log_error "Wrong module name: $module (expected 'ai_researcher_module')"
+        return 1
+    fi
+
+    # Check for features field
+    if ! echo "$response" | jq -e '.data.features' > /dev/null 2>&1; then
+        log_error "Missing 'data.features' field"
+        return 1
+    fi
+
+    return 0
+}
+
+check_not_implemented_response() {
+    local response="$1"
+
+    # Should have success field
+    if ! echo "$response" | jq -e '.data.success' > /dev/null 2>&1; then
+        log_error "Missing 'data.success' field"
+        return 1
+    fi
+
+    # Should have message field indicating not implemented
+    if ! echo "$response" | jq -e '.data.message' > /dev/null 2>&1; then
+        log_error "Missing 'data.message' field"
+        return 1
+    fi
+
+    local message
+    message=$(echo "$response" | jq -r '.data.message')
+
+    if [[ "$message" != "Not implemented yet" ]]; then
+        log_error "Expected 'Not implemented yet' message, got: $message"
         return 1
     fi
 
@@ -390,6 +422,164 @@ test_status() {
         "check_status_response"
 }
 
+################################################################################
+# Research Endpoint Tests
+################################################################################
+
+test_research() {
+    local research_data='{"community_id": 1, "user_id": 1, "platform": "twitch", "query": "What is Python?", "max_queries": 3}'
+
+    run_test \
+        "POST /api/v1/researcher/research" \
+        "POST" \
+        "/api/v1/researcher/research" \
+        "$research_data" \
+        "501" \
+        "false" \
+        "check_not_implemented_response"
+}
+
+test_ask() {
+    local ask_data='{"community_id": 1, "user_id": 1, "platform": "twitch", "question": "What was discussed today?", "include_context": true}'
+
+    run_test \
+        "POST /api/v1/researcher/ask" \
+        "POST" \
+        "/api/v1/researcher/ask" \
+        "$ask_data" \
+        "501" \
+        "false" \
+        "check_not_implemented_response"
+}
+
+test_recall() {
+    local recall_data='{"community_id": 1, "user_id": 1, "platform": "twitch", "query": "recent topics", "limit": 10}'
+
+    run_test \
+        "POST /api/v1/researcher/recall" \
+        "POST" \
+        "/api/v1/researcher/recall" \
+        "$recall_data" \
+        "501" \
+        "false" \
+        "check_not_implemented_response"
+}
+
+test_summarize() {
+    local summarize_data='{"community_id": 1, "user_id": 1, "platform": "twitch", "duration_minutes": 30, "topic": "stream highlights"}'
+
+    run_test \
+        "POST /api/v1/researcher/summarize" \
+        "POST" \
+        "/api/v1/researcher/summarize" \
+        "$summarize_data" \
+        "501" \
+        "false" \
+        "check_not_implemented_response"
+}
+
+test_firehose() {
+    local firehose_data='{"community_id": 1, "user_id": 1, "platform": "twitch", "platform_user_id": "test123", "message": "Hello world", "timestamp": "2025-12-06T12:00:00Z"}'
+
+    run_test \
+        "POST /api/v1/researcher/messages/firehose" \
+        "POST" \
+        "/api/v1/researcher/messages/firehose" \
+        "$firehose_data" \
+        "501" \
+        "true" \
+        "check_not_implemented_response"
+}
+
+test_stream_end() {
+    local stream_end_data='{"community_id": 1, "platform": "twitch", "ended_at": "2025-12-06T12:00:00Z", "duration_minutes": 120}'
+
+    run_test \
+        "POST /api/v1/researcher/stream/end" \
+        "POST" \
+        "/api/v1/researcher/stream/end" \
+        "$stream_end_data" \
+        "501" \
+        "true" \
+        "check_not_implemented_response"
+}
+
+test_get_context() {
+    run_test \
+        "GET /api/v1/researcher/context/1" \
+        "GET" \
+        "/api/v1/researcher/context/1?limit=100" \
+        "" \
+        "501" \
+        "false" \
+        "check_not_implemented_response"
+}
+
+test_get_memory() {
+    run_test \
+        "GET /api/v1/researcher/memory/1" \
+        "GET" \
+        "/api/v1/researcher/memory/1?limit=10" \
+        "" \
+        "501" \
+        "false" \
+        "check_not_implemented_response"
+}
+
+################################################################################
+# Admin API Tests
+################################################################################
+
+test_admin_ai_insights() {
+    run_test \
+        "GET /api/v1/admin/1/ai-insights" \
+        "GET" \
+        "/api/v1/admin/1/ai-insights?limit=20" \
+        "" \
+        "501" \
+        "true" \
+        "check_not_implemented_response"
+}
+
+test_admin_get_config() {
+    run_test \
+        "GET /api/v1/admin/1/ai-researcher/config" \
+        "GET" \
+        "/api/v1/admin/1/ai-researcher/config" \
+        "" \
+        "501" \
+        "true" \
+        "check_not_implemented_response"
+}
+
+test_admin_update_config() {
+    local config_data='{"admin_id": 1, "firehose_enabled": true, "bot_detection_enabled": true, "bot_detection_threshold": 0.7, "research_max_queries": 5}'
+
+    run_test \
+        "PUT /api/v1/admin/1/ai-researcher/config" \
+        "PUT" \
+        "/api/v1/admin/1/ai-researcher/config" \
+        "$config_data" \
+        "501" \
+        "true" \
+        "check_not_implemented_response"
+}
+
+test_admin_bot_detection() {
+    run_test \
+        "GET /api/v1/admin/1/bot-detection" \
+        "GET" \
+        "/api/v1/admin/1/bot-detection?limit=50&threshold=0.5&flagged_only=false" \
+        "" \
+        "501" \
+        "true" \
+        "check_not_implemented_response"
+}
+
+################################################################################
+# Error Handling Tests
+################################################################################
+
 test_invalid_endpoint() {
     run_test \
         "GET /api/v1/nonexistent" \
@@ -421,295 +611,6 @@ test_root_endpoint() {
 }
 
 ################################################################################
-# Reputation Public API Tests
-################################################################################
-
-check_tiers_response() {
-    local response="$1"
-
-    # Check for tiers array
-    if ! echo "$response" | jq -e '.tiers' > /dev/null 2>&1; then
-        log_error "Missing 'tiers' field"
-        return 1
-    fi
-
-    # Should have 5 tiers (exceptional, very_good, good, fair, poor)
-    local tier_count
-    tier_count=$(echo "$response" | jq '.tiers | length')
-
-    if [[ "$tier_count" != "5" ]]; then
-        log_error "Expected 5 tiers, got $tier_count"
-        return 1
-    fi
-
-    return 0
-}
-
-check_weights_response() {
-    local response="$1"
-
-    # Check for weights object
-    if ! echo "$response" | jq -e '.weights' > /dev/null 2>&1; then
-        log_error "Missing 'weights' field"
-        return 1
-    fi
-
-    # Check for essential weight fields
-    if ! echo "$response" | jq -e '.weights.chat_message' > /dev/null 2>&1; then
-        log_error "Missing 'weights.chat_message' field"
-        return 1
-    fi
-
-    if ! echo "$response" | jq -e '.weights.ban' > /dev/null 2>&1; then
-        log_error "Missing 'weights.ban' field"
-        return 1
-    fi
-
-    return 0
-}
-
-check_leaderboard_response() {
-    local response="$1"
-
-    # Check for success and users array
-    if ! echo "$response" | jq -e '.success' > /dev/null 2>&1; then
-        log_error "Missing 'success' field"
-        return 1
-    fi
-
-    if ! echo "$response" | jq -e '.users' > /dev/null 2>&1; then
-        log_error "Missing 'users' field"
-        return 1
-    fi
-
-    return 0
-}
-
-check_reputation_response() {
-    local response="$1"
-
-    # Check for score field
-    if ! echo "$response" | jq -e '.score' > /dev/null 2>&1; then
-        log_error "Missing 'score' field"
-        return 1
-    fi
-
-    local score
-    score=$(echo "$response" | jq '.score')
-
-    # Score should be between 300-850
-    if [[ "$score" -lt 300 ]] || [[ "$score" -gt 850 ]]; then
-        log_error "Score $score out of FICO range (300-850)"
-        return 1
-    fi
-
-    # Check for tier field
-    if ! echo "$response" | jq -e '.tier' > /dev/null 2>&1; then
-        log_error "Missing 'tier' field"
-        return 1
-    fi
-
-    return 0
-}
-
-check_event_response() {
-    local response="$1"
-
-    # Check for success or processed field
-    if ! echo "$response" | jq -e '.success // .processed' > /dev/null 2>&1; then
-        log_error "Missing 'success' or 'processed' field"
-        return 1
-    fi
-
-    return 0
-}
-
-test_get_tiers() {
-    run_test \
-        "GET /api/v1/reputation/tiers" \
-        "GET" \
-        "/api/v1/reputation/tiers" \
-        "" \
-        "200" \
-        "false" \
-        "check_tiers_response"
-}
-
-test_get_default_weights() {
-    run_test \
-        "GET /api/v1/reputation/weights" \
-        "GET" \
-        "/api/v1/reputation/weights" \
-        "" \
-        "200" \
-        "false" \
-        "check_weights_response"
-}
-
-test_get_community_leaderboard() {
-    run_test \
-        "GET /api/v1/reputation/1/leaderboard" \
-        "GET" \
-        "/api/v1/reputation/1/leaderboard?limit=10" \
-        "" \
-        "200" \
-        "false" \
-        "check_leaderboard_response"
-}
-
-test_get_user_reputation() {
-    run_test \
-        "GET /api/v1/reputation/1/user/1" \
-        "GET" \
-        "/api/v1/reputation/1/user/1" \
-        "" \
-        "200" \
-        "false" \
-        "check_reputation_response"
-}
-
-test_get_user_history() {
-    run_test \
-        "GET /api/v1/reputation/1/user/1/history" \
-        "GET" \
-        "/api/v1/reputation/1/user/1/history?limit=10" \
-        "" \
-        "200" \
-        "false"
-}
-
-test_get_global_reputation() {
-    run_test \
-        "GET /api/v1/reputation/global/1" \
-        "GET" \
-        "/api/v1/reputation/global/1" \
-        "" \
-        "200" \
-        "false"
-}
-
-test_get_global_leaderboard() {
-    run_test \
-        "GET /api/v1/reputation/global/leaderboard" \
-        "GET" \
-        "/api/v1/reputation/global/leaderboard?limit=10" \
-        "" \
-        "200" \
-        "false"
-}
-
-################################################################################
-# Reputation Internal API Tests
-################################################################################
-
-test_internal_receive_event() {
-    local event_data='{"community_id": 1, "platform": "twitch", "platform_user_id": "test123", "event_type": "chat_message", "metadata": {"username": "testuser"}}'
-
-    run_test \
-        "POST /api/v1/internal/events" \
-        "POST" \
-        "/api/v1/internal/events" \
-        "$event_data" \
-        "200" \
-        "true" \
-        "check_event_response"
-}
-
-test_internal_receive_batch() {
-    local batch_data='{"events": [{"community_id": 1, "platform": "twitch", "platform_user_id": "test123", "event_type": "chat_message"}, {"community_id": 1, "platform": "twitch", "platform_user_id": "test456", "event_type": "follow"}]}'
-
-    run_test \
-        "POST /api/v1/internal/events/batch" \
-        "POST" \
-        "/api/v1/internal/events/batch" \
-        "$batch_data" \
-        "200" \
-        "true"
-}
-
-test_internal_quick_check() {
-    run_test \
-        "GET /api/v1/internal/check/1/1" \
-        "GET" \
-        "/api/v1/internal/check/1/1" \
-        "" \
-        "200" \
-        "true"
-}
-
-test_internal_moderation() {
-    local mod_data='{"community_id": 1, "user_id": 1, "action": "warn", "reason": "Test warning", "moderator_id": 1}'
-
-    run_test \
-        "POST /api/v1/internal/moderation" \
-        "POST" \
-        "/api/v1/internal/moderation" \
-        "$mod_data" \
-        "200" \
-        "true"
-}
-
-################################################################################
-# Reputation Admin API Tests
-################################################################################
-
-test_admin_set_reputation() {
-    local set_data='{"score": 650, "reason": "Manual adjustment for testing"}'
-
-    run_test \
-        "PUT /api/v1/admin/1/reputation/1/set" \
-        "PUT" \
-        "/api/v1/admin/1/reputation/1/set" \
-        "$set_data" \
-        "200" \
-        "true"
-}
-
-test_admin_get_config() {
-    run_test \
-        "GET /api/v1/admin/1/config" \
-        "GET" \
-        "/api/v1/admin/1/config" \
-        "" \
-        "200" \
-        "true"
-}
-
-test_admin_update_config() {
-    local config_data='{"auto_ban_enabled": false, "auto_ban_threshold": 400}'
-
-    run_test \
-        "PUT /api/v1/admin/1/config" \
-        "PUT" \
-        "/api/v1/admin/1/config" \
-        "$config_data" \
-        "200" \
-        "true"
-}
-
-test_admin_at_risk_users() {
-    run_test \
-        "GET /api/v1/admin/1/at-risk" \
-        "GET" \
-        "/api/v1/admin/1/at-risk" \
-        "" \
-        "200" \
-        "true"
-}
-
-test_admin_toggle_auto_ban() {
-    local toggle_data='{"enabled": false}'
-
-    run_test \
-        "POST /api/v1/admin/1/auto-ban" \
-        "POST" \
-        "/api/v1/admin/1/auto-ban" \
-        "$toggle_data" \
-        "200" \
-        "true"
-}
-
-################################################################################
 # Main Execution
 ################################################################################
 
@@ -722,11 +623,11 @@ main() {
                 exit 0
                 ;;
             --url)
-                REPUTATION_URL="$2"
+                AI_RESEARCHER_URL="$2"
                 shift 2
                 ;;
             --api-key)
-                REPUTATION_API_KEY="$2"
+                API_KEY="$2"
                 shift 2
                 ;;
             --verbose)
@@ -751,10 +652,10 @@ main() {
     # Print test configuration
     echo ""
     log_info "======================================================================"
-    log_info "WaddleBot Reputation Core Module API Test Suite"
+    log_info "WaddleBot AI Researcher Core Module API Test Suite"
     log_info "======================================================================"
-    log_info "Reputation Module URL: $REPUTATION_URL"
-    log_info "API Key: ${REPUTATION_API_KEY:+[SET]}${REPUTATION_API_KEY:-[NOT SET]}"
+    log_info "AI Researcher URL: $AI_RESEARCHER_URL"
+    log_info "API Key: ${API_KEY:+[SET]}${API_KEY:-[NOT SET]}"
     log_info "Verbose: $VERBOSE"
     log_info "Skip Auth Tests: $SKIP_AUTH"
     log_info "======================================================================"
@@ -771,29 +672,22 @@ main() {
     test_status
     echo ""
 
-    log_info "Running Reputation Public API Tests..."
-    test_get_tiers
-    test_get_default_weights
-    test_get_community_leaderboard
-    test_get_user_reputation
-    test_get_user_history
-    test_get_global_reputation
-    test_get_global_leaderboard
+    log_info "Running Research Endpoint Tests..."
+    test_research
+    test_ask
+    test_recall
+    test_summarize
+    test_firehose
+    test_stream_end
+    test_get_context
+    test_get_memory
     echo ""
 
-    log_info "Running Reputation Internal API Tests..."
-    test_internal_receive_event
-    test_internal_receive_batch
-    test_internal_quick_check
-    test_internal_moderation
-    echo ""
-
-    log_info "Running Reputation Admin API Tests..."
-    test_admin_set_reputation
+    log_info "Running Admin API Tests..."
+    test_admin_ai_insights
     test_admin_get_config
     test_admin_update_config
-    test_admin_at_risk_users
-    test_admin_toggle_auto_ban
+    test_admin_bot_detection
     echo ""
 
     log_info "Running Error Handling Tests..."

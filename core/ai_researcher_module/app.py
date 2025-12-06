@@ -1,0 +1,855 @@
+"""
+AI Researcher Module - Quart Application
+Contextual AI assistant with mem0 integration, bot detection, and research capabilities
+"""
+import os
+import sys
+import asyncio
+import json
+from datetime import datetime, timedelta
+
+from quart import Quart, Blueprint, request
+from quart_cors import cors
+import redis.asyncio as aioredis
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'libs'))
+from flask_core import (  # noqa: E402
+    setup_aaa_logging,
+    init_database,
+    async_endpoint,
+    success_response,
+    error_response,
+    create_health_blueprint,
+)
+from config import Config  # noqa: E402
+
+# Import services
+from services.ai_provider import AIProviderService  # noqa: E402
+from services.safety_layer import SafetyLayer  # noqa: E402
+from services.rate_limiter import RateLimiter  # noqa: E402
+from services.research_service import ResearchService  # noqa: E402
+from services.summary_service import SummaryService  # noqa: E402
+from services.bot_detection import BotDetectionService  # noqa: E402
+from services.mem0_service import Mem0Service  # noqa: E402
+
+app = Quart(__name__)
+app = cors(app, allow_origin="*")
+
+# Register health/metrics endpoints
+health_bp = create_health_blueprint(Config.MODULE_NAME, Config.MODULE_VERSION)
+app.register_blueprint(health_bp)
+
+# API Blueprints
+api_bp = Blueprint('api', __name__, url_prefix='/api/v1')
+researcher_bp = Blueprint('researcher', __name__, url_prefix='/api/v1/researcher')
+admin_bp = Blueprint('admin', __name__, url_prefix='/api/v1/admin')
+
+logger = setup_aaa_logging(Config.MODULE_NAME, Config.MODULE_VERSION)
+
+# Global service instances
+dal = None
+redis_client = None
+ai_provider = None
+safety_layer = None
+rate_limiter = None
+research_service = None
+summary_service = None
+bot_detection_services = {}  # community_id -> BotDetectionService
+mem0_services = {}  # community_id -> Mem0Service
+
+
+def _verify_service_key():
+    """Verify X-Service-Key header for internal endpoints."""
+    if not Config.SERVICE_API_KEY:
+        return True  # No key configured, allow all
+    key = request.headers.get('X-Service-Key', '')
+    return key == Config.SERVICE_API_KEY
+
+
+def _get_mem0_service(community_id: int) -> Mem0Service:
+    """Get or create Mem0Service for a community."""
+    global mem0_services
+    if community_id not in mem0_services:
+        mem0_services[community_id] = Mem0Service(community_id=community_id)
+    return mem0_services[community_id]
+
+
+def _get_bot_detection_service(community_id: int, is_premium: bool = False) -> BotDetectionService:
+    """Get or create BotDetectionService for a community."""
+    global bot_detection_services
+    key = f"{community_id}:{is_premium}"
+    if key not in bot_detection_services:
+        bot_detection_services[key] = BotDetectionService(dal, is_premium=is_premium)
+    return bot_detection_services[key]
+
+
+@app.before_serving
+async def startup():
+    global dal, redis_client, ai_provider, safety_layer, rate_limiter
+    global research_service, summary_service
+    logger.system("Starting ai_researcher_module", action="startup")
+
+    # Initialize database
+    dal = init_database(Config.DATABASE_URL)
+    app.config['dal'] = dal
+
+    # Initialize Redis
+    try:
+        redis_client = aioredis.from_url(
+            Config.REDIS_URL,
+            encoding="utf-8",
+            decode_responses=True
+        )
+        await redis_client.ping()
+        logger.system("Redis connected", result="SUCCESS")
+    except Exception as e:
+        logger.warning(f"Redis connection failed: {e}. Rate limiting will use DB fallback.")
+        redis_client = None
+
+    # Initialize AI provider
+    ai_provider = AIProviderService(Config)
+    logger.system("AIProviderService initialized", result="SUCCESS")
+
+    # Initialize safety layer
+    safety_layer = SafetyLayer()
+    logger.system("SafetyLayer initialized", result="SUCCESS")
+
+    # Initialize rate limiter
+    rate_limiter = RateLimiter(redis_client, dal) if redis_client else RateLimiter(None, dal)
+    logger.system("RateLimiter initialized", result="SUCCESS")
+
+    # Note: ResearchService and SummaryService are created per-request
+    # since they need community-specific mem0 instances
+
+    logger.system("ai_researcher_module started", result="SUCCESS")
+
+
+@app.after_serving
+async def shutdown():
+    global redis_client, ai_provider
+    logger.system("Shutting down ai_researcher_module", action="shutdown")
+
+    # Cleanup services
+    if ai_provider:
+        await ai_provider.close()
+
+    if redis_client:
+        await redis_client.close()
+
+    logger.system("ai_researcher_module shutdown complete", result="SUCCESS")
+
+
+# =============================================================================
+# Public API Endpoints (Authenticated)
+# =============================================================================
+
+@api_bp.route('/status')
+@async_endpoint
+async def status():
+    """Get module status and feature information."""
+    return success_response({
+        "status": "operational",
+        "module": Config.MODULE_NAME,
+        "version": Config.MODULE_VERSION,
+        "features": {
+            "ai_research": True,
+            "bot_detection": Config.BOT_DETECTION_ENABLED,
+            "mem0_integration": True,
+            "context_tracking": Config.FIREHOSE_ENABLED,
+            "stream_awareness": True
+        }
+    })
+
+
+# =============================================================================
+# AI Researcher Endpoints (Phase 1 - Stubs)
+# =============================================================================
+
+@researcher_bp.route('/research', methods=['POST'])
+@async_endpoint
+async def research():
+    """
+    Process !or/research command - perform web research on a topic.
+
+    Expected payload:
+    {
+        "community_id": int,
+        "user_id": int,
+        "platform": str,
+        "query": str,
+        "max_queries": int (optional)
+    }
+    """
+    data = await request.get_json()
+
+    community_id = data.get('community_id')
+    user_id = str(data.get('user_id', ''))
+    query = data.get('query', '')
+
+    if not community_id or not query:
+        return error_response("community_id and query are required", 400)
+
+    # Get community-specific mem0 service
+    mem0_service = _get_mem0_service(community_id)
+
+    # Create research service for this request
+    service = ResearchService(
+        ai_provider=ai_provider,
+        mem0_service=mem0_service,
+        safety_layer=safety_layer,
+        rate_limiter=rate_limiter,
+        redis_client=redis_client
+    )
+
+    result = await service.research(
+        community_id=community_id,
+        user_id=user_id,
+        topic=query
+    )
+
+    if not result.success:
+        return error_response(result.content, 429 if result.blocked_reason == "rate_limit" else 400)
+
+    return success_response(result.to_dict())
+
+
+@researcher_bp.route('/ask', methods=['POST'])
+@async_endpoint
+async def ask():
+    """
+    Process !or/ask command - ask a question with context awareness.
+
+    Expected payload:
+    {
+        "community_id": int,
+        "user_id": int,
+        "platform": str,
+        "question": str,
+        "include_context": bool (optional)
+    }
+    """
+    data = await request.get_json()
+
+    community_id = data.get('community_id')
+    user_id = str(data.get('user_id', ''))
+    question = data.get('question', '')
+
+    if not community_id or not question:
+        return error_response("community_id and question are required", 400)
+
+    # Get community-specific mem0 service
+    mem0_service = _get_mem0_service(community_id)
+
+    # Create research service for this request
+    service = ResearchService(
+        ai_provider=ai_provider,
+        mem0_service=mem0_service,
+        safety_layer=safety_layer,
+        rate_limiter=rate_limiter,
+        redis_client=redis_client
+    )
+
+    result = await service.ask(
+        community_id=community_id,
+        user_id=user_id,
+        question=question
+    )
+
+    if not result.success:
+        return error_response(result.content, 429 if result.blocked_reason == "rate_limit" else 400)
+
+    return success_response(result.to_dict())
+
+
+@researcher_bp.route('/recall', methods=['POST'])
+@async_endpoint
+async def recall():
+    """
+    Process !or/recall command - recall memories from mem0.
+
+    Expected payload:
+    {
+        "community_id": int,
+        "user_id": int,
+        "platform": str,
+        "query": str,
+        "limit": int (optional)
+    }
+    """
+    data = await request.get_json()
+
+    community_id = data.get('community_id')
+    user_id = str(data.get('user_id', ''))
+    query = data.get('query', '')
+
+    if not community_id or not query:
+        return error_response("community_id and query are required", 400)
+
+    # Get community-specific mem0 service
+    mem0_service = _get_mem0_service(community_id)
+
+    # Create research service for this request
+    service = ResearchService(
+        ai_provider=ai_provider,
+        mem0_service=mem0_service,
+        safety_layer=safety_layer,
+        rate_limiter=rate_limiter,
+        redis_client=redis_client
+    )
+
+    result = await service.recall(
+        community_id=community_id,
+        user_id=user_id,
+        topic=query
+    )
+
+    if not result.success:
+        return error_response(result.content, 429 if result.blocked_reason == "rate_limit" else 400)
+
+    return success_response(result.to_dict())
+
+
+@researcher_bp.route('/summarize', methods=['POST'])
+@async_endpoint
+async def summarize():
+    """
+    Process !or/summarize command - summarize recent conversation or stream.
+
+    Expected payload:
+    {
+        "community_id": int,
+        "user_id": int,
+        "platform": str,
+        "duration_minutes": int (optional),
+        "topic": str (optional)
+    }
+    """
+    data = await request.get_json()
+
+    community_id = data.get('community_id')
+    user_id = str(data.get('user_id', ''))
+    duration_minutes = data.get('duration_minutes', 60)
+
+    if not community_id:
+        return error_response("community_id is required", 400)
+
+    # Get community-specific mem0 service
+    mem0_service = _get_mem0_service(community_id)
+
+    # Create research service for this request
+    service = ResearchService(
+        ai_provider=ai_provider,
+        mem0_service=mem0_service,
+        safety_layer=safety_layer,
+        rate_limiter=rate_limiter,
+        redis_client=redis_client
+    )
+
+    result = await service.summarize(
+        community_id=community_id,
+        user_id=user_id,
+        duration_minutes=duration_minutes
+    )
+
+    if not result.success:
+        return error_response(result.content, 429 if result.blocked_reason == "rate_limit" else 400)
+
+    return success_response(result.to_dict())
+
+
+@researcher_bp.route('/messages/firehose', methods=['POST'])
+@async_endpoint
+async def receive_messages():
+    """
+    Receive ALL messages for context tracking (firehose).
+
+    Expected payload:
+    {
+        "community_id": int,
+        "user_id": int,
+        "platform": str,
+        "platform_user_id": str,
+        "message": str,
+        "timestamp": str,
+        "metadata": dict (optional)
+    }
+    OR batch:
+    {
+        "messages": [...]
+    }
+    """
+    if not _verify_service_key():
+        return error_response("Unauthorized", 401)
+
+    data = await request.get_json()
+
+    # Handle batch or single message
+    messages = data.get('messages', [data])
+    processed = 0
+
+    for msg in messages:
+        community_id = msg.get('community_id')
+        if not community_id:
+            continue
+
+        # Store message in database for context tracking
+        try:
+            query = """
+                INSERT INTO ai_context_messages (
+                    community_id, platform, platform_user_id, platform_username,
+                    message_content, message_type, metadata
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """
+            await dal.execute(query, [
+                community_id,
+                msg.get('platform', 'unknown'),
+                msg.get('platform_user_id', ''),
+                msg.get('username', msg.get('platform_username', '')),
+                msg.get('message', msg.get('content', '')),
+                msg.get('message_type', 'chat'),
+                json.dumps(msg.get('metadata', {}))
+            ])
+            processed += 1
+        except Exception as e:
+            logger.error(f"Failed to store message: {e}")
+
+    return success_response({
+        "success": True,
+        "processed": processed,
+        "total": len(messages)
+    })
+
+
+@researcher_bp.route('/stream/end', methods=['POST'])
+@async_endpoint
+async def stream_end():
+    """
+    Notify that a stream has ended for context management.
+
+    Expected payload:
+    {
+        "community_id": int,
+        "platform": str,
+        "ended_at": str,
+        "duration_minutes": int (optional)
+    }
+    """
+    if not _verify_service_key():
+        return error_response("Unauthorized", 401)
+
+    data = await request.get_json()
+    community_id = data.get('community_id')
+
+    if not community_id:
+        return error_response("community_id is required", 400)
+
+    # Get stream duration
+    duration_minutes = data.get('duration_minutes', 60)
+    stream_end_time = datetime.utcnow()
+    stream_start_time = stream_end_time - timedelta(minutes=duration_minutes)
+
+    # Get community-specific mem0 service
+    mem0_service = _get_mem0_service(community_id)
+
+    # Create summary service
+    service = SummaryService(ai_provider, mem0_service, dal)
+
+    # Generate stream summary
+    try:
+        summary = await service.generate_stream_summary(
+            community_id=community_id,
+            stream_start=stream_start_time,
+            stream_end=stream_end_time
+        )
+
+        return success_response({
+            "success": True,
+            "summary": summary
+        })
+    except Exception as e:
+        logger.error(f"Stream summary generation failed: {e}")
+        return error_response(f"Failed to generate stream summary: {str(e)}", 500)
+
+
+@researcher_bp.route('/context/<int:community_id>')
+@async_endpoint
+async def get_context(community_id: int):
+    """
+    Get current conversation context for a community.
+
+    Query params:
+    - limit: Number of messages to return (default: 100)
+    - since: Timestamp to get messages since
+    """
+    limit = request.args.get('limit', 100, type=int)
+    since = request.args.get('since', None)
+
+    try:
+        # Build query
+        if since:
+            query = """
+                SELECT id, platform, platform_user_id, platform_username,
+                       message_content, message_type, metadata, created_at
+                FROM ai_context_messages
+                WHERE community_id = $1 AND created_at >= $2
+                ORDER BY created_at DESC
+                LIMIT $3
+            """
+            rows = await dal.execute(query, [community_id, since, limit])
+        else:
+            query = """
+                SELECT id, platform, platform_user_id, platform_username,
+                       message_content, message_type, metadata, created_at
+                FROM ai_context_messages
+                WHERE community_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+            """
+            rows = await dal.execute(query, [community_id, limit])
+
+        messages = [dict(row) for row in rows] if rows else []
+
+        return success_response({
+            "success": True,
+            "community_id": community_id,
+            "messages": messages,
+            "count": len(messages)
+        })
+    except Exception as e:
+        logger.error(f"Failed to get context: {e}")
+        return error_response(f"Failed to retrieve context: {str(e)}", 500)
+
+
+@researcher_bp.route('/memory/<int:community_id>')
+@async_endpoint
+async def get_memory(community_id: int):
+    """
+    Get mem0 memories for a community.
+
+    Query params:
+    - query: Search query for memories
+    - limit: Number of memories to return (default: 10)
+    """
+    query = request.args.get('query', '')
+    limit = request.args.get('limit', 10, type=int)
+
+    try:
+        mem0_service = _get_mem0_service(community_id)
+
+        if query:
+            # Search for specific memories
+            memories = await mem0_service.search(query=query, limit=limit)
+        else:
+            # Get all memories
+            memories = await mem0_service.get_all()
+            memories = memories[:limit] if memories else []
+
+        return success_response({
+            "success": True,
+            "community_id": community_id,
+            "memories": memories,
+            "count": len(memories)
+        })
+    except Exception as e:
+        logger.error(f"Failed to get memories: {e}")
+        return error_response(f"Failed to retrieve memories: {str(e)}", 500)
+
+
+# =============================================================================
+# Admin API Endpoints (Community Admin)
+# =============================================================================
+
+@admin_bp.route('/<int:community_id>/ai-insights')
+@async_endpoint
+async def get_ai_insights(community_id: int):
+    """
+    Get AI-generated insights for the community.
+
+    Query params:
+    - limit: Number of insights to return (default: 20)
+    - type: Filter by insight type (topic, sentiment, etc.)
+    """
+    limit = request.args.get('limit', 20, type=int)
+    insight_type = request.args.get('type', None)
+
+    try:
+        if insight_type:
+            query = """
+                SELECT id, insight_type, title, content, content_html,
+                       metadata, period_start, period_end, created_at
+                FROM ai_insights
+                WHERE community_id = $1 AND insight_type = $2
+                ORDER BY created_at DESC
+                LIMIT $3
+            """
+            rows = await dal.execute(query, [community_id, insight_type, limit])
+        else:
+            query = """
+                SELECT id, insight_type, title, content, content_html,
+                       metadata, period_start, period_end, created_at
+                FROM ai_insights
+                WHERE community_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+            """
+            rows = await dal.execute(query, [community_id, limit])
+
+        insights = []
+        for row in (rows or []):
+            insights.append({
+                'id': row['id'],
+                'insight_type': row['insight_type'],
+                'title': row['title'],
+                'content': row['content'],
+                'content_html': row['content_html'],
+                'metadata': row['metadata'] or {},
+                'period_start': str(row['period_start']) if row['period_start'] else None,
+                'period_end': str(row['period_end']) if row['period_end'] else None,
+                'created_at': str(row['created_at'])
+            })
+
+        return success_response({
+            "success": True,
+            "community_id": community_id,
+            "insights": insights,
+            "count": len(insights)
+        })
+    except Exception as e:
+        logger.error(f"Failed to get insights: {e}")
+        return error_response(f"Failed to retrieve insights: {str(e)}", 500)
+
+
+@admin_bp.route('/<int:community_id>/ai-researcher/config', methods=['GET'])
+@async_endpoint
+async def get_researcher_config(community_id: int):
+    """Get AI Researcher configuration for a community."""
+    try:
+        query = """
+            SELECT firehose_enabled, bot_detection_enabled, bot_detection_threshold,
+                   research_max_queries, summary_enabled, mem0_enabled, ai_provider,
+                   is_premium, created_at, updated_at
+            FROM ai_researcher_config
+            WHERE community_id = $1
+        """
+        rows = await dal.execute(query, [community_id])
+
+        if rows and len(rows) > 0:
+            row = rows[0]
+            config = {
+                'community_id': community_id,
+                'firehose_enabled': row['firehose_enabled'],
+                'bot_detection_enabled': row['bot_detection_enabled'],
+                'bot_detection_threshold': float(row['bot_detection_threshold']),
+                'research_max_queries': row['research_max_queries'],
+                'summary_enabled': row['summary_enabled'],
+                'mem0_enabled': row['mem0_enabled'],
+                'ai_provider': row['ai_provider'],
+                'is_premium': row['is_premium'],
+                'created_at': str(row['created_at']),
+                'updated_at': str(row['updated_at'])
+            }
+        else:
+            # Return default config
+            config = {
+                'community_id': community_id,
+                'firehose_enabled': Config.FIREHOSE_ENABLED,
+                'bot_detection_enabled': Config.BOT_DETECTION_ENABLED,
+                'bot_detection_threshold': Config.BOT_DETECTION_THRESHOLD,
+                'research_max_queries': Config.RESEARCH_MAX_QUERIES,
+                'summary_enabled': True,
+                'mem0_enabled': True,
+                'ai_provider': Config.AI_PROVIDER,
+                'is_premium': False,
+                'created_at': None,
+                'updated_at': None
+            }
+
+        return success_response({
+            "success": True,
+            "config": config
+        })
+    except Exception as e:
+        logger.error(f"Failed to get researcher config: {e}")
+        return error_response(f"Failed to retrieve config: {str(e)}", 500)
+
+
+@admin_bp.route('/<int:community_id>/ai-researcher/config', methods=['PUT'])
+@async_endpoint
+async def update_researcher_config(community_id: int):
+    """
+    Update AI Researcher configuration.
+
+    Expected payload:
+    {
+        "admin_id": int,
+        "firehose_enabled": bool (optional),
+        "bot_detection_enabled": bool (optional),
+        "bot_detection_threshold": float (optional),
+        "research_max_queries": int (optional),
+        "mem0_enabled": bool (optional)
+    }
+    """
+    data = await request.get_json()
+    admin_id = data.get('admin_id')
+
+    if not admin_id:
+        return error_response("admin_id is required", 400)
+
+    try:
+        # Build update fields dynamically
+        updates = []
+        values = []
+        param_idx = 1
+
+        fields = [
+            ('firehose_enabled', 'firehose_enabled'),
+            ('bot_detection_enabled', 'bot_detection_enabled'),
+            ('bot_detection_threshold', 'bot_detection_threshold'),
+            ('research_max_queries', 'research_max_queries'),
+            ('summary_enabled', 'summary_enabled'),
+            ('mem0_enabled', 'mem0_enabled'),
+            ('ai_provider', 'ai_provider'),
+        ]
+
+        for json_field, db_field in fields:
+            if json_field in data:
+                updates.append(f"{db_field} = ${param_idx}")
+                values.append(data[json_field])
+                param_idx += 1
+
+        if not updates:
+            return error_response("No fields to update", 400)
+
+        # Add updated_at
+        updates.append(f"updated_at = NOW()")
+
+        # Check if config exists
+        check_query = "SELECT id FROM ai_researcher_config WHERE community_id = $1"
+        existing = await dal.execute(check_query, [community_id])
+
+        if existing and len(existing) > 0:
+            # Update existing
+            query = f"""
+                UPDATE ai_researcher_config
+                SET {', '.join(updates)}
+                WHERE community_id = ${param_idx}
+            """
+            values.append(community_id)
+        else:
+            # Insert new config
+            field_names = ['community_id'] + [f[1] for f in fields if f[0] in data]
+            placeholders = ', '.join([f'${i}' for i in range(1, len(values) + 2)])
+            query = f"""
+                INSERT INTO ai_researcher_config ({', '.join(field_names)})
+                VALUES ({placeholders})
+            """
+            values = [community_id] + values
+
+        await dal.execute(query, values)
+
+        logger.audit(
+            action="ai_researcher_config_updated",
+            user=str(admin_id),
+            community=str(community_id),
+            result="SUCCESS"
+        )
+
+        return success_response({
+            "success": True,
+            "message": "Configuration updated"
+        })
+    except Exception as e:
+        logger.error(f"Failed to update researcher config: {e}")
+        return error_response(f"Failed to update config: {str(e)}", 500)
+
+
+@admin_bp.route('/<int:community_id>/bot-detection')
+@async_endpoint
+async def get_bot_detection(community_id: int):
+    """
+    Get bot detection results for the community.
+
+    Query params:
+    - limit: Number of results to return (default: 50)
+    - threshold: Minimum bot score to include (default: 0.5)
+    - flagged_only: Only show flagged users (default: false)
+    """
+    limit = request.args.get('limit', 50, type=int)
+    threshold = request.args.get('threshold', 50.0, type=float)
+    flagged_only = request.args.get('flagged_only', 'false').lower() == 'true'
+
+    try:
+        # Build query
+        if flagged_only:
+            query = """
+                SELECT id, platform, platform_user_id, platform_username,
+                       confidence_score, behavioral_patterns, timing_regularity,
+                       response_latency_avg, emote_text_ratio, copy_paste_frequency,
+                       account_age_days, recommended_action, is_reviewed, admin_notes,
+                       created_at
+                FROM ai_bot_detection_results
+                WHERE community_id = $1
+                  AND confidence_score >= $2
+                  AND is_reviewed = FALSE
+                ORDER BY confidence_score DESC
+                LIMIT $3
+            """
+        else:
+            query = """
+                SELECT id, platform, platform_user_id, platform_username,
+                       confidence_score, behavioral_patterns, timing_regularity,
+                       response_latency_avg, emote_text_ratio, copy_paste_frequency,
+                       account_age_days, recommended_action, is_reviewed, admin_notes,
+                       created_at
+                FROM ai_bot_detection_results
+                WHERE community_id = $1
+                  AND confidence_score >= $2
+                ORDER BY confidence_score DESC
+                LIMIT $3
+            """
+
+        rows = await dal.execute(query, [community_id, threshold, limit])
+
+        results = []
+        for row in (rows or []):
+            results.append({
+                'id': row['id'],
+                'platform': row['platform'],
+                'platform_user_id': row['platform_user_id'],
+                'platform_username': row['platform_username'],
+                'confidence_score': float(row['confidence_score']),
+                'behavioral_patterns': row['behavioral_patterns'] or {},
+                'timing_regularity': float(row['timing_regularity']) if row['timing_regularity'] else None,
+                'response_latency_avg': float(row['response_latency_avg']) if row['response_latency_avg'] else None,
+                'emote_text_ratio': float(row['emote_text_ratio']) if row['emote_text_ratio'] else None,
+                'copy_paste_frequency': row['copy_paste_frequency'],
+                'account_age_days': row['account_age_days'],
+                'recommended_action': row['recommended_action'],
+                'is_reviewed': row['is_reviewed'],
+                'admin_notes': row['admin_notes'],
+                'created_at': str(row['created_at'])
+            })
+
+        return success_response({
+            "success": True,
+            "community_id": community_id,
+            "results": results,
+            "count": len(results),
+            "threshold": threshold
+        })
+    except Exception as e:
+        logger.error(f"Failed to get bot detection results: {e}")
+        return error_response(f"Failed to retrieve bot detection results: {str(e)}", 500)
+
+
+# Register blueprints
+app.register_blueprint(api_bp)
+app.register_blueprint(researcher_bp)
+app.register_blueprint(admin_bp)
+
+if __name__ == '__main__':
+    import hypercorn.asyncio
+    from hypercorn.config import Config as HyperConfig
+    config = HyperConfig()
+    config.bind = [f"0.0.0.0:{Config.MODULE_PORT}"]
+    asyncio.run(hypercorn.asyncio.serve(app, config))

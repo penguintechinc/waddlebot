@@ -1631,3 +1631,826 @@ export async function removeMirrorGroupMember(req, res, next) {
     next(err);
   }
 }
+
+// ===== Reputation Configuration Endpoints =====
+
+/**
+ * Get reputation configuration for community
+ */
+export async function getReputationConfig(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+
+    const result = await query(
+      `SELECT is_premium, chat_message, command_usage, giveaway_entry, follow,
+              subscription, subscription_tier2, subscription_tier3, gift_subscription,
+              donation_per_dollar, cheer_per_100bits, raid, boost,
+              warn, timeout, kick, ban,
+              auto_ban_enabled, auto_ban_threshold, starting_score,
+              min_score, max_score, created_at, updated_at
+       FROM community_reputation_config
+       WHERE community_id = $1`,
+      [communityId]
+    );
+
+    if (result.rows.length === 0) {
+      // Return defaults if no config exists
+      return res.json({
+        success: true,
+        config: {
+          isPremium: false,
+          weights: {
+            chatMessage: 0.01,
+            commandUsage: -0.1,
+            giveawayEntry: -1.0,
+            follow: 1.0,
+            subscription: 5.0,
+            subscriptionTier2: 10.0,
+            subscriptionTier3: 20.0,
+            giftSubscription: 3.0,
+            donationPerDollar: 1.0,
+            cheerPer100Bits: 1.0,
+            raid: 2.0,
+            boost: 5.0,
+            warn: -25.0,
+            timeout: -50.0,
+            kick: -75.0,
+            ban: -200.0,
+          },
+          policy: {
+            autoBanEnabled: false,
+            autoBanThreshold: 450,
+            startingScore: 600,
+            minScore: 300,
+            maxScore: 850,
+          },
+          canCustomize: false,
+        },
+      });
+    }
+
+    const row = result.rows[0];
+    res.json({
+      success: true,
+      config: {
+        isPremium: row.is_premium,
+        weights: {
+          chatMessage: parseFloat(row.chat_message),
+          commandUsage: parseFloat(row.command_usage),
+          giveawayEntry: parseFloat(row.giveaway_entry),
+          follow: parseFloat(row.follow),
+          subscription: parseFloat(row.subscription),
+          subscriptionTier2: parseFloat(row.subscription_tier2),
+          subscriptionTier3: parseFloat(row.subscription_tier3),
+          giftSubscription: parseFloat(row.gift_subscription),
+          donationPerDollar: parseFloat(row.donation_per_dollar),
+          cheerPer100Bits: parseFloat(row.cheer_per_100bits),
+          raid: parseFloat(row.raid),
+          boost: parseFloat(row.boost),
+          warn: parseFloat(row.warn),
+          timeout: parseFloat(row.timeout),
+          kick: parseFloat(row.kick),
+          ban: parseFloat(row.ban),
+        },
+        policy: {
+          autoBanEnabled: row.auto_ban_enabled,
+          autoBanThreshold: row.auto_ban_threshold,
+          startingScore: row.starting_score,
+          minScore: row.min_score,
+          maxScore: row.max_score,
+        },
+        canCustomize: row.is_premium,
+        updatedAt: row.updated_at?.toISOString(),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Update reputation configuration
+ * Weight customization requires premium subscription
+ */
+export async function updateReputationConfig(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+    const { weights, policy } = req.body;
+
+    // Check if config exists
+    const existingResult = await query(
+      `SELECT is_premium FROM community_reputation_config WHERE community_id = $1`,
+      [communityId]
+    );
+
+    const isPremium = existingResult.rows.length > 0 ? existingResult.rows[0].is_premium : false;
+
+    // If trying to update weights without premium, reject
+    if (weights && Object.keys(weights).length > 0 && !isPremium) {
+      return res.status(403).json({
+        success: false,
+        error: 'Weight customization requires premium subscription',
+        upgradeRequired: true,
+      });
+    }
+
+    // Build update query
+    const updates = [];
+    const params = [];
+    let paramIndex = 1;
+
+    // Weight fields (premium only)
+    if (weights && isPremium) {
+      const weightFields = {
+        chatMessage: 'chat_message',
+        commandUsage: 'command_usage',
+        giveawayEntry: 'giveaway_entry',
+        follow: 'follow',
+        subscription: 'subscription',
+        subscriptionTier2: 'subscription_tier2',
+        subscriptionTier3: 'subscription_tier3',
+        giftSubscription: 'gift_subscription',
+        donationPerDollar: 'donation_per_dollar',
+        cheerPer100Bits: 'cheer_per_100bits',
+        raid: 'raid',
+        boost: 'boost',
+        warn: 'warn',
+        timeout: 'timeout',
+        kick: 'kick',
+        ban: 'ban',
+      };
+
+      for (const [jsName, dbName] of Object.entries(weightFields)) {
+        if (weights[jsName] !== undefined) {
+          updates.push(`${dbName} = $${paramIndex}`);
+          params.push(weights[jsName]);
+          paramIndex++;
+        }
+      }
+    }
+
+    // Policy fields (available to all)
+    if (policy) {
+      if (policy.autoBanEnabled !== undefined) {
+        updates.push(`auto_ban_enabled = $${paramIndex}`);
+        params.push(policy.autoBanEnabled);
+        paramIndex++;
+      }
+      if (policy.autoBanThreshold !== undefined) {
+        const threshold = Math.max(REPUTATION_MIN, Math.min(REPUTATION_MAX, policy.autoBanThreshold));
+        updates.push(`auto_ban_threshold = $${paramIndex}`);
+        params.push(threshold);
+        paramIndex++;
+      }
+      if (policy.startingScore !== undefined) {
+        const score = Math.max(REPUTATION_MIN, Math.min(REPUTATION_MAX, policy.startingScore));
+        updates.push(`starting_score = $${paramIndex}`);
+        params.push(score);
+        paramIndex++;
+      }
+    }
+
+    if (updates.length === 0) {
+      return res.json({ success: true, message: 'No changes to apply' });
+    }
+
+    updates.push('updated_at = NOW()');
+
+    if (existingResult.rows.length === 0) {
+      // Insert new config
+      const insertFields = ['community_id', ...updates.map(u => u.split(' = ')[0])];
+      const insertParams = [communityId, ...params];
+      const placeholders = insertParams.map((_, i) => `$${i + 1}`).join(', ');
+
+      await query(
+        `INSERT INTO community_reputation_config (${insertFields.join(', ')})
+         VALUES (${placeholders})`,
+        insertParams
+      );
+    } else {
+      // Update existing
+      params.push(communityId);
+      await query(
+        `UPDATE community_reputation_config
+         SET ${updates.join(', ')}
+         WHERE community_id = $${paramIndex}`,
+        params
+      );
+    }
+
+    logger.audit('Reputation config updated', {
+      adminId: req.user.id,
+      communityId,
+      updatedWeights: weights ? Object.keys(weights) : [],
+      updatedPolicy: policy ? Object.keys(policy) : [],
+    });
+
+    res.json({ success: true, message: 'Configuration updated' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Get users at risk of auto-ban (near threshold)
+ */
+export async function getAtRiskUsers(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+    const buffer = Math.min(100, Math.max(10, parseInt(req.query.buffer || '50', 10)));
+
+    // Get auto-ban threshold
+    const configResult = await query(
+      `SELECT auto_ban_threshold, auto_ban_enabled FROM community_reputation_config
+       WHERE community_id = $1`,
+      [communityId]
+    );
+
+    const threshold = configResult.rows.length > 0 ? configResult.rows[0].auto_ban_threshold : 450;
+    const autoBanEnabled = configResult.rows.length > 0 ? configResult.rows[0].auto_ban_enabled : false;
+    const warningThreshold = threshold + buffer;
+
+    const result = await query(
+      `SELECT cm.user_id, u.username, u.email, u.avatar_url, cm.reputation,
+              $1 - cm.reputation as points_until_ban
+       FROM community_members cm
+       JOIN hub_users u ON u.id = cm.user_id
+       WHERE cm.community_id = $2 AND cm.is_active = true
+       AND cm.reputation <= $3
+       ORDER BY cm.reputation ASC
+       LIMIT 50`,
+      [threshold, communityId, warningThreshold]
+    );
+
+    const users = result.rows.map(row => ({
+      userId: row.user_id,
+      username: row.username,
+      email: row.email,
+      avatarUrl: row.avatar_url,
+      reputation: formatReputation(row.reputation),
+      pointsUntilBan: row.points_until_ban,
+    }));
+
+    res.json({
+      success: true,
+      autoBanEnabled,
+      threshold,
+      users,
+      count: users.length,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Get reputation leaderboard for community
+ */
+export async function getReputationLeaderboard(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '25', 10)));
+    const offset = Math.max(0, parseInt(req.query.offset || '0', 10));
+
+    const result = await query(
+      `SELECT cm.user_id, u.username, u.avatar_url, cm.reputation,
+              RANK() OVER (ORDER BY cm.reputation DESC) as rank
+       FROM community_members cm
+       JOIN hub_users u ON u.id = cm.user_id
+       WHERE cm.community_id = $1 AND cm.is_active = true
+       ORDER BY cm.reputation DESC
+       LIMIT $2 OFFSET $3`,
+      [communityId, limit, offset]
+    );
+
+    const leaderboard = result.rows.map(row => ({
+      userId: row.user_id,
+      username: row.username,
+      avatarUrl: row.avatar_url,
+      reputation: formatReputation(row.reputation),
+      rank: parseInt(row.rank, 10),
+    }));
+
+    res.json({
+      success: true,
+      leaderboard,
+      limit,
+      offset,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ===== AI Researcher Admin Endpoints =====
+
+/**
+ * Get AI insights with pagination and type filter
+ */
+export async function getAIInsights(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '25', 10)));
+    const offset = (page - 1) * limit;
+    const insightType = req.query.type; // optional: stream_summary, weekly_rollup, bot_detection
+
+    let whereClause = 'WHERE community_id = $1';
+    const params = [communityId];
+    let paramIndex = 2;
+
+    if (insightType) {
+      whereClause += ` AND insight_type = $${paramIndex}`;
+      params.push(insightType);
+      paramIndex++;
+    }
+
+    // Get total count
+    const countResult = await query(
+      `SELECT COUNT(*) as count FROM ai_insights ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0]?.count || 0, 10);
+
+    // Get insights
+    const result = await query(
+      `SELECT id, insight_type, title, summary, metadata, created_at
+       FROM ai_insights
+       ${whereClause}
+       ORDER BY created_at DESC
+       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      [...params, limit, offset]
+    );
+
+    const insights = result.rows.map(row => ({
+      id: row.id,
+      insightType: row.insight_type,
+      title: row.title,
+      summary: row.summary,
+      metadata: row.metadata || {},
+      createdAt: row.created_at?.toISOString(),
+    }));
+
+    res.json({
+      success: true,
+      insights,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Get single AI insight with full content
+ */
+export async function getAIInsight(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+    const insightId = parseInt(req.params.insightId, 10);
+
+    const result = await query(
+      `SELECT id, insight_type, title, summary, content, metadata, created_at
+       FROM ai_insights
+       WHERE id = $1 AND community_id = $2`,
+      [insightId, communityId]
+    );
+
+    if (result.rows.length === 0) {
+      return next(errors.notFound('AI insight not found'));
+    }
+
+    const row = result.rows[0];
+    res.json({
+      success: true,
+      insight: {
+        id: row.id,
+        insightType: row.insight_type,
+        title: row.title,
+        summary: row.summary,
+        content: row.content,
+        metadata: row.metadata || {},
+        createdAt: row.created_at?.toISOString(),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Get AI researcher configuration for community
+ */
+export async function getAIResearcherConfig(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+
+    const result = await query(
+      `SELECT is_enabled, stream_summary_enabled, stream_summary_interval_hours,
+              weekly_rollup_enabled, weekly_rollup_day, bot_detection_enabled,
+              bot_detection_sensitivity, context_window_days, max_context_tokens,
+              is_premium, created_at, updated_at
+       FROM ai_researcher_config
+       WHERE community_id = $1`,
+      [communityId]
+    );
+
+    if (result.rows.length === 0) {
+      // Return defaults if no config exists
+      return res.json({
+        success: true,
+        config: {
+          isEnabled: false,
+          streamSummary: {
+            enabled: false,
+            intervalHours: 6,
+          },
+          weeklyRollup: {
+            enabled: false,
+            day: 'sunday',
+          },
+          botDetection: {
+            enabled: false,
+            sensitivity: 'medium',
+          },
+          context: {
+            windowDays: 7,
+            maxTokens: 4000,
+          },
+          isPremium: false,
+        },
+      });
+    }
+
+    const row = result.rows[0];
+    res.json({
+      success: true,
+      config: {
+        isEnabled: row.is_enabled,
+        streamSummary: {
+          enabled: row.stream_summary_enabled,
+          intervalHours: row.stream_summary_interval_hours,
+        },
+        weeklyRollup: {
+          enabled: row.weekly_rollup_enabled,
+          day: row.weekly_rollup_day,
+        },
+        botDetection: {
+          enabled: row.bot_detection_enabled,
+          sensitivity: row.bot_detection_sensitivity,
+        },
+        context: {
+          windowDays: row.context_window_days,
+          maxTokens: row.max_context_tokens,
+        },
+        isPremium: row.is_premium,
+        updatedAt: row.updated_at?.toISOString(),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Update AI researcher configuration
+ * Advanced features require premium subscription
+ */
+export async function updateAIResearcherConfig(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+    const { isEnabled, streamSummary, weeklyRollup, botDetection, context } = req.body;
+
+    // Check if config exists and get premium status
+    const existingResult = await query(
+      `SELECT is_premium FROM ai_researcher_config WHERE community_id = $1`,
+      [communityId]
+    );
+
+    const isPremium = existingResult.rows.length > 0 ? existingResult.rows[0].is_premium : false;
+
+    // Premium-only features
+    const premiumFeatures = ['weeklyRollup', 'botDetection'];
+    for (const feature of premiumFeatures) {
+      if (req.body[feature] && !isPremium) {
+        return res.status(403).json({
+          success: false,
+          error: `${feature} requires premium subscription`,
+          upgradeRequired: true,
+        });
+      }
+    }
+
+    // Build update query
+    const updates = [];
+    const params = [];
+    let paramIndex = 1;
+
+    if (isEnabled !== undefined) {
+      updates.push(`is_enabled = $${paramIndex}`);
+      params.push(isEnabled);
+      paramIndex++;
+    }
+
+    if (streamSummary) {
+      if (streamSummary.enabled !== undefined) {
+        updates.push(`stream_summary_enabled = $${paramIndex}`);
+        params.push(streamSummary.enabled);
+        paramIndex++;
+      }
+      if (streamSummary.intervalHours !== undefined) {
+        const hours = Math.max(1, Math.min(24, streamSummary.intervalHours));
+        updates.push(`stream_summary_interval_hours = $${paramIndex}`);
+        params.push(hours);
+        paramIndex++;
+      }
+    }
+
+    if (weeklyRollup && isPremium) {
+      if (weeklyRollup.enabled !== undefined) {
+        updates.push(`weekly_rollup_enabled = $${paramIndex}`);
+        params.push(weeklyRollup.enabled);
+        paramIndex++;
+      }
+      if (weeklyRollup.day !== undefined) {
+        const validDays = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        if (!validDays.includes(weeklyRollup.day)) {
+          return next(errors.badRequest('Invalid day of week'));
+        }
+        updates.push(`weekly_rollup_day = $${paramIndex}`);
+        params.push(weeklyRollup.day);
+        paramIndex++;
+      }
+    }
+
+    if (botDetection && isPremium) {
+      if (botDetection.enabled !== undefined) {
+        updates.push(`bot_detection_enabled = $${paramIndex}`);
+        params.push(botDetection.enabled);
+        paramIndex++;
+      }
+      if (botDetection.sensitivity !== undefined) {
+        const validLevels = ['low', 'medium', 'high'];
+        if (!validLevels.includes(botDetection.sensitivity)) {
+          return next(errors.badRequest('Invalid sensitivity level'));
+        }
+        updates.push(`bot_detection_sensitivity = $${paramIndex}`);
+        params.push(botDetection.sensitivity);
+        paramIndex++;
+      }
+    }
+
+    if (context) {
+      if (context.windowDays !== undefined) {
+        const days = Math.max(1, Math.min(30, context.windowDays));
+        updates.push(`context_window_days = $${paramIndex}`);
+        params.push(days);
+        paramIndex++;
+      }
+      if (context.maxTokens !== undefined && isPremium) {
+        const tokens = Math.max(1000, Math.min(16000, context.maxTokens));
+        updates.push(`max_context_tokens = $${paramIndex}`);
+        params.push(tokens);
+        paramIndex++;
+      }
+    }
+
+    if (updates.length === 0) {
+      return res.json({ success: true, message: 'No changes to apply' });
+    }
+
+    updates.push('updated_at = NOW()');
+
+    if (existingResult.rows.length === 0) {
+      // Insert new config with defaults
+      const insertFields = ['community_id', ...updates.map(u => u.split(' = ')[0])];
+      const insertParams = [communityId, ...params];
+      const placeholders = insertParams.map((_, i) => `$${i + 1}`).join(', ');
+
+      await query(
+        `INSERT INTO ai_researcher_config (${insertFields.join(', ')})
+         VALUES (${placeholders})`,
+        insertParams
+      );
+    } else {
+      // Update existing
+      params.push(communityId);
+      await query(
+        `UPDATE ai_researcher_config
+         SET ${updates.join(', ')}
+         WHERE community_id = $${paramIndex}`,
+        params
+      );
+    }
+
+    logger.audit('AI researcher config updated', {
+      adminId: req.user.id,
+      communityId,
+      updatedFields: Object.keys(req.body),
+    });
+
+    res.json({ success: true, message: 'Configuration updated' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Get bot detection results with filters
+ */
+export async function getBotDetectionResults(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '25', 10)));
+    const offset = (page - 1) * limit;
+    const status = req.query.status; // optional: pending, reviewed, dismissed
+    const minConfidence = parseFloat(req.query.minConfidence || '0');
+
+    let whereClause = 'WHERE community_id = $1';
+    const params = [communityId];
+    let paramIndex = 2;
+
+    if (status) {
+      whereClause += ` AND review_status = $${paramIndex}`;
+      params.push(status);
+      paramIndex++;
+    }
+
+    if (minConfidence > 0) {
+      whereClause += ` AND confidence >= $${paramIndex}`;
+      params.push(minConfidence);
+      paramIndex++;
+    }
+
+    // Get total count
+    const countResult = await query(
+      `SELECT COUNT(*) as count FROM bot_detection_results ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0]?.count || 0, 10);
+
+    // Get results
+    const result = await query(
+      `SELECT bdr.id, bdr.user_id, bdr.username, bdr.confidence, bdr.reasons,
+              bdr.review_status, bdr.review_action, bdr.review_notes,
+              bdr.detected_at, bdr.reviewed_at, bdr.reviewed_by,
+              u.username as reviewed_by_username
+       FROM bot_detection_results bdr
+       LEFT JOIN hub_users u ON u.id = bdr.reviewed_by
+       ${whereClause}
+       ORDER BY bdr.confidence DESC, bdr.detected_at DESC
+       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      [...params, limit, offset]
+    );
+
+    const results = result.rows.map(row => ({
+      id: row.id,
+      userId: row.user_id,
+      username: row.username,
+      confidence: parseFloat(row.confidence),
+      reasons: row.reasons || [],
+      reviewStatus: row.review_status,
+      reviewAction: row.review_action,
+      reviewNotes: row.review_notes,
+      detectedAt: row.detected_at?.toISOString(),
+      reviewedAt: row.reviewed_at?.toISOString(),
+      reviewedBy: row.reviewed_by_username,
+    }));
+
+    res.json({
+      success: true,
+      results,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Admin review of bot detection result
+ */
+export async function reviewBotDetection(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+    const resultId = parseInt(req.params.resultId, 10);
+    const { action, notes } = req.body;
+
+    // Validate action
+    const validActions = ['ban', 'monitor', 'dismiss', 'false_positive'];
+    if (!action || !validActions.includes(action)) {
+      return next(errors.badRequest(`Invalid action. Must be one of: ${validActions.join(', ')}`));
+    }
+
+    // Verify the result belongs to this community
+    const checkResult = await query(
+      `SELECT id, user_id FROM bot_detection_results
+       WHERE id = $1 AND community_id = $2`,
+      [resultId, communityId]
+    );
+
+    if (checkResult.rows.length === 0) {
+      return next(errors.notFound('Bot detection result not found'));
+    }
+
+    // Update the result
+    await query(
+      `UPDATE bot_detection_results
+       SET review_status = 'reviewed', review_action = $1, review_notes = $2,
+           reviewed_at = NOW(), reviewed_by = $3
+       WHERE id = $4`,
+      [action, notes || null, req.user.id, resultId]
+    );
+
+    logger.audit('Bot detection reviewed', {
+      adminId: req.user.id,
+      communityId,
+      resultId,
+      action,
+      userId: checkResult.rows[0].user_id,
+    });
+
+    res.json({ success: true, message: 'Review recorded' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Get current AI context visualization data
+ */
+export async function getAIContext(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+
+    // Get config to determine context window
+    const configResult = await query(
+      `SELECT context_window_days FROM ai_researcher_config WHERE community_id = $1`,
+      [communityId]
+    );
+    const windowDays = configResult.rows.length > 0 ? configResult.rows[0].context_window_days : 7;
+
+    // Get context stats
+    const statsResult = await query(
+      `SELECT
+         COUNT(DISTINCT user_id) as active_users,
+         COUNT(*) as total_messages,
+         COUNT(DISTINCT DATE(created_at)) as active_days
+       FROM chat_messages
+       WHERE community_id = $1
+       AND created_at >= NOW() - INTERVAL '${windowDays} days'`,
+      [communityId]
+    );
+
+    // Get top users
+    const topUsersResult = await query(
+      `SELECT user_id, username, COUNT(*) as message_count
+       FROM chat_messages
+       WHERE community_id = $1
+       AND created_at >= NOW() - INTERVAL '${windowDays} days'
+       GROUP BY user_id, username
+       ORDER BY message_count DESC
+       LIMIT 10`,
+      [communityId]
+    );
+
+    // Get activity by hour
+    const activityResult = await query(
+      `SELECT EXTRACT(HOUR FROM created_at) as hour, COUNT(*) as count
+       FROM chat_messages
+       WHERE community_id = $1
+       AND created_at >= NOW() - INTERVAL '${windowDays} days'
+       GROUP BY hour
+       ORDER BY hour`,
+      [communityId]
+    );
+
+    const stats = statsResult.rows[0] || { active_users: 0, total_messages: 0, active_days: 0 };
+    const topUsers = topUsersResult.rows.map(row => ({
+      userId: row.user_id,
+      username: row.username,
+      messageCount: parseInt(row.message_count, 10),
+    }));
+    const activityByHour = activityResult.rows.map(row => ({
+      hour: parseInt(row.hour, 10),
+      count: parseInt(row.count, 10),
+    }));
+
+    res.json({
+      success: true,
+      context: {
+        windowDays,
+        stats: {
+          activeUsers: parseInt(stats.active_users, 10),
+          totalMessages: parseInt(stats.total_messages, 10),
+          activeDays: parseInt(stats.active_days, 10),
+        },
+        topUsers,
+        activityByHour,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}

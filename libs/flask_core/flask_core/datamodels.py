@@ -64,6 +64,37 @@ class ResponseAction(str, Enum):
     FORM = "form"
 
 
+class ReputationTier(str, Enum):
+    """FICO-style reputation tier classifications"""
+    EXCEPTIONAL = "exceptional"  # 800-850
+    VERY_GOOD = "very_good"      # 740-799
+    GOOD = "good"                # 670-739
+    FAIR = "fair"                # 580-669
+    POOR = "poor"                # 300-579
+
+
+class ReputationEventType(str, Enum):
+    """Types of events that affect reputation"""
+    CHAT_MESSAGE = "chat_message"
+    COMMAND_USAGE = "command_usage"
+    GIVEAWAY_ENTRY = "giveaway_entry"
+    FOLLOW = "follow"
+    SUBSCRIPTION = "subscription"
+    SUBSCRIPTION_TIER2 = "subscription_tier2"
+    SUBSCRIPTION_TIER3 = "subscription_tier3"
+    GIFT_SUBSCRIPTION = "gift_subscription"
+    DONATION = "donation"
+    CHEER = "cheer"
+    RAID = "raid"
+    BOOST = "boost"
+    WARN = "warn"
+    TIMEOUT = "timeout"
+    KICK = "kick"
+    BAN = "ban"
+    MANUAL_SET = "manual_set"
+    AUTO_BAN = "auto_ban"
+
+
 @dataclass(slots=True, frozen=True)
 class CommandRequest:
     """
@@ -288,6 +319,99 @@ class MetricsSnapshot:
     active_connections: int
     cache_hit_rate: float
     timestamp: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True, frozen=True)
+class ReputationInfo:
+    """
+    FICO-style reputation information for a user.
+    Score range: 300-850, default 600.
+    """
+    score: int
+    tier: ReputationTier
+    tier_label: str
+    total_events: int = 0
+    last_event_at: Optional[datetime] = None
+
+    @staticmethod
+    def get_tier(score: int) -> tuple:
+        """Get tier from score."""
+        if score >= 800:
+            return ReputationTier.EXCEPTIONAL, "Exceptional"
+        elif score >= 740:
+            return ReputationTier.VERY_GOOD, "Very Good"
+        elif score >= 670:
+            return ReputationTier.GOOD, "Good"
+        elif score >= 580:
+            return ReputationTier.FAIR, "Fair"
+        else:
+            return ReputationTier.POOR, "Poor"
+
+
+@dataclass(slots=True)
+class ReputationEvent:
+    """
+    A single reputation adjustment event.
+    """
+    event_id: int
+    community_id: int
+    user_id: int
+    event_type: ReputationEventType
+    score_change: float
+    score_before: int
+    score_after: int
+    platform: Platform
+    platform_user_id: str
+    reason: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True)
+class ReputationAdjustment:
+    """
+    Result of a reputation adjustment operation.
+    """
+    success: bool
+    score_before: int
+    score_after: int
+    score_change: float
+    event_id: Optional[int] = None
+    error: Optional[str] = None
+
+
+@dataclass(slots=True, frozen=True)
+class ReputationWeights:
+    """
+    Weight configuration for reputation scoring.
+    Premium communities can customize; non-premium use defaults.
+    """
+    community_id: int
+    is_premium: bool = False
+    # Activity weights
+    chat_message: float = 0.01
+    command_usage: float = -0.1
+    giveaway_entry: float = -1.0
+    follow: float = 1.0
+    subscription: float = 5.0
+    subscription_tier2: float = 10.0
+    subscription_tier3: float = 20.0
+    gift_subscription: float = 3.0
+    donation_per_dollar: float = 1.0
+    cheer_per_100bits: float = 1.0
+    raid: float = 2.0
+    boost: float = 5.0
+    # Moderation weights
+    warn: float = -25.0
+    timeout: float = -50.0
+    kick: float = -75.0
+    ban: float = -200.0
+    # Policy settings
+    auto_ban_enabled: bool = False
+    auto_ban_threshold: int = 450
+    starting_score: int = 600
+    min_score: int = 300
+    max_score: int = 850
 
 
 # Type aliases for Python 3.13

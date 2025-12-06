@@ -175,6 +175,37 @@ export const adminApi = {
     });
   },
   deleteCommunityBanner: (communityId) => api.delete(`/api/v1/admin/${communityId}/banner`),
+  // Reputation configuration (FICO-style 300-850 scoring)
+  getReputationConfig: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/reputation/config`),
+  updateReputationConfig: (communityId, data) =>
+    api.put(`/api/v1/admin/${communityId}/reputation/config`, data),
+  getAtRiskUsers: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/reputation/at-risk`, { params }),
+  getReputationLeaderboard: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/reputation/leaderboard`, { params }),
+  // AI Insights
+  getAIInsights: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/ai-insights`, { params }),
+  getAIInsight: (communityId, insightId) =>
+    api.get(`/api/v1/admin/${communityId}/ai-insights/${insightId}`),
+  // AI Researcher Config
+  getAIResearcherConfig: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/ai-researcher/config`),
+  updateAIResearcherConfig: (communityId, data) =>
+    api.put(`/api/v1/admin/${communityId}/ai-researcher/config`, data),
+  // Bot Detection
+  getBotDetections: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/bot-detection`, { params }),
+  getBotDetectionResults: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/bot-detection`, { params }),
+  reviewBotDetection: (communityId, resultId, data) =>
+    api.post(`/api/v1/admin/${communityId}/bot-detection/${resultId}/review`, data),
+  markBotDetectionReviewed: (communityId, resultId) =>
+    api.post(`/api/v1/admin/${communityId}/bot-detection/${resultId}/mark-reviewed`),
+  // Context Visualization
+  getAIContext: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/ai-context`),
 };
 
 export const platformApi = {

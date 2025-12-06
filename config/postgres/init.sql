@@ -424,6 +424,90 @@ COMMENT ON COLUMN community_leaderboard_config.enabled_platforms IS 'Array of pl
 COMMENT ON COLUMN community_leaderboard_config.min_watch_time_minutes IS 'Minimum watch time to appear on leaderboard';
 COMMENT ON COLUMN community_leaderboard_config.min_message_count IS 'Minimum messages to appear on leaderboard';
 
+-- ============================================================================
+-- REPUTATION SYSTEM TABLES
+-- FICO-style credit score system (300-850 range, default 600)
+-- ============================================================================
+
+-- Reputation events audit log - tracks all score changes
+CREATE TABLE IF NOT EXISTS reputation_events (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE SET NULL,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    event_type VARCHAR(50) NOT NULL,
+    score_change DECIMAL(6,2) NOT NULL,
+    score_before INTEGER NOT NULL,
+    score_after INTEGER NOT NULL,
+    reason VARCHAR(255),
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+COMMENT ON TABLE reputation_events IS 'Audit log of all reputation score changes';
+COMMENT ON COLUMN reputation_events.event_type IS 'Type: chatMessage, command, follow, subscription, warn, timeout, kick, ban, etc.';
+COMMENT ON COLUMN reputation_events.score_change IS 'Points added (positive) or removed (negative)';
+
+CREATE INDEX IF NOT EXISTS idx_rep_events_community ON reputation_events(community_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rep_events_user ON reputation_events(hub_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rep_events_platform_user ON reputation_events(platform, platform_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rep_events_type ON reputation_events(event_type, created_at DESC);
+
+-- Global reputation - cross-community aggregate score
+CREATE TABLE IF NOT EXISTS reputation_global (
+    id SERIAL PRIMARY KEY,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE UNIQUE,
+    score INTEGER DEFAULT 600 NOT NULL CHECK (score >= 300 AND score <= 850),
+    total_events INTEGER DEFAULT 0,
+    last_event_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+COMMENT ON TABLE reputation_global IS 'Global reputation score aggregated across all communities';
+COMMENT ON COLUMN reputation_global.score IS 'FICO-style score: 300 (poor) to 850 (exceptional), default 600';
+
+CREATE INDEX IF NOT EXISTS idx_rep_global_score ON reputation_global(score DESC);
+
+-- Community reputation configuration - weight settings (PREMIUM feature for customization)
+CREATE TABLE IF NOT EXISTS community_reputation_config (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE UNIQUE,
+    is_premium BOOLEAN DEFAULT FALSE,
+    -- Positive activity weights
+    chat_message DECIMAL(5,3) DEFAULT 0.01,
+    command_usage DECIMAL(5,3) DEFAULT -0.1,
+    giveaway_entry DECIMAL(5,2) DEFAULT -1.0,  -- Larger penalty to dissuade giveaway bots
+    follow DECIMAL(5,2) DEFAULT 1.0,
+    subscription DECIMAL(5,2) DEFAULT 5.0,
+    subscription_tier2 DECIMAL(5,2) DEFAULT 10.0,
+    subscription_tier3 DECIMAL(5,2) DEFAULT 20.0,
+    gift_subscription DECIMAL(5,2) DEFAULT 3.0,
+    donation_per_dollar DECIMAL(5,3) DEFAULT 1.0,
+    cheer_per_100bits DECIMAL(5,2) DEFAULT 1.0,
+    raid DECIMAL(5,2) DEFAULT 2.0,
+    boost DECIMAL(5,2) DEFAULT 5.0,
+    -- Moderation penalty weights (negative values)
+    warn DECIMAL(5,2) DEFAULT -25.0,
+    timeout DECIMAL(5,2) DEFAULT -50.0,
+    kick DECIMAL(5,2) DEFAULT -75.0,
+    ban DECIMAL(5,2) DEFAULT -200.0,
+    -- Policy settings
+    auto_ban_enabled BOOLEAN DEFAULT FALSE,
+    auto_ban_threshold INTEGER DEFAULT 450 CHECK (auto_ban_threshold >= 300 AND auto_ban_threshold <= 850),
+    starting_score INTEGER DEFAULT 600 CHECK (starting_score >= 300 AND starting_score <= 850),
+    min_score INTEGER DEFAULT 300,
+    max_score INTEGER DEFAULT 850,
+    -- Timestamps
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+COMMENT ON TABLE community_reputation_config IS 'Per-community reputation weight configuration (customization is PREMIUM)';
+COMMENT ON COLUMN community_reputation_config.is_premium IS 'If false, uses default weights regardless of stored values';
+COMMENT ON COLUMN community_reputation_config.auto_ban_enabled IS 'Automatically ban users whose score falls below threshold';
+COMMENT ON COLUMN community_reputation_config.auto_ban_threshold IS 'Score at which auto-ban triggers (default 450)';
+
+-- ============================================================================
+
 -- Coordination table for tracking live streams and platform connections
 CREATE TABLE IF NOT EXISTS coordination (
     id SERIAL PRIMARY KEY,
@@ -467,6 +551,224 @@ ON CONFLICT (name) DO NOTHING;
 -- NOTE: Admin user is added to global community by the hub module when it creates the admin user
 -- All new users are automatically added to the global community via authController.js
 
+-- ============================================================================
+-- AI RESEARCHER MODULE TABLES
+-- ============================================================================
+
+-- Enable pgvector for semantic search and embeddings
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Configuration per community
+CREATE TABLE IF NOT EXISTS ai_researcher_config (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER UNIQUE REFERENCES communities(id) ON DELETE CASCADE,
+    is_premium BOOLEAN DEFAULT FALSE,
+
+    -- AI Provider Configuration
+    ai_provider VARCHAR(50) DEFAULT 'ollama',           -- ollama/openai/anthropic
+    ai_model VARCHAR(100) DEFAULT 'tinyllama',
+
+    -- Research Command Settings
+    research_enabled BOOLEAN DEFAULT TRUE,
+    response_destination VARCHAR(20) DEFAULT 'same_chat', -- same_chat/dm/dedicated_channel
+    dedicated_channel_id VARCHAR(255),
+
+    -- Rate Limits
+    rate_limit_per_user_hour INTEGER DEFAULT 5,
+    rate_limit_per_community_hour INTEGER DEFAULT 50,
+
+    -- Context/Memory Settings (mem0)
+    context_tracking_enabled BOOLEAN DEFAULT TRUE,
+    context_update_interval_minutes INTEGER DEFAULT 10,
+    context_update_message_threshold INTEGER DEFAULT 10000,
+
+    -- Summary Settings
+    stream_summary_enabled BOOLEAN DEFAULT TRUE,
+    weekly_summary_enabled BOOLEAN DEFAULT TRUE,
+    weekly_summary_day INTEGER DEFAULT 0,               -- 0=Sunday
+    weekly_summary_hour INTEGER DEFAULT 9,              -- UTC hour
+
+    -- Bot Detection Settings
+    bot_detection_enabled BOOLEAN DEFAULT FALSE,        -- Premium feature
+    bot_detection_after_stream BOOLEAN DEFAULT TRUE,
+    bot_detection_weekly BOOLEAN DEFAULT TRUE,
+    bot_confidence_alert_threshold INTEGER DEFAULT 85,  -- Auto-alert at this %
+
+    -- Webhook Integration
+    webhook_url VARCHAR(500),
+    webhook_events TEXT[] DEFAULT '{}',                 -- stream_summary, weekly_rollup, bot_alert
+
+    -- Topic Categories
+    blocked_topics TEXT[] DEFAULT '{politics,medical,legal,financial}',
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_researcher_config_community ON ai_researcher_config(community_id);
+
+COMMENT ON TABLE ai_researcher_config IS 'Per-community AI researcher module configuration';
+COMMENT ON COLUMN ai_researcher_config.is_premium IS 'Premium tier enables additional features and customization';
+COMMENT ON COLUMN ai_researcher_config.response_destination IS 'Where to send research responses: same_chat, dm, or dedicated_channel';
+COMMENT ON COLUMN ai_researcher_config.blocked_topics IS 'Array of blocked topic categories for safety';
+
+-- Community context snapshots (legacy + embedding for RAG)
+CREATE TABLE IF NOT EXISTS ai_community_context (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    context_data JSONB NOT NULL,                        -- topics, games, sentiment, personalities
+    embedding_vector VECTOR(1536),                      -- For semantic search
+    message_count_since_last INTEGER DEFAULT 0,
+    last_message_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_context_community ON ai_community_context(community_id);
+CREATE INDEX IF NOT EXISTS idx_ai_context_updated ON ai_community_context(updated_at DESC);
+
+COMMENT ON TABLE ai_community_context IS 'Compressed context snapshots with embeddings for semantic search';
+COMMENT ON COLUMN ai_community_context.context_data IS 'JSON containing topics, games, sentiment analysis, user personalities';
+COMMENT ON COLUMN ai_community_context.embedding_vector IS 'Vector embedding for semantic similarity search';
+
+-- Message buffer for context building (circular, auto-cleaned)
+CREATE TABLE IF NOT EXISTS ai_context_messages (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100),
+    platform_username VARCHAR(100),
+    message_content TEXT NOT NULL,
+    message_type VARCHAR(50) DEFAULT 'chatMessage',
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_messages_community ON ai_context_messages(community_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_messages_cleanup ON ai_context_messages(created_at);
+
+COMMENT ON TABLE ai_context_messages IS 'Circular message buffer for building context summaries (auto-cleaned after processing)';
+COMMENT ON COLUMN ai_context_messages.message_type IS 'chatMessage, subscription, follow, raid, donation, etc.';
+
+-- AI Insights (summaries and reports)
+CREATE TABLE IF NOT EXISTS ai_insights (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    insight_type VARCHAR(50) NOT NULL,                  -- stream_summary/weekly_rollup/bot_detection
+    title VARCHAR(255) NOT NULL,
+    content TEXT NOT NULL,
+    content_html TEXT,                                  -- Pre-rendered for hub display
+    metadata JSONB DEFAULT '{}',                        -- word_cloud, sentiment_data, etc.
+    embedding_vector VECTOR(1536),                      -- For RAG recall
+    platform VARCHAR(20),                               -- NULL for cross-platform
+    period_start TIMESTAMPTZ,
+    period_end TIMESTAMPTZ,
+    is_premium_only BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_insights_community ON ai_insights(community_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_insights_type ON ai_insights(community_id, insight_type, created_at DESC);
+
+COMMENT ON TABLE ai_insights IS 'AI-generated insights including stream summaries, weekly rollups, and bot detection reports';
+COMMENT ON COLUMN ai_insights.insight_type IS 'Type of insight: stream_summary, weekly_rollup, bot_detection';
+COMMENT ON COLUMN ai_insights.metadata IS 'Additional data like word clouds, sentiment graphs, top topics';
+COMMENT ON COLUMN ai_insights.embedding_vector IS 'Vector embedding for semantic recall via !or/recall';
+
+-- Bot detection results with enhanced signals
+CREATE TABLE IF NOT EXISTS ai_bot_detection_results (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    insight_id INTEGER REFERENCES ai_insights(id) ON DELETE CASCADE,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    platform_username VARCHAR(100),
+    confidence_score DECIMAL(5,2) NOT NULL,             -- 0-100
+
+    -- Enhanced behavioral signals
+    behavioral_patterns JSONB DEFAULT '{}',             -- Premium: detailed patterns
+    timing_regularity DECIMAL(5,2),                     -- Message timing consistency (higher = bot-like)
+    response_latency_avg DECIMAL(8,2),                  -- Avg ms to respond to others
+    emote_text_ratio DECIMAL(5,2),                      -- Emote vs text ratio
+    copy_paste_frequency INTEGER DEFAULT 0,             -- Same message detected across users
+    account_age_days INTEGER,                           -- Platform account age
+
+    recommended_action VARCHAR(50),                     -- none/monitor/warn/timeout/ban
+    is_reviewed BOOLEAN DEFAULT FALSE,
+    reviewed_by INTEGER REFERENCES hub_users(id),
+    reviewed_at TIMESTAMPTZ,
+    review_action VARCHAR(50),
+    review_notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_bot_detection_community ON ai_bot_detection_results(community_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bot_detection_confidence ON ai_bot_detection_results(community_id, confidence_score DESC);
+CREATE INDEX IF NOT EXISTS idx_bot_detection_unreviewed ON ai_bot_detection_results(community_id, is_reviewed) WHERE NOT is_reviewed;
+
+COMMENT ON TABLE ai_bot_detection_results IS 'Bot detection results with enhanced behavioral signals';
+COMMENT ON COLUMN ai_bot_detection_results.confidence_score IS 'Bot confidence score from 0 to 100 (higher = more likely bot)';
+COMMENT ON COLUMN ai_bot_detection_results.behavioral_patterns IS 'Premium: detailed behavioral analysis JSON';
+COMMENT ON COLUMN ai_bot_detection_results.timing_regularity IS 'Standard deviation of message intervals (lower = more regular/bot-like)';
+COMMENT ON COLUMN ai_bot_detection_results.recommended_action IS 'AI-recommended moderation action';
+
+-- Research request audit log
+CREATE TABLE IF NOT EXISTS ai_research_requests (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE SET NULL,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    platform_username VARCHAR(100),
+    command VARCHAR(20) NOT NULL,                       -- research/ask/recall/summarize
+    topic TEXT NOT NULL,
+    response TEXT,
+    response_destination VARCHAR(20),
+    tokens_used INTEGER DEFAULT 0,
+    processing_time_ms INTEGER DEFAULT 0,
+    was_blocked BOOLEAN DEFAULT FALSE,
+    blocked_reason VARCHAR(255),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_community ON ai_research_requests(community_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_research_user ON ai_research_requests(hub_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_research_rate_limit ON ai_research_requests(community_id, platform_user_id, created_at DESC);
+
+COMMENT ON TABLE ai_research_requests IS 'Audit log of all AI research requests for tracking and rate limiting';
+COMMENT ON COLUMN ai_research_requests.command IS 'Command type: research, ask, recall, summarize';
+COMMENT ON COLUMN ai_research_requests.was_blocked IS 'Whether request was blocked by safety filters';
+
+-- Rate limiting state (Redis primary, DB fallback)
+CREATE TABLE IF NOT EXISTS ai_rate_limit_state (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    platform_user_id VARCHAR(100) NOT NULL,
+    window_start TIMESTAMPTZ NOT NULL,
+    request_count INTEGER DEFAULT 1,
+    UNIQUE(community_id, platform_user_id, window_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rate_limit_lookup ON ai_rate_limit_state(community_id, platform_user_id, window_start);
+
+COMMENT ON TABLE ai_rate_limit_state IS 'Rate limit tracking (Redis primary, DB fallback for persistence)';
+COMMENT ON COLUMN ai_rate_limit_state.window_start IS 'Start of the hourly rate limit window';
+
+-- Global AI researcher settings (superadmin)
+INSERT INTO hub_settings (setting_key, setting_value, updated_at) VALUES
+    ('ai_researcher_default_provider', 'ollama', NOW()),
+    ('ai_researcher_default_model', 'tinyllama', NOW()),
+    ('ai_researcher_global_rate_limit', '1000', NOW())
+ON CONFLICT (setting_key) DO NOTHING;
+
+COMMENT ON TABLE ai_researcher_config IS 'AI researcher module configuration per community';
+COMMENT ON TABLE ai_community_context IS 'Community context snapshots with embeddings for semantic search';
+COMMENT ON TABLE ai_context_messages IS 'Message buffer for context building (auto-cleaned)';
+COMMENT ON TABLE ai_insights IS 'AI-generated insights: summaries, rollups, bot detection';
+COMMENT ON TABLE ai_bot_detection_results IS 'Bot detection results with behavioral signals';
+COMMENT ON TABLE ai_research_requests IS 'Audit log of all AI research commands';
+COMMENT ON TABLE ai_rate_limit_state IS 'Rate limiting fallback storage';
+
 -- Development notice
 DO $$
 BEGIN
@@ -475,5 +777,6 @@ BEGIN
     RAISE NOTICE 'Main user: waddlebot / waddlebot123';
     RAISE NOTICE 'Dev user: waddlebot_dev / dev123';
     RAISE NOTICE 'Global community created: waddlebot-global';
+    RAISE NOTICE 'AI Researcher module tables created with pgvector support';
 END
 $$;

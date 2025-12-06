@@ -54,11 +54,17 @@ class CommandProcessor:
             if message_type in ('stream_online', 'stream_offline', 'subscription',
                                 'gift_subscription', 'follow', 'raid', 'cheer'):
                 asyncio.create_task(self._record_stream_activity(event_data))
+                # Forward reputation-impacting events
+                if message_type in ('subscription', 'gift_subscription', 'follow',
+                                    'raid', 'cheer'):
+                    asyncio.create_task(self._record_reputation_event(event_data))
                 return {"success": True, "session_id": session_id, "processed": True}
 
             # Record message activity for leaderboards (fire-and-forget)
             if message_type == 'chatMessage':
                 asyncio.create_task(self._record_message_activity(event_data))
+                # Also record for reputation tracking
+                asyncio.create_task(self._record_reputation_event(event_data))
 
             # Check for prefix commands (! or #)
             if message.startswith('!') or message.startswith('#'):
@@ -67,6 +73,10 @@ class CommandProcessor:
                 # Check rate limit
                 if not await self.rate_limiter.check_rate_limit(f"{user_id}:{command}", limit=60):
                     return {"success": False, "error": "Rate limit exceeded"}
+
+                # Track command usage for reputation (small penalty)
+                cmd_event = {**event_data, 'message_type': 'command'}
+                asyncio.create_task(self._record_reputation_event(cmd_event))
 
                 # Execute command
                 result = await self.execute_command(command, entity_id, user_id, message, session_id)
@@ -101,6 +111,14 @@ class CommandProcessor:
         # Check rate limit
         if not await self.rate_limiter.check_rate_limit(f"{user_id}:{command}", limit=60):
             return {"success": False, "error": "Rate limit exceeded"}
+
+        # Track slash command usage for reputation (small penalty)
+        cmd_event = {
+            **event_data,
+            'message_type': 'slashCommand',
+            'metadata': {**metadata, 'command_name': command_name}
+        }
+        asyncio.create_task(self._record_reputation_event(cmd_event))
 
         # Execute as regular command
         result = await self.execute_command(
@@ -240,6 +258,44 @@ class CommandProcessor:
             logger.warning(f"Failed to lookup community for entity {entity_id}: {e}")
 
         return None
+
+    async def _record_reputation_event(self, event_data: Dict[str, Any]):
+        """Forward event to reputation module for score adjustment"""
+        try:
+            if not Config.REPUTATION_ENABLED or not Config.REPUTATION_API_URL:
+                return
+
+            entity_id = event_data.get('entity_id')
+            community_id = await self._get_community_for_entity(entity_id)
+
+            if not community_id:
+                return
+
+            session = await self._get_http_session()
+            payload = {
+                'community_id': community_id,
+                'user_id': None,  # Will be resolved by reputation module
+                'platform': event_data.get('platform', 'unknown'),
+                'platform_user_id': event_data.get('user_id', ''),
+                'event_type': event_data.get('message_type', 'chatMessage'),
+                'metadata': {
+                    'username': event_data.get('username', ''),
+                    'channel_id': event_data.get('channel_id', entity_id),
+                    **event_data.get('metadata', {})
+                }
+            }
+
+            headers = {}
+            if Config.SERVICE_API_KEY:
+                headers['X-Service-Key'] = Config.SERVICE_API_KEY
+
+            await session.post(
+                f"{Config.REPUTATION_API_URL}/api/v1/internal/events",
+                json=payload,
+                headers=headers,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to record reputation event: {e}")
 
     async def execute_command(
         self,

@@ -84,4 +84,25 @@ router.delete('/:communityId/logo', requireCommunityAdmin, communityProfileContr
 router.post('/:communityId/banner', requireCommunityAdmin, upload.single('banner'), communityProfileController.uploadCommunityBanner);
 router.delete('/:communityId/banner', requireCommunityAdmin, communityProfileController.deleteCommunityBanner);
 
+// Reputation configuration (FICO-style scoring system)
+router.get('/:communityId/reputation/config', requireCommunityAdmin, adminController.getReputationConfig);
+router.put('/:communityId/reputation/config', requireCommunityAdmin, adminController.updateReputationConfig);
+router.get('/:communityId/reputation/at-risk', requireCommunityAdmin, adminController.getAtRiskUsers);
+router.get('/:communityId/reputation/leaderboard', requireCommunityAdmin, adminController.getReputationLeaderboard);
+
+// AI Insights
+router.get('/:communityId/ai-insights', requireCommunityAdmin, adminController.getAIInsights);
+router.get('/:communityId/ai-insights/:insightId', requireCommunityAdmin, adminController.getAIInsight);
+
+// AI Researcher Config
+router.get('/:communityId/ai-researcher/config', requireCommunityAdmin, adminController.getAIResearcherConfig);
+router.put('/:communityId/ai-researcher/config', requireCommunityAdmin, adminController.updateAIResearcherConfig);
+
+// Bot Detection
+router.get('/:communityId/bot-detection', requireCommunityAdmin, adminController.getBotDetectionResults);
+router.post('/:communityId/bot-detection/:resultId/review', requireCommunityAdmin, adminController.reviewBotDetection);
+
+// Context Visualization
+router.get('/:communityId/ai-context', requireCommunityAdmin, adminController.getAIContext);
+
 export default router;
