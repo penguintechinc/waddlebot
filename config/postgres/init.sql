@@ -807,6 +807,369 @@ CREATE TABLE IF NOT EXISTS overlay_access_log (
 CREATE INDEX IF NOT EXISTS idx_overlay_access_community ON overlay_access_log(community_id, accessed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_overlay_access_cleanup ON overlay_access_log(accessed_at);
 
+-- ============================================================================
+-- LOYALTY INTERACTION MODULE TABLES
+-- ============================================================================
+
+-- Community loyalty configuration
+CREATE TABLE IF NOT EXISTS loyalty_config (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE UNIQUE,
+    currency_name VARCHAR(50) DEFAULT 'Points',
+    currency_symbol VARCHAR(10) DEFAULT '🪙',
+    currency_emoji VARCHAR(20) DEFAULT ':coin:',
+
+    -- Feature toggles
+    currency_enabled BOOLEAN DEFAULT TRUE,
+    giveaways_enabled BOOLEAN DEFAULT TRUE,
+    minigames_enabled BOOLEAN DEFAULT TRUE,
+    predictions_enabled BOOLEAN DEFAULT TRUE,
+    raffles_enabled BOOLEAN DEFAULT TRUE,
+    duels_enabled BOOLEAN DEFAULT TRUE,
+    gear_enabled BOOLEAN DEFAULT TRUE,
+
+    -- Earning rates (per activity)
+    earn_chat_message INTEGER DEFAULT 1,
+    earn_chat_cooldown_seconds INTEGER DEFAULT 60,
+    earn_watch_time_per_minute INTEGER DEFAULT 2,
+    earn_follow INTEGER DEFAULT 50,
+    earn_sub_tier1 INTEGER DEFAULT 500,
+    earn_sub_tier2 INTEGER DEFAULT 1000,
+    earn_sub_tier3 INTEGER DEFAULT 2500,
+    earn_gift_sub INTEGER DEFAULT 250,
+    earn_raid_per_viewer INTEGER DEFAULT 1,
+    earn_cheer_per_100bits INTEGER DEFAULT 10,
+    earn_donation_per_dollar INTEGER DEFAULT 10,
+
+    -- Minigame settings
+    slots_min_bet INTEGER DEFAULT 10,
+    slots_max_bet INTEGER DEFAULT 1000,
+    coinflip_min_bet INTEGER DEFAULT 10,
+    coinflip_max_bet INTEGER DEFAULT 5000,
+    roulette_min_bet INTEGER DEFAULT 10,
+    roulette_max_bet INTEGER DEFAULT 1000,
+
+    -- Giveaway settings
+    giveaway_reputation_floor INTEGER DEFAULT 450,
+    giveaway_weighted_enabled BOOLEAN DEFAULT FALSE,
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_loyalty_config_community ON loyalty_config(community_id);
+
+-- User currency balances
+CREATE TABLE IF NOT EXISTS loyalty_balances (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    balance BIGINT DEFAULT 0 CHECK (balance >= 0),
+    lifetime_earned BIGINT DEFAULT 0,
+    lifetime_spent BIGINT DEFAULT 0,
+    last_chat_earn TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(community_id, platform, platform_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_loyalty_balances_community ON loyalty_balances(community_id);
+CREATE INDEX IF NOT EXISTS idx_loyalty_balances_user ON loyalty_balances(hub_user_id);
+CREATE INDEX IF NOT EXISTS idx_loyalty_balances_balance ON loyalty_balances(community_id, balance DESC);
+
+-- Transaction audit trail
+CREATE TABLE IF NOT EXISTS loyalty_transactions (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE SET NULL,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    transaction_type VARCHAR(50) NOT NULL,
+    amount BIGINT NOT NULL,
+    balance_before BIGINT NOT NULL,
+    balance_after BIGINT NOT NULL,
+    description TEXT,
+    reference_type VARCHAR(50),
+    reference_id INTEGER,
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_loyalty_transactions_community ON loyalty_transactions(community_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_loyalty_transactions_user ON loyalty_transactions(hub_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_loyalty_transactions_type ON loyalty_transactions(community_id, transaction_type);
+
+-- Giveaways
+CREATE TABLE IF NOT EXISTS loyalty_giveaways (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    prize_description TEXT NOT NULL,
+    entry_cost INTEGER DEFAULT 0,
+    max_entries_per_user INTEGER DEFAULT 1,
+    reputation_floor INTEGER DEFAULT 450,
+    weighted_by_reputation BOOLEAN DEFAULT FALSE,
+    status VARCHAR(20) DEFAULT 'draft',
+    starts_at TIMESTAMPTZ,
+    ends_at TIMESTAMPTZ,
+    winner_user_id INTEGER REFERENCES hub_users(id),
+    winner_platform VARCHAR(20),
+    winner_platform_user_id VARCHAR(100),
+    created_by INTEGER REFERENCES hub_users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_loyalty_giveaways_community ON loyalty_giveaways(community_id, status);
+CREATE INDEX IF NOT EXISTS idx_loyalty_giveaways_active ON loyalty_giveaways(community_id, status, ends_at) WHERE status = 'active';
+
+-- Giveaway entries with reputation snapshot
+CREATE TABLE IF NOT EXISTS loyalty_giveaway_entries (
+    id SERIAL PRIMARY KEY,
+    giveaway_id INTEGER REFERENCES loyalty_giveaways(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    platform_username VARCHAR(100),
+    entry_count INTEGER DEFAULT 1,
+    reputation_score INTEGER,
+    reputation_tier VARCHAR(20),
+    is_shadow_banned BOOLEAN DEFAULT FALSE,
+    weight_multiplier DECIMAL(4,2) DEFAULT 1.0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(giveaway_id, platform, platform_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_giveaway_entries_giveaway ON loyalty_giveaway_entries(giveaway_id);
+
+-- Minigame results
+CREATE TABLE IF NOT EXISTS loyalty_minigame_results (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE SET NULL,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    game_type VARCHAR(50) NOT NULL,
+    bet_amount BIGINT NOT NULL,
+    win_amount BIGINT DEFAULT 0,
+    result_data JSONB DEFAULT '{}',
+    gear_bonus_applied DECIMAL(5,2) DEFAULT 0,
+    is_win BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_minigame_results_community ON loyalty_minigame_results(community_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_minigame_results_user ON loyalty_minigame_results(hub_user_id, created_at DESC);
+
+-- Predictions (betting pools)
+CREATE TABLE IF NOT EXISTS loyalty_predictions (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    options JSONB NOT NULL DEFAULT '[]',
+    status VARCHAR(20) DEFAULT 'draft',
+    winning_option INTEGER,
+    total_pool BIGINT DEFAULT 0,
+    starts_at TIMESTAMPTZ,
+    ends_at TIMESTAMPTZ,
+    resolved_at TIMESTAMPTZ,
+    created_by INTEGER REFERENCES hub_users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_predictions_community ON loyalty_predictions(community_id, status);
+
+-- Prediction bets
+CREATE TABLE IF NOT EXISTS loyalty_prediction_bets (
+    id SERIAL PRIMARY KEY,
+    prediction_id INTEGER REFERENCES loyalty_predictions(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    option_index INTEGER NOT NULL,
+    amount BIGINT NOT NULL,
+    payout BIGINT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(prediction_id, platform, platform_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prediction_bets_prediction ON loyalty_prediction_bets(prediction_id);
+
+-- Raffles
+CREATE TABLE IF NOT EXISTS loyalty_raffles (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    ticket_cost INTEGER NOT NULL,
+    max_tickets_per_user INTEGER DEFAULT 100,
+    prize_type VARCHAR(50) DEFAULT 'pot',
+    fixed_prize_amount BIGINT,
+    status VARCHAR(20) DEFAULT 'draft',
+    total_tickets INTEGER DEFAULT 0,
+    total_pot BIGINT DEFAULT 0,
+    winner_user_id INTEGER REFERENCES hub_users(id),
+    starts_at TIMESTAMPTZ,
+    ends_at TIMESTAMPTZ,
+    created_by INTEGER REFERENCES hub_users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_raffles_community ON loyalty_raffles(community_id, status);
+
+-- Raffle tickets
+CREATE TABLE IF NOT EXISTS loyalty_raffle_tickets (
+    id SERIAL PRIMARY KEY,
+    raffle_id INTEGER REFERENCES loyalty_raffles(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    ticket_count INTEGER DEFAULT 1,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(raffle_id, platform, platform_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_raffle_tickets_raffle ON loyalty_raffle_tickets(raffle_id);
+
+-- Duels
+CREATE TABLE IF NOT EXISTS loyalty_duels (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    challenger_user_id INTEGER REFERENCES hub_users(id),
+    challenger_platform VARCHAR(20) NOT NULL,
+    challenger_platform_user_id VARCHAR(100) NOT NULL,
+    defender_user_id INTEGER REFERENCES hub_users(id),
+    defender_platform VARCHAR(20),
+    defender_platform_user_id VARCHAR(100),
+    wager_amount BIGINT NOT NULL,
+    duel_type VARCHAR(50) DEFAULT 'standard',
+    status VARCHAR(20) DEFAULT 'pending',
+    winner_user_id INTEGER REFERENCES hub_users(id),
+    challenger_roll INTEGER,
+    defender_roll INTEGER,
+    challenger_gear_bonus INTEGER DEFAULT 0,
+    defender_gear_bonus INTEGER DEFAULT 0,
+    is_open_challenge BOOLEAN DEFAULT FALSE,
+    expires_at TIMESTAMPTZ,
+    resolved_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_duels_community ON loyalty_duels(community_id, status);
+CREATE INDEX IF NOT EXISTS idx_duels_pending ON loyalty_duels(community_id, status, expires_at) WHERE status = 'pending';
+
+-- Duel statistics
+CREATE TABLE IF NOT EXISTS loyalty_duel_stats (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    total_duels INTEGER DEFAULT 0,
+    wins INTEGER DEFAULT 0,
+    losses INTEGER DEFAULT 0,
+    total_wagered BIGINT DEFAULT 0,
+    total_won BIGINT DEFAULT 0,
+    total_lost BIGINT DEFAULT 0,
+    win_streak INTEGER DEFAULT 0,
+    best_win_streak INTEGER DEFAULT 0,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(community_id, platform, platform_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_duel_stats_community ON loyalty_duel_stats(community_id, wins DESC);
+
+-- Gear categories (themed sets)
+CREATE TABLE IF NOT EXISTS loyalty_gear_categories (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(50) NOT NULL UNIQUE,
+    display_name VARCHAR(100) NOT NULL,
+    description TEXT,
+    emoji VARCHAR(20),
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+INSERT INTO loyalty_gear_categories (name, display_name, description, emoji) VALUES
+    ('medieval', 'Medieval', 'Knights, swords, and castles', '⚔️'),
+    ('space', 'Space', 'Futuristic space exploration gear', '🚀'),
+    ('pirate', 'Pirate', 'Swashbuckling pirate equipment', '🏴‍☠️'),
+    ('cyberpunk', 'Cyberpunk', 'High-tech neon future gear', '🤖'),
+    ('fantasy', 'Fantasy', 'Magical and mythical items', '🧙')
+ON CONFLICT (name) DO NOTHING;
+
+-- Gear items master list
+CREATE TABLE IF NOT EXISTS loyalty_gear_items (
+    id SERIAL PRIMARY KEY,
+    category_id INTEGER REFERENCES loyalty_gear_categories(id),
+    name VARCHAR(100) NOT NULL,
+    display_name VARCHAR(150) NOT NULL,
+    description TEXT,
+    item_type VARCHAR(50) NOT NULL,
+    rarity VARCHAR(20) DEFAULT 'common',
+    attack_bonus INTEGER DEFAULT 0,
+    defense_bonus INTEGER DEFAULT 0,
+    luck_bonus INTEGER DEFAULT 0,
+    cost INTEGER DEFAULT 0,
+    is_purchasable BOOLEAN DEFAULT TRUE,
+    is_droppable BOOLEAN DEFAULT TRUE,
+    drop_weight INTEGER DEFAULT 100,
+    emoji VARCHAR(20),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_gear_items_category ON loyalty_gear_items(category_id);
+CREATE INDEX IF NOT EXISTS idx_gear_items_type ON loyalty_gear_items(item_type, rarity);
+
+-- User gear inventory
+CREATE TABLE IF NOT EXISTS loyalty_user_gear (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    gear_item_id INTEGER REFERENCES loyalty_gear_items(id) ON DELETE CASCADE,
+    is_equipped BOOLEAN DEFAULT FALSE,
+    acquired_via VARCHAR(50) DEFAULT 'purchase',
+    acquired_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(community_id, platform, platform_user_id, gear_item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_gear_user ON loyalty_user_gear(hub_user_id);
+CREATE INDEX IF NOT EXISTS idx_user_gear_equipped ON loyalty_user_gear(community_id, hub_user_id, is_equipped) WHERE is_equipped = TRUE;
+
+-- Seed default gear items
+INSERT INTO loyalty_gear_items (category_id, name, display_name, item_type, rarity, attack_bonus, defense_bonus, luck_bonus, cost, emoji) VALUES
+    -- Medieval weapons
+    (1, 'rusty_sword', 'Rusty Sword', 'weapon', 'common', 5, 0, 0, 100, '🗡️'),
+    (1, 'iron_sword', 'Iron Sword', 'weapon', 'uncommon', 10, 0, 2, 500, '⚔️'),
+    (1, 'steel_blade', 'Steel Blade', 'weapon', 'rare', 20, 5, 5, 2000, '🔪'),
+    (1, 'legendary_excalibur', 'Excalibur', 'weapon', 'legendary', 50, 20, 15, 25000, '✨'),
+    -- Medieval armor
+    (1, 'leather_armor', 'Leather Armor', 'armor', 'common', 0, 5, 0, 100, '🥋'),
+    (1, 'chainmail', 'Chainmail', 'armor', 'uncommon', 0, 15, 0, 750, '⛓️'),
+    (1, 'plate_armor', 'Plate Armor', 'armor', 'rare', 0, 30, 0, 3000, '🛡️'),
+    -- Space weapons
+    (2, 'laser_pistol', 'Laser Pistol', 'weapon', 'common', 8, 0, 0, 150, '🔫'),
+    (2, 'plasma_rifle', 'Plasma Rifle', 'weapon', 'rare', 25, 0, 5, 2500, '💫'),
+    (2, 'photon_cannon', 'Photon Cannon', 'weapon', 'epic', 40, 0, 10, 10000, '☄️'),
+    -- Pirate gear
+    (3, 'cutlass', 'Pirate Cutlass', 'weapon', 'common', 6, 0, 2, 120, '🏴‍☠️'),
+    (3, 'flintlock', 'Flintlock Pistol', 'weapon', 'uncommon', 12, 0, 5, 600, '🔫'),
+    (3, 'lucky_compass', 'Lucky Compass', 'accessory', 'rare', 0, 0, 20, 1500, '🧭'),
+    -- Cyberpunk
+    (4, 'neural_blade', 'Neural Blade', 'weapon', 'uncommon', 15, 5, 0, 800, '🔮'),
+    (4, 'cyber_arm', 'Cybernetic Arm', 'accessory', 'rare', 20, 10, 5, 4000, '🦾'),
+    -- Fantasy
+    (5, 'wooden_staff', 'Wooden Staff', 'weapon', 'common', 3, 0, 5, 80, '🪄'),
+    (5, 'crystal_wand', 'Crystal Wand', 'weapon', 'rare', 15, 0, 15, 2200, '💎'),
+    (5, 'dragon_scale', 'Dragon Scale Shield', 'armor', 'epic', 10, 40, 10, 12000, '🐉')
+ON CONFLICT DO NOTHING;
+
 -- Development notice
 DO $$
 BEGIN
@@ -817,5 +1180,6 @@ BEGIN
     RAISE NOTICE 'Global community created: waddlebot-global';
     RAISE NOTICE 'AI Researcher module tables created with pgvector support';
     RAISE NOTICE 'Overlay module tables created';
+    RAISE NOTICE 'Loyalty module tables created with gear system and minigames';
 END
 $$;

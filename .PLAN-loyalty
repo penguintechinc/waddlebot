@@ -1,0 +1,294 @@
+# Loyalty Module Implementation Plan
+
+## Overview
+Create a new `loyalty_interaction_module` consolidating currency, giveaways, minigames, duels, and gear progression into a single dedicated module integrated with the Hub admin interface.
+
+---
+
+## Module Structure
+
+```
+action/interactive/loyalty_interaction_module/
+├── app.py                           # Quart application
+├── config.py                        # Configuration
+├── requirements.txt
+├── Dockerfile
+├── test-api.sh
+└── services/
+    ├── __init__.py
+    ├── currency_service.py          # Core currency operations
+    ├── earning_config_service.py    # Per-community earning rates
+    ├── giveaway_service.py          # Giveaways + reputation integration
+    ├── minigame_service.py          # Gambling, trivia, interactive games
+    ├── duel_service.py              # Duels + gear-based combat
+    └── gear_service.py              # Gear/weapon inventory
+```
+
+**Port**: `8032`
+
+---
+
+## Database Schema
+
+### Core Tables
+
+| Table | Purpose |
+|-------|---------|
+| `loyalty_config` | Per-community settings (currency name, earning rates, toggles) |
+| `loyalty_balances` | User currency balances per community |
+| `loyalty_transactions` | Full transaction history/audit trail |
+| `loyalty_giveaways` | Giveaway definitions with reputation settings |
+| `loyalty_giveaway_entries` | User entries with reputation snapshots |
+| `loyalty_minigame_results` | Game outcomes (slots, coinflip, etc.) |
+| `loyalty_predictions` | Betting pools on outcomes |
+| `loyalty_prediction_bets` | Individual bets on predictions |
+| `loyalty_raffles` | Ticket-based drawings |
+| `loyalty_raffle_tickets` | User ticket purchases |
+| `loyalty_duels` | Duel challenges and outcomes |
+| `loyalty_gear_categories` | Themed gear sets (medieval, space, pirate, etc.) |
+| `loyalty_gear_items` | Master gear item definitions |
+| `loyalty_user_gear` | User gear inventory |
+| `loyalty_duel_stats` | Aggregated duel statistics |
+
+### Key Schema Features
+- `BIGINT` for balances (prevent overflow)
+- Reputation snapshot on giveaway entry (`reputation_score`, `reputation_tier`, `is_shadow_banned`)
+- Gear with `attack_bonus`, `defense_bonus`, `luck_bonus` stats
+- Full audit trail via `loyalty_transactions`
+
+---
+
+## Features
+
+### 1. Currency System
+- **Custom naming**: Admins set currency name/symbol/emoji per community
+- **Configurable earning**: Toggle and rate for each activity type:
+  - Chat messages (with cooldown)
+  - Watch time (per minute)
+  - Follows, subs (tier 1/2/3), gift subs
+  - Raids, cheers, donations
+- **Leaderboard**: Top users by balance
+- **Self-check**: Users query own balance
+- **Admin controls**: Adjust any user, wipe all currency
+
+### 2. Giveaways (Reputation-Integrated)
+- **Entry options**: Free or currency cost
+- **Reputation floor**: Minimum score to be eligible (300-850)
+- **Shadow banning**: Below-floor users can enter but never win
+- **Weighted odds** (when enabled):
+  - Exceptional (800+): 1.5x
+  - Very Good (740-799): 1.25x
+  - Good (670-739): 1.1x
+  - Fair (580-669): 1.0x
+  - Poor (300-579): 0.75x
+
+### 3. Minigames (Each Toggleable)
+| Game Type | Description |
+|-----------|-------------|
+| **Slots** | 3-reel slot machine with configurable symbols |
+| **Coinflip** | 50/50 double or nothing |
+| **Roulette** | Bet on red/black/number |
+| **Blackjack** | Simplified card game |
+| **Trivia** | Answer questions for currency |
+| **Heist** | Community participation heist attempts |
+| **Boss Battle** | Group combat with shared rewards |
+| **Fishing** | Catch items/currency with gear bonuses |
+
+### 4. Predictions & Raffles
+- **Predictions**: Admin creates betting pools, users bet on options, payouts based on pool share
+- **Raffles**: Buy tickets, winner takes pot (or configured prize)
+
+### 5. Duels System
+- **1v1 Wagers**: Challenge user, both stake currency, winner takes all
+- **Challenge Games**: Trivia, RPS for currency stakes
+- **Open Challenges**: Anyone can accept
+- **Gear Progression**:
+  - 5 themed categories: Medieval, Space, Pirate, Cyberpunk, Fantasy
+  - Items: Weapons, Armor, Accessories
+  - Rarities: Common, Uncommon, Rare, Epic, Legendary
+  - Stats affect duel outcomes (attack/defense/luck bonuses)
+  - Acquired via: Purchase, drops from games, rewards
+
+---
+
+## Chat Commands
+
+### User Commands
+```
+!balance, !points          - Check own balance
+!leaderboard, !top         - Show top 10
+!give @user <amount>       - Transfer currency
+
+!gamble slots <amount>     - Play slots
+!gamble coinflip <amount>  - 50/50 double or nothing
+!gamble roulette <amt> <bet> - Roulette (red/black/number)
+
+!duel @user <amount>       - Challenge to duel
+!duel accept               - Accept pending duel
+!duel stats                - View duel stats
+
+!gear                      - View equipped gear
+!gear list                 - View owned gear
+!gear equip <item>         - Equip item
+!gear shop                 - View shop
+!gear buy <item>           - Purchase gear
+
+!giveaway enter            - Enter active giveaway
+!raffle buy <count>        - Buy raffle tickets
+!predict <id> <amount>     - Place prediction bet
+```
+
+### Admin Commands
+```
+!loyalty add @user <amount>    - Add currency
+!loyalty remove @user <amount> - Remove currency
+!loyalty set @user <amount>    - Set exact balance
+```
+
+---
+
+## Hub Admin Pages
+
+### New Frontend Pages
+| Page | Location | Purpose |
+|------|----------|---------|
+| `LoyaltySettings.jsx` | `/admin/:communityId/loyalty` | Currency config, earning rates, feature toggles |
+| `LoyaltyLeaderboard.jsx` | `/admin/:communityId/loyalty/leaderboard` | View/search users, adjust balances |
+| `LoyaltyGiveaways.jsx` | `/admin/:communityId/loyalty/giveaways` | Create/manage giveaways |
+| `LoyaltyPredictions.jsx` | `/admin/:communityId/loyalty/predictions` | Create/manage predictions |
+| `LoyaltyGames.jsx` | `/admin/:communityId/loyalty/games` | Toggle/configure minigames |
+| `LoyaltyGear.jsx` | `/admin/:communityId/loyalty/gear` | Manage gear items |
+
+### Admin API Endpoints
+```
+GET/PUT  /api/v1/admin/:communityId/loyalty/config
+GET      /api/v1/admin/:communityId/loyalty/leaderboard
+PUT      /api/v1/admin/:communityId/loyalty/user/:userId/balance
+POST     /api/v1/admin/:communityId/loyalty/wipe
+CRUD     /api/v1/admin/:communityId/loyalty/giveaways
+CRUD     /api/v1/admin/:communityId/loyalty/predictions
+CRUD     /api/v1/admin/:communityId/loyalty/raffles
+GET/PUT  /api/v1/admin/:communityId/loyalty/games/:gameType
+CRUD     /api/v1/admin/:communityId/loyalty/gear
+```
+
+---
+
+## Implementation Phases
+
+### Phase 1: Core Currency
+- [ ] Create database schema (loyalty_config, loyalty_balances, loyalty_transactions)
+- [ ] Implement `currency_service.py` and `earning_config_service.py`
+- [ ] Add earning hooks to router for chat/events
+- [ ] Chat commands: `!balance`, `!leaderboard`, `!give`
+- [ ] Hub pages: `LoyaltySettings.jsx`, `LoyaltyLeaderboard.jsx`
+
+### Phase 2: Giveaways
+- [ ] Create giveaway tables
+- [ ] Implement `giveaway_service.py` with reputation integration
+- [ ] Shadow ban logic for below-floor users
+- [ ] Weighted drawing with reputation modifiers
+- [ ] Hub page: `LoyaltyGiveaways.jsx`
+
+### Phase 3: Minigames
+- [ ] Create minigame_results table
+- [ ] Implement `minigame_service.py`:
+  - Slots, Coinflip, Roulette, Blackjack
+  - Trivia, Heist, Boss Battle, Fishing
+- [ ] Chat commands: `!gamble <game> <amount>`
+- [ ] Add toggles to LoyaltySettings
+
+### Phase 4: Predictions & Raffles
+- [ ] Create prediction/raffle tables
+- [ ] Implement prediction and raffle services
+- [ ] Chat commands: `!predict`, `!raffle`
+- [ ] Hub page: `LoyaltyPredictions.jsx`
+
+### Phase 5: Duels & Gear
+- [ ] Create duel and gear tables
+- [ ] Seed default gear items for each category
+- [ ] Implement `gear_service.py` and `duel_service.py`
+- [ ] Gear affects duel outcomes via stat bonuses
+- [ ] Chat commands: `!duel`, `!gear`
+- [ ] Hub page: `LoyaltyGear.jsx`
+
+### Phase 6: Integration & Polish
+- [ ] Integration testing with reputation module
+- [ ] Rate limiting on commands
+- [ ] Performance optimization (caching, indexes)
+- [ ] Docker/docker-compose integration
+- [ ] Documentation
+
+---
+
+## Critical Files to Modify
+
+| File | Changes |
+|------|---------|
+| `config/postgres/init.sql` | Add all loyalty tables |
+| `docker-compose.yml` | Add loyalty-interaction service |
+| `admin/hub_module/frontend/src/App.jsx` | Add loyalty routes |
+| `admin/hub_module/frontend/src/layouts/AdminLayout.jsx` | Add loyalty nav item |
+| `admin/hub_module/frontend/src/services/api.js` | Add loyalty API methods |
+| `admin/hub_module/backend/src/routes/admin.js` | Add loyalty routes |
+| `admin/hub_module/backend/src/controllers/adminController.js` | Add loyalty handlers |
+| `processing/router_module/services/command_processor.py` | Route loyalty commands |
+| `processing/router_module/config.py` | Add LOYALTY_API_URL |
+
+---
+
+## New Files to Create
+
+```
+action/interactive/loyalty_interaction_module/
+├── app.py
+├── config.py
+├── requirements.txt
+├── Dockerfile
+├── test-api.sh
+└── services/
+    ├── __init__.py
+    ├── currency_service.py
+    ├── earning_config_service.py
+    ├── giveaway_service.py
+    ├── minigame_service.py
+    ├── duel_service.py
+    └── gear_service.py
+
+admin/hub_module/frontend/src/pages/admin/
+├── LoyaltySettings.jsx
+├── LoyaltyLeaderboard.jsx
+├── LoyaltyGiveaways.jsx
+├── LoyaltyPredictions.jsx
+├── LoyaltyGames.jsx
+└── LoyaltyGear.jsx
+```
+
+---
+
+## Docker Compose Addition
+
+```yaml
+loyalty-interaction:
+  build:
+    context: .
+    dockerfile: action/interactive/loyalty_interaction_module/Dockerfile
+  container_name: waddlebot-loyalty-interaction
+  environment:
+    MODULE_PORT: 8032
+    DATABASE_URL: ${DATABASE_URL}
+    ROUTER_API_URL: http://router:8000
+    REPUTATION_API_URL: http://reputation:8021
+    SERVICE_API_KEY: ${SERVICE_API_KEY}
+  depends_on:
+    - postgres
+    - router
+    - reputation
+  networks:
+    - waddlebot-internal
+  healthcheck:
+    test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8032/health')"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+```
