@@ -769,6 +769,44 @@ COMMENT ON TABLE ai_bot_detection_results IS 'Bot detection results with behavio
 COMMENT ON TABLE ai_research_requests IS 'Audit log of all AI research commands';
 COMMENT ON TABLE ai_rate_limit_state IS 'Rate limiting fallback storage';
 
+-- ============================================================================
+-- OVERLAY MODULE TABLES
+-- ============================================================================
+
+-- Community overlay tokens (one per community)
+CREATE TABLE IF NOT EXISTS community_overlay_tokens (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE UNIQUE,
+    overlay_key CHAR(64) NOT NULL UNIQUE,
+    is_active BOOLEAN DEFAULT TRUE,
+    theme_config JSONB DEFAULT '{"background": "transparent"}',
+    enabled_sources JSONB DEFAULT '["ticker", "media", "general"]',
+    last_accessed TIMESTAMPTZ,
+    access_count INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    rotated_at TIMESTAMPTZ,
+    previous_key CHAR(64)  -- Grace period support
+);
+
+CREATE INDEX IF NOT EXISTS idx_overlay_tokens_key ON community_overlay_tokens(overlay_key);
+CREATE INDEX IF NOT EXISTS idx_overlay_tokens_previous ON community_overlay_tokens(previous_key) WHERE previous_key IS NOT NULL;
+
+-- Access logging for analytics
+CREATE TABLE IF NOT EXISTS overlay_access_log (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    overlay_key CHAR(64) NOT NULL,
+    ip_address INET,
+    user_agent TEXT,
+    source_types_requested TEXT[],
+    was_valid BOOLEAN DEFAULT TRUE,
+    accessed_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_overlay_access_community ON overlay_access_log(community_id, accessed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_overlay_access_cleanup ON overlay_access_log(accessed_at);
+
 -- Development notice
 DO $$
 BEGIN
@@ -778,5 +816,6 @@ BEGIN
     RAISE NOTICE 'Dev user: waddlebot_dev / dev123';
     RAISE NOTICE 'Global community created: waddlebot-global';
     RAISE NOTICE 'AI Researcher module tables created with pgvector support';
+    RAISE NOTICE 'Overlay module tables created';
 END
 $$;

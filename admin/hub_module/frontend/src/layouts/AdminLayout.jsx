@@ -17,6 +17,7 @@ import {
   TrophyIcon,
   ScaleIcon,
   SparklesIcon,
+  WindowIcon,
 } from '@heroicons/react/24/outline';
 
 function AdminLayout() {
@@ -39,6 +40,7 @@ function AdminLayout() {
         { to: `/admin/${communityId}/modules`, icon: PuzzlePieceIcon, label: 'Modules' },
         { to: `/admin/${communityId}/browser-sources`, icon: ComputerDesktopIcon, label: 'Browser Sources' },
         { to: `/admin/${communityId}/domains`, icon: GlobeAltIcon, label: 'Custom Domains' },
+        { to: `/admin/${communityId}/overlays`, icon: WindowIcon, label: 'Overlays' },
       ]
     : [];
 

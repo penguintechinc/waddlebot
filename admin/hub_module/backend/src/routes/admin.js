@@ -6,6 +6,7 @@ import multer from 'multer';
 import * as adminController from '../controllers/adminController.js';
 import * as activityController from '../controllers/activityController.js';
 import * as communityProfileController from '../controllers/communityProfileController.js';
+import * as overlayController from '../controllers/overlayController.js';
 import { requireAuth, requireCommunityAdmin } from '../middleware/auth.js';
 
 const router = Router();
@@ -104,5 +105,11 @@ router.post('/:communityId/bot-detection/:resultId/review', requireCommunityAdmi
 
 // Context Visualization
 router.get('/:communityId/ai-context', requireCommunityAdmin, adminController.getAIContext);
+
+// Overlay management
+router.get('/:communityId/overlay', requireCommunityAdmin, overlayController.getOverlay);
+router.put('/:communityId/overlay', requireCommunityAdmin, overlayController.updateOverlay);
+router.post('/:communityId/overlay/rotate', requireCommunityAdmin, overlayController.rotateKey);
+router.get('/:communityId/overlay/stats', requireCommunityAdmin, overlayController.getOverlayStats);
 
 export default router;

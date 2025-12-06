@@ -211,6 +211,8 @@ services:
       LABELS_API_URL: http://labels-core:8023
       SHOUTOUT_API_URL: http://shoutout-interaction:8011
       BROWSER_SOURCE_API_URL: http://browser-source:8027
+      # Overlay Configuration
+      OVERLAY_BASE_URL: ${OVERLAY_BASE_URL:-https://overlay.waddlebot.io}
       # S3 Storage Configuration (MinIO)
       S3_STORAGE_ENABLED: "true"
       S3_BUCKET_NAME: waddlebot-assets
@@ -601,6 +603,8 @@ services:
       MODULE_PORT: 8027
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
       ROUTER_API_URL: http://router:8000
+      OVERLAY_BASE_URL: ${OVERLAY_BASE_URL:-https://overlay.waddlebot.io}
+      OVERLAY_KEY_GRACE_PERIOD_MINUTES: 5
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "8027:8027"  # Browser sources need direct access from OBS

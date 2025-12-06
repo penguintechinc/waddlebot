@@ -206,6 +206,11 @@ export const adminApi = {
   // Context Visualization
   getAIContext: (communityId) =>
     api.get(`/api/v1/admin/${communityId}/ai-context`),
+  // Overlay management
+  getOverlay: (communityId) => api.get(`/api/v1/admin/${communityId}/overlay`),
+  updateOverlay: (communityId, data) => api.put(`/api/v1/admin/${communityId}/overlay`, data),
+  rotateOverlayKey: (communityId) => api.post(`/api/v1/admin/${communityId}/overlay/rotate`),
+  getOverlayStats: (communityId) => api.get(`/api/v1/admin/${communityId}/overlay/stats`),
 };
 
 export const platformApi = {
