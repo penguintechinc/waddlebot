@@ -93,6 +93,17 @@ Infrastructure (PostgreSQL, Redis, MinIO, Qdrant)
 
 **Full architecture diagram:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
+## Screenshots
+
+> **Note:** Screenshots will be added soon. See [docs/screenshots/README.md](docs/screenshots/README.md) for how to capture them.
+
+Coming soon:
+- Dashboard overview
+- Community management
+- Module registry
+- Command routing
+- User management
+
 ## What's New in v0.2.0
 
 - ✅ **Kubernetes Deployment** - Helm charts, manifests, auto-scaling
