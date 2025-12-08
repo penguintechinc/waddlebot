@@ -264,9 +264,8 @@ services:
       S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-waddlebot123}
       S3_PUBLIC_BASE_URL: http://localhost:9000/waddlebot-assets
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    # Port removed - access via Kong at api.waddlebot.io
-    # ports:
-    #   - "8060:8060"
+    ports:
+      - "8060:8060"  # Hub admin portal
     networks:
       - waddlebot-public
       - waddlebot-internal

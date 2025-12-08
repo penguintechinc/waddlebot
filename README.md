@@ -95,14 +95,19 @@ Infrastructure (PostgreSQL, Redis, MinIO, Qdrant)
 
 ## Screenshots
 
-> **Note:** Screenshots will be added soon. See [docs/screenshots/README.md](docs/screenshots/README.md) for how to capture them.
+### Dashboard Overview
+![Dashboard](docs/screenshots/dashboard.png)
 
-Coming soon:
-- Dashboard overview
-- Community management
-- Module registry
-- Command routing
-- User management
+### Community Management
+![Communities](docs/screenshots/communities.png)
+![Community Dashboard](docs/screenshots/community-dashboard.png)
+
+### Module Registry & Command Routing
+![Modules](docs/screenshots/modules.png)
+![Routes](docs/screenshots/routes.png)
+
+### User Management
+![Users](docs/screenshots/users.png)
 
 ## What's New in v0.2.0
 
