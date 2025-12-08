@@ -165,3 +165,9 @@ cython_debug/
 .PLAN
 .TODO
 .REQUIREMENTS
+
+# Kong API Gateway secrets
+config/kong/jwt-secrets.yml
+config/kong/ssl/*.key
+config/kong/ssl/*.crt
+config/kong/ssl/*.pem

@@ -211,6 +211,53 @@ export const adminApi = {
   updateOverlay: (communityId, data) => api.put(`/api/v1/admin/${communityId}/overlay`, data),
   rotateOverlayKey: (communityId) => api.post(`/api/v1/admin/${communityId}/overlay/rotate`),
   getOverlayStats: (communityId) => api.get(`/api/v1/admin/${communityId}/overlay/stats`),
+  // Loyalty configuration
+  getLoyaltyConfig: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/loyalty/config`),
+  updateLoyaltyConfig: (communityId, data) =>
+    api.put(`/api/v1/admin/${communityId}/loyalty/config`, data),
+  // Loyalty leaderboard
+  getLoyaltyLeaderboard: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/loyalty/leaderboard`, { params }),
+  adjustLoyaltyBalance: (communityId, userId, data) =>
+    api.put(`/api/v1/admin/${communityId}/loyalty/user/${userId}/balance`, data),
+  wipeLoyaltyCurrency: (communityId) =>
+    api.post(`/api/v1/admin/${communityId}/loyalty/wipe`),
+  getLoyaltyStats: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/loyalty/stats`),
+  // Loyalty giveaways
+  getLoyaltyGiveaways: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/loyalty/giveaways`, { params }),
+  createLoyaltyGiveaway: (communityId, data) =>
+    api.post(`/api/v1/admin/${communityId}/loyalty/giveaways`, data),
+  getLoyaltyGiveawayEntries: (communityId, giveawayId) =>
+    api.get(`/api/v1/admin/${communityId}/loyalty/giveaways/${giveawayId}/entries`),
+  drawLoyaltyGiveawayWinner: (communityId, giveawayId) =>
+    api.post(`/api/v1/admin/${communityId}/loyalty/giveaways/${giveawayId}/draw`),
+  endLoyaltyGiveaway: (communityId, giveawayId) =>
+    api.put(`/api/v1/admin/${communityId}/loyalty/giveaways/${giveawayId}/end`),
+  // Loyalty games management
+  getLoyaltyGamesConfig: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/loyalty/games/config`),
+  updateLoyaltyGamesConfig: (communityId, data) =>
+    api.put(`/api/v1/admin/${communityId}/loyalty/games/config`, data),
+  getLoyaltyGamesStats: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/loyalty/games/stats`),
+  getLoyaltyGamesRecent: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/loyalty/games/recent`, { params }),
+  // Loyalty gear management
+  getLoyaltyGearCategories: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/loyalty/gear/categories`),
+  getLoyaltyGearItems: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/loyalty/gear/items`, { params }),
+  createLoyaltyGearItem: (communityId, data) =>
+    api.post(`/api/v1/admin/${communityId}/loyalty/gear/items`, data),
+  updateLoyaltyGearItem: (communityId, itemId, data) =>
+    api.put(`/api/v1/admin/${communityId}/loyalty/gear/items/${itemId}`, data),
+  deleteLoyaltyGearItem: (communityId, itemId) =>
+    api.delete(`/api/v1/admin/${communityId}/loyalty/gear/items/${itemId}`),
+  getLoyaltyGearStats: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/loyalty/gear/stats`),
 };
 
 export const platformApi = {

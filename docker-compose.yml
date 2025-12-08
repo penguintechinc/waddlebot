@@ -118,8 +118,9 @@ services:
       - qdrant-data:/qdrant/storage
     networks:
       - waddlebot-internal
-    ports:
-      - "6333:6333"
+    # Port removed - internal only, accessed by ai-researcher
+    # ports:
+    #   - "6333:6333"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
       interval: 30s
@@ -145,6 +146,47 @@ services:
       timeout: 10s
       start_period: 120s
       retries: 10
+    restart: unless-stopped
+
+  # =============================================================================
+  # KONG API GATEWAY - Single external entry point for all APIs
+  # Access via api.waddlebot.io - No direct access to internal services
+  # =============================================================================
+
+  kong:
+    image: kong:3.5-alpine
+    container_name: waddlebot-kong
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_LISTEN: "127.0.0.1:8001"
+      KONG_PROXY_LISTEN: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+      # SSL certificates (mount your own in production)
+      # KONG_SSL_CERT: /etc/kong/ssl/api.waddlebot.io.crt
+      # KONG_SSL_CERT_KEY: /etc/kong/ssl/api.waddlebot.io.key
+    volumes:
+      - ./config/kong/kong.yml:/etc/kong/kong.yml:ro
+      - ./config/kong/ssl:/etc/kong/ssl:ro
+    ports:
+      - "8000:8000"   # Kong HTTP API (api.waddlebot.io)
+      - "8443:8443"   # Kong HTTPS API
+      # Admin API on localhost only for security
+      # - "127.0.0.1:8001:8001"
+    networks:
+      - waddlebot-public
+      - waddlebot-internal
+    depends_on:
+      - hub
+      - router
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     restart: unless-stopped
 
   # =============================================================================
@@ -211,6 +253,7 @@ services:
       LABELS_API_URL: http://labels-core:8023
       SHOUTOUT_API_URL: http://shoutout-interaction:8011
       BROWSER_SOURCE_API_URL: http://browser-source:8027
+      LOYALTY_API_URL: http://loyalty-interaction:8032
       # Overlay Configuration
       OVERLAY_BASE_URL: ${OVERLAY_BASE_URL:-https://overlay.waddlebot.io}
       # S3 Storage Configuration (MinIO)
@@ -221,8 +264,9 @@ services:
       S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-waddlebot123}
       S3_PUBLIC_BASE_URL: http://localhost:9000/waddlebot-assets
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    ports:
-      - "8060:8060"  # Community Hub WebUI (public)
+    # Port removed - access via Kong at api.waddlebot.io
+    # ports:
+    #   - "8060:8060"
     networks:
       - waddlebot-public
       - waddlebot-internal
@@ -563,6 +607,32 @@ services:
       retries: 3
     restart: unless-stopped
 
+  loyalty-interaction:
+    build:
+      context: .
+      dockerfile: action/interactive/loyalty_interaction_module/Dockerfile
+    container_name: waddlebot-loyalty-interaction
+    environment:
+      MODULE_NAME: loyalty-interaction
+      MODULE_PORT: 8032
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      ROUTER_API_URL: http://router:8000
+      REPUTATION_API_URL: http://reputation:8021
+      SERVICE_API_KEY: ${SERVICE_API_KEY}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      - postgres
+      - router
+      - reputation
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8032/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
   # =============================================================================
   # CORE SYSTEM MODULES (Internal)
   # =============================================================================
@@ -674,8 +744,9 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-    ports:
-      - "8070:8070"
+    # Port removed - access via Kong at api.waddlebot.io
+    # ports:
+    #   - "8070:8070"
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8070/health')"]
       interval: 30s

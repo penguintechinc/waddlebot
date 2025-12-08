@@ -1,0 +1,76 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: waddlebot-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: waddlebot
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: config
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  # Database Configuration
+  DATABASE_URL: "postgresql://{{ .Values.postgres.username }}:$(POSTGRES_PASSWORD)@{{ .Values.postgres.service.name }}:{{ .Values.postgres.service.port }}/{{ .Values.postgres.database }}"
+  POSTGRES_USER: {{ .Values.postgres.username | quote }}
+  POSTGRES_DB: {{ .Values.postgres.database | quote }}
+
+  # Redis Configuration
+  REDIS_HOST: {{ .Values.redis.service.name | quote }}
+  REDIS_PORT: {{ .Values.redis.service.port | quote }}
+
+  # MinIO Configuration
+  MINIO_ENDPOINT: "http://{{ .Values.minio.service.name }}:{{ .Values.minio.service.apiPort }}"
+  MINIO_CONSOLE_ENDPOINT: "http://{{ .Values.minio.service.name }}:{{ .Values.minio.service.consolePort }}"
+  S3_ENDPOINT_URL: "http://{{ .Values.minio.service.name }}:{{ .Values.minio.service.apiPort }}"
+  S3_BUCKET_NAME: {{ .Values.minio.bucketName | quote }}
+  S3_STORAGE_ENABLED: "true"
+
+  # Qdrant Configuration
+  QDRANT_URL: "http://{{ .Values.qdrant.service.name }}:{{ .Values.qdrant.service.port }}"
+  MEM0_VECTOR_STORE: "qdrant"
+
+  # Ollama Configuration
+  OLLAMA_HOST: {{ .Values.ollama.service.name | quote }}
+  OLLAMA_PORT: {{ .Values.ollama.service.port | quote }}
+  OLLAMA_USE_TLS: "false"
+  AI_PROVIDER: {{ .Values.ollama.defaultProvider | quote }}
+  AI_MODEL: {{ .Values.ollama.defaultModel | quote }}
+  OLLAMA_MODEL: {{ .Values.ollama.defaultModel | quote }}
+
+  # Service URLs - Router
+  ROUTER_API_URL: "http://router-service:8000"
+
+  # Service URLs - Core
+  IDENTITY_API_URL: "http://identity-core-service:8050"
+  LABELS_API_URL: "http://labels-core-service:8023"
+  BROWSER_SOURCE_API_URL: "http://browser-source-service:8027"
+  COMMUNITY_API_URL: "http://community-service:8020"
+  REPUTATION_API_URL: "http://reputation-service:8021"
+
+  # Service URLs - Interactive
+  AI_INTERACTION_API_URL: "http://ai-interaction-service:8005"
+  ALIAS_API_URL: "http://alias-interaction-service:8010"
+  SHOUTOUT_API_URL: "http://shoutout-interaction-service:8011"
+  INVENTORY_API_URL: "http://inventory-interaction-service:8024"
+  CALENDAR_API_URL: "http://calendar-interaction-service:8030"
+  MEMORIES_API_URL: "http://memories-interaction-service:8031"
+  YOUTUBE_MUSIC_API_URL: "http://youtube-music-service:8025"
+  SPOTIFY_API_URL: "http://spotify-interaction-service:8026"
+  LOYALTY_API_URL: "http://loyalty-interaction-service:8032"
+
+  # Service URLs - Collectors
+  TWITCH_COLLECTOR_API_URL: "http://twitch-collector-service:8002"
+  DISCORD_COLLECTOR_API_URL: "http://discord-collector-service:8003"
+  SLACK_COLLECTOR_API_URL: "http://slack-collector-service:8004"
+  YOUTUBE_LIVE_COLLECTOR_API_URL: "http://youtube-live-collector-service:8006"
+  KICK_COLLECTOR_API_URL: "http://kick-collector-service:8007"
+
+  # General Configuration
+  LOG_LEVEL: {{ .Values.global.logLevel | quote }}
+  NODE_ENV: {{ .Values.global.nodeEnv | quote }}
+  BASE_DOMAIN: {{ .Values.global.baseDomain | quote }}
+  OVERLAY_BASE_URL: {{ .Values.global.overlayBaseUrl | quote }}
+  OVERLAY_KEY_GRACE_PERIOD_MINUTES: "5"
+
+  # PostgreSQL Init Configuration
+  POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"

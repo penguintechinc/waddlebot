@@ -1,0 +1,566 @@
+# Kong API Gateway Implementation Plan
+
+## Overview
+
+Implement Kong Community Edition as the single external API gateway for all WaddleBot services at `https://api.waddlebot.io`. No API should be externally accessible except through Kong. Web pages and webhook receivers use separate systems.
+
+## Requirements
+
+- All module APIs exposed via `api.waddlebot.io/<endpoints>`
+- Kong JWT validation before forwarding to backends
+- Kong rate limiting at gateway level
+- No direct external access to internal services
+- Excluded: Frontend pages, webhook receivers (Twitch/Discord/Slack/YouTube/Kick), OBS overlays
+
+---
+
+## Architecture
+
+### Network Topology
+
+```
+Internet
+    │
+    ├── api.waddlebot.io ──────► Kong (8000/8443) ──► Internal Services
+    │
+    ├── hub.waddlebot.io ──────► Nginx ──► Hub Frontend (static)
+    │
+    ├── webhooks.waddlebot.io ─► Nginx ──► Webhook Receivers
+    │
+    └── overlay.waddlebot.io ──► Browser Source Module
+```
+
+### Kong Routes
+
+| External Path | Internal Service | Port | Notes |
+|---------------|------------------|------|-------|
+| `/api/v1/public/*` | hub | 8060 | No auth required |
+| `/api/v1/auth/*` | hub | 8060 | No auth (except /me) |
+| `/api/v1/user/*` | hub | 8060 | JWT required |
+| `/api/v1/community/*` | hub | 8060 | JWT required |
+| `/api/v1/admin/*` | hub | 8060 | JWT + admin role |
+| `/api/v1/superadmin/*` | hub | 8060 | JWT + super_admin |
+| `/api/v1/platform/*` | hub | 8060 | JWT + platform-admin |
+| `/api/v1/router/*` | router | 8000 | Service API key |
+| `/api/v1/identity/*` | identity-core | 8050 | JWT required |
+| `/api/v1/labels/*` | labels-core | 8023 | JWT required |
+| `/api/v1/reputation/*` | reputation-core | 8021 | JWT required |
+| `/api/v1/ai/*` | ai-interaction | 8005 | JWT required |
+| `/api/v1/ai-researcher/*` | ai-researcher | 8070 | JWT required |
+| `/api/v1/alias/*` | alias | 8010 | Service key |
+| `/api/v1/shoutout/*` | shoutout | 8011 | Service key |
+| `/api/v1/inventory/*` | inventory | 8024 | JWT required |
+| `/api/v1/calendar/*` | calendar | 8030 | JWT required |
+| `/api/v1/memories/*` | memories | 8031 | JWT required |
+| `/api/v1/youtube-music/*` | youtube-music | 8025 | JWT required |
+| `/api/v1/spotify/*` | spotify | 8026 | JWT required |
+
+---
+
+## Implementation Steps
+
+### Phase 1: Docker Compose - Kong Service
+
+**File**: `docker-compose.yml`
+
+```yaml
+# Kong API Gateway
+kong:
+  image: kong:3.5-alpine
+  container_name: waddlebot-kong
+  environment:
+    KONG_DATABASE: "off"
+    KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+    KONG_PROXY_ACCESS_LOG: /dev/stdout
+    KONG_ADMIN_ACCESS_LOG: /dev/stdout
+    KONG_PROXY_ERROR_LOG: /dev/stderr
+    KONG_ADMIN_ERROR_LOG: /dev/stderr
+    KONG_ADMIN_LISTEN: "0.0.0.0:8001"
+    KONG_PROXY_LISTEN: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+    KONG_SSL_CERT: /etc/kong/ssl/api.waddlebot.io.crt
+    KONG_SSL_CERT_KEY: /etc/kong/ssl/api.waddlebot.io.key
+  volumes:
+    - ./config/kong/kong.yml:/etc/kong/kong.yml:ro
+    - ./config/kong/ssl:/etc/kong/ssl:ro
+  ports:
+    - "8000:8000"   # HTTP API
+    - "8443:8443"   # HTTPS API
+    - "8001:8001"   # Admin API (bind to localhost in prod)
+  networks:
+    - waddlebot-public
+    - waddlebot-internal
+  depends_on:
+    - hub
+    - router
+  healthcheck:
+    test: ["CMD", "kong", "health"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+  restart: unless-stopped
+```
+
+### Phase 2: Kong Declarative Configuration
+
+**File**: `config/kong/kong.yml`
+
+```yaml
+_format_version: "3.0"
+_transform: true
+
+# =============================================================================
+# SERVICES - Backend API Modules
+# =============================================================================
+
+services:
+  # Hub Module - Main API
+  - name: hub-service
+    url: http://hub:8060
+    connect_timeout: 10000
+    read_timeout: 60000
+    write_timeout: 60000
+    retries: 3
+
+  # Router Module - Internal Event Bus
+  - name: router-service
+    url: http://router:8000
+    connect_timeout: 5000
+    read_timeout: 30000
+
+  # Core Modules
+  - name: identity-service
+    url: http://identity-core:8050
+
+  - name: labels-service
+    url: http://labels-core:8023
+
+  - name: reputation-service
+    url: http://reputation-core:8021
+
+  - name: community-service
+    url: http://community-core:8020
+
+  # Interactive Modules
+  - name: ai-service
+    url: http://ai-interaction:8005
+
+  - name: ai-researcher-service
+    url: http://ai-researcher:8070
+
+  - name: alias-service
+    url: http://alias:8010
+
+  - name: shoutout-service
+    url: http://shoutout:8011
+
+  - name: inventory-service
+    url: http://inventory:8024
+
+  - name: calendar-service
+    url: http://calendar:8030
+
+  - name: memories-service
+    url: http://memories:8031
+
+  - name: youtube-music-service
+    url: http://youtube-music:8025
+
+  - name: spotify-service
+    url: http://spotify:8026
+
+# =============================================================================
+# ROUTES - API Path Mappings
+# =============================================================================
+
+routes:
+  # --- Hub Module Routes (Main API) ---
+  - name: hub-public
+    service: hub-service
+    paths:
+      - /api/v1/public
+    strip_path: false
+
+  - name: hub-auth
+    service: hub-service
+    paths:
+      - /api/v1/auth
+    strip_path: false
+
+  - name: hub-user
+    service: hub-service
+    paths:
+      - /api/v1/user
+    strip_path: false
+
+  - name: hub-community
+    service: hub-service
+    paths:
+      - /api/v1/community
+    strip_path: false
+
+  - name: hub-admin
+    service: hub-service
+    paths:
+      - /api/v1/admin
+    strip_path: false
+
+  - name: hub-marketplace
+    service: hub-service
+    paths:
+      - /api/v1/marketplace
+    strip_path: false
+
+  - name: hub-platform
+    service: hub-service
+    paths:
+      - /api/v1/platform
+    strip_path: false
+
+  - name: hub-superadmin
+    service: hub-service
+    paths:
+      - /api/v1/superadmin
+    strip_path: false
+
+  - name: hub-internal
+    service: hub-service
+    paths:
+      - /api/v1/internal
+    strip_path: false
+
+  # --- Router Module ---
+  - name: router-api
+    service: router-service
+    paths:
+      - /api/v1/router
+    strip_path: false
+
+  # --- Core Module Routes ---
+  - name: identity-api
+    service: identity-service
+    paths:
+      - /api/v1/identity
+    strip_path: false
+
+  - name: labels-api
+    service: labels-service
+    paths:
+      - /api/v1/labels
+    strip_path: false
+
+  - name: reputation-api
+    service: reputation-service
+    paths:
+      - /api/v1/reputation
+    strip_path: false
+
+  # --- Interactive Module Routes ---
+  - name: ai-api
+    service: ai-service
+    paths:
+      - /api/v1/ai
+    strip_path: false
+
+  - name: ai-researcher-api
+    service: ai-researcher-service
+    paths:
+      - /api/v1/ai-researcher
+    strip_path: false
+
+  - name: alias-api
+    service: alias-service
+    paths:
+      - /api/v1/alias
+    strip_path: false
+
+  - name: shoutout-api
+    service: shoutout-service
+    paths:
+      - /api/v1/shoutout
+    strip_path: false
+
+  - name: inventory-api
+    service: inventory-service
+    paths:
+      - /api/v1/inventory
+    strip_path: false
+
+  - name: calendar-api
+    service: calendar-service
+    paths:
+      - /api/v1/calendar
+    strip_path: false
+
+  - name: memories-api
+    service: memories-service
+    paths:
+      - /api/v1/memories
+    strip_path: false
+
+  - name: youtube-music-api
+    service: youtube-music-service
+    paths:
+      - /api/v1/youtube-music
+    strip_path: false
+
+  - name: spotify-api
+    service: spotify-service
+    paths:
+      - /api/v1/spotify
+    strip_path: false
+
+# =============================================================================
+# PLUGINS - Global Configuration
+# =============================================================================
+
+plugins:
+  # CORS - Allow cross-origin requests
+  - name: cors
+    config:
+      origins:
+        - "https://hub.waddlebot.io"
+        - "https://waddlebot.io"
+        - "http://localhost:3000"
+      methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      headers:
+        - Authorization
+        - Content-Type
+        - X-API-Key
+        - X-Request-ID
+      exposed_headers:
+        - X-Request-ID
+        - X-RateLimit-Remaining
+      credentials: true
+      max_age: 3600
+
+  # Request Size Limit
+  - name: request-size-limiting
+    config:
+      allowed_payload_size: 10
+      size_unit: megabytes
+
+  # Global Rate Limiting
+  - name: rate-limiting
+    config:
+      minute: 60
+      hour: 1000
+      policy: local
+      fault_tolerant: true
+      hide_client_headers: false
+
+# =============================================================================
+# CONSUMERS - API Consumers
+# =============================================================================
+
+consumers:
+  - username: anonymous
+    custom_id: anonymous-consumer
+
+  - username: authenticated-user
+    custom_id: authenticated-user
+
+  - username: service-account
+    custom_id: service-account
+
+# =============================================================================
+# JWT PLUGIN - Per-Route Configuration
+# =============================================================================
+
+plugins:
+  # JWT validation for protected routes
+  - name: jwt
+    route: hub-user
+    config:
+      claims_to_verify:
+        - exp
+      header_names:
+        - Authorization
+      key_claim_name: iss
+      secret_is_base64: false
+      run_on_preflight: false
+
+  - name: jwt
+    route: hub-community
+    config:
+      claims_to_verify:
+        - exp
+      run_on_preflight: false
+
+  - name: jwt
+    route: hub-admin
+    config:
+      claims_to_verify:
+        - exp
+      run_on_preflight: false
+
+  - name: jwt
+    route: hub-platform
+    config:
+      claims_to_verify:
+        - exp
+
+  - name: jwt
+    route: hub-superadmin
+    config:
+      claims_to_verify:
+        - exp
+
+  # Service-to-service API key auth
+  - name: key-auth
+    route: hub-internal
+    config:
+      key_names:
+        - X-API-Key
+        - apikey
+      hide_credentials: true
+
+  - name: key-auth
+    route: router-api
+    config:
+      key_names:
+        - X-API-Key
+```
+
+### Phase 3: JWT Secrets Configuration
+
+**File**: `config/kong/jwt-secrets.yml` (gitignored)
+
+```yaml
+jwt_secrets:
+  - consumer: authenticated-user
+    key: waddlebot-hub
+    secret: ${JWT_SECRET}
+    algorithm: HS256
+```
+
+### Phase 4: Remove External Port Exposures
+
+**Update** `docker-compose.yml` - Remove all port mappings except:
+
+```yaml
+# ONLY these services expose ports:
+kong:
+  ports:
+    - "8000:8000"   # Kong HTTP
+    - "8443:8443"   # Kong HTTPS
+
+# Webhook receivers (separate nginx proxy)
+nginx-webhooks:
+  ports:
+    - "8080:80"     # Webhook ingress
+
+# Browser source overlays
+browser-source:
+  ports:
+    - "8027:8027"   # OBS direct access
+
+# Hub frontend (separate from API)
+nginx-frontend:
+  ports:
+    - "80:80"
+    - "443:443"
+```
+
+All other services: **NO port mappings** (internal only).
+
+### Phase 5: Network Isolation
+
+```yaml
+networks:
+  waddlebot-public:
+    driver: bridge
+    # Kong, nginx-webhooks, browser-source only
+
+  waddlebot-internal:
+    driver: bridge
+    internal: true  # No external access
+    # All backend services
+```
+
+---
+
+## File Structure
+
+```
+config/kong/
+├── kong.yml           # Declarative configuration
+├── jwt-secrets.yml    # JWT secrets (gitignored)
+├── ssl/
+│   ├── api.waddlebot.io.crt
+│   └── api.waddlebot.io.key
+└── plugins/           # Custom plugins (if needed)
+```
+
+---
+
+## Critical Files to Modify
+
+| File | Changes |
+|------|---------|
+| `docker-compose.yml` | Add Kong service, remove port exposures |
+| `config/kong/kong.yml` | NEW - Declarative config |
+| `config/kong/jwt-secrets.yml` | NEW - JWT secrets |
+| `.env-example` | Add Kong environment variables |
+| `.gitignore` | Add kong/jwt-secrets.yml |
+
+---
+
+## Environment Variables
+
+```bash
+# Kong Configuration
+KONG_DATABASE=off
+KONG_DECLARATIVE_CONFIG=/etc/kong/kong.yml
+KONG_SSL_CERT=/etc/kong/ssl/api.waddlebot.io.crt
+KONG_SSL_CERT_KEY=/etc/kong/ssl/api.waddlebot.io.key
+
+# JWT Secret (shared with Hub)
+JWT_SECRET=your-jwt-secret-here
+
+# Rate Limits
+KONG_RATE_LIMIT_MINUTE=60
+KONG_RATE_LIMIT_HOUR=1000
+```
+
+---
+
+## Testing Checklist
+
+1. Kong starts and loads declarative config
+2. Health endpoint: `curl http://localhost:8001/status`
+3. Public routes work without auth: `curl https://api.waddlebot.io/api/v1/public/stats`
+4. Protected routes require JWT: `curl https://api.waddlebot.io/api/v1/user/profile` → 401
+5. JWT auth works: `curl -H "Authorization: Bearer <token>" https://api.waddlebot.io/api/v1/user/profile`
+6. Rate limiting enforced: Exceed limit → 429
+7. Internal services not accessible externally
+8. Webhook receivers still work via separate nginx
+
+---
+
+## Migration Steps
+
+1. Create `config/kong/` directory structure
+2. Write `kong.yml` declarative configuration
+3. Add Kong service to docker-compose.yml
+4. Remove port exposures from all internal services
+5. Update network configurations
+6. Configure SSL certificates
+7. Test all routes through Kong
+8. Update DNS: api.waddlebot.io → Kong service
+9. Monitor logs and adjust rate limits
+
+---
+
+## Security Considerations
+
+- Kong Admin API (8001) should be bound to localhost or VPN in production
+- SSL certificates should be from trusted CA (Let's Encrypt recommended)
+- JWT secrets must match between Kong and Hub module
+- Rate limits should be tuned based on actual traffic patterns
+- Consider IP whitelisting for internal service routes

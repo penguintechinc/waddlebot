@@ -1,511 +1,688 @@
 # Kong Declarative Configuration for WaddleBot API Gateway
-# Merges router, marketplace, and collector APIs into unified domain
+# All APIs exposed via api.waddlebot.io - No direct external access to services
+# Excludes: Frontend, webhook receivers, OBS overlays (separate systems)
 
 _format_version: "3.0"
 _transform: true
 
+# =============================================================================
+# SERVICES - Backend API Modules
+# =============================================================================
+
 services:
-  # Router Service (Core API)
+  # Hub Module - Main API (user, community, admin, auth)
+  - name: hub-service
+    url: http://hub:8060
+    connect_timeout: 10000
+    read_timeout: 60000
+    write_timeout: 60000
+    retries: 3
+    tags:
+      - waddlebot
+      - hub
+      - core
+
+  # Router Module - Internal Event Bus
   - name: router-service
-    url: http://router-service:8000
+    url: http://router:8000
+    connect_timeout: 5000
+    read_timeout: 30000
+    retries: 2
+    tags:
+      - waddlebot
+      - router
+      - internal
+
+  # Core Modules
+  - name: identity-service
+    url: http://identity-core:8050
+    connect_timeout: 5000
+    read_timeout: 30000
     tags:
       - waddlebot
       - core
-    plugins:
-      - name: rate-limiting
-        config:
-          minute: 1000
-          hour: 10000
-          policy: local
-      - name: cors
-        config:
-          origins:
-            - "*"
-          methods:
-            - GET
-            - POST
-            - PUT
-            - DELETE
-            - OPTIONS
-          headers:
-            - Accept
-            - Authorization
-            - Content-Type
-            - X-API-Key
-          exposed_headers:
-            - X-Auth-Token
-          credentials: true
-          max_age: 3600
+      - identity
 
-  # Marketplace Service  
-  - name: marketplace-service
-    url: http://marketplace-service:8001
+  - name: labels-service
+    url: http://labels-core:8023
+    connect_timeout: 5000
+    read_timeout: 30000
     tags:
       - waddlebot
-      - marketplace
-    plugins:
-      - name: rate-limiting
-        config:
-          minute: 500
-          hour: 5000
-          policy: local
-      - name: cors
-        config:
-          origins:
-            - "*"
-          methods:
-            - GET
-            - POST
-            - PUT
-            - DELETE
-            - OPTIONS
-          headers:
-            - Accept
-            - Authorization
-            - Content-Type
-            - X-API-Key
-          credentials: true
+      - core
+      - labels
 
-  # Twitch Collector Service
-  - name: twitch-collector
-    url: http://twitch-collector:8002
+  - name: reputation-service
+    url: http://reputation-core:8021
+    connect_timeout: 5000
+    read_timeout: 30000
     tags:
       - waddlebot
-      - collector
-      - twitch
-    plugins:
-      - name: rate-limiting
-        config:
-          minute: 200
-          hour: 2000
-          policy: local
+      - core
+      - reputation
 
-  # Discord Collector Service
-  - name: discord-collector
-    url: http://discord-collector:8003
+  - name: community-service
+    url: http://community-core:8020
+    connect_timeout: 5000
+    read_timeout: 30000
     tags:
       - waddlebot
-      - collector
-      - discord
-    plugins:
-      - name: rate-limiting
-        config:
-          minute: 200
-          hour: 2000
-          policy: local
+      - core
+      - community
 
-  # Slack Collector Service
-  - name: slack-collector
-    url: http://slack-collector:8004
-    tags:
-      - waddlebot
-      - collector
-      - slack
-    plugins:
-      - name: rate-limiting
-        config:
-          minute: 200
-          hour: 2000
-          policy: local
-
-  # AI Interaction Service
-  - name: ai-interaction
+  # Interactive Modules
+  - name: ai-service
     url: http://ai-interaction:8005
+    connect_timeout: 10000
+    read_timeout: 120000
     tags:
       - waddlebot
-      - interaction
+      - interactive
       - ai
-    plugins:
-      - name: rate-limiting
-        config:
-          minute: 1000
-          hour: 10000
-          policy: local
-      - name: cors
-        config:
-          origins:
-            - "*"
-          methods:
-            - GET
-            - POST
-            - PUT
-            - DELETE
-            - OPTIONS
-          headers:
-            - Accept
-            - Authorization
-            - Content-Type
-            - X-API-Key
-          exposed_headers:
-            - X-Auth-Token
-          credentials: true
-          max_age: 3600
 
-  # Kong Admin Broker Service
-  - name: kong-admin-broker
-    url: http://kong-admin-broker:8000
+  - name: ai-researcher-service
+    url: http://ai-researcher:8070
+    connect_timeout: 10000
+    read_timeout: 120000
     tags:
       - waddlebot
-      - admin
-      - broker
-      - super-admin
-    plugins:
-      - name: rate-limiting
-        config:
-          minute: 100
-          hour: 1000
-          policy: local
-      - name: cors
-        config:
-          origins:
-            - "*"
-          methods:
-            - GET
-            - POST
-            - PUT
-            - DELETE
-            - OPTIONS
-          headers:
-            - Accept
-            - Authorization
-            - Content-Type
-            - X-Broker-Key
-          credentials: true
-          max_age: 3600
+      - interactive
+      - ai-researcher
+
+  - name: alias-service
+    url: http://alias:8010
+    connect_timeout: 5000
+    read_timeout: 30000
+    tags:
+      - waddlebot
+      - interactive
+      - alias
+
+  - name: shoutout-service
+    url: http://shoutout:8011
+    connect_timeout: 5000
+    read_timeout: 30000
+    tags:
+      - waddlebot
+      - interactive
+      - shoutout
+
+  - name: inventory-service
+    url: http://inventory:8024
+    connect_timeout: 5000
+    read_timeout: 30000
+    tags:
+      - waddlebot
+      - interactive
+      - inventory
+
+  - name: calendar-service
+    url: http://calendar:8030
+    connect_timeout: 5000
+    read_timeout: 30000
+    tags:
+      - waddlebot
+      - interactive
+      - calendar
+
+  - name: memories-service
+    url: http://memories:8031
+    connect_timeout: 5000
+    read_timeout: 30000
+    tags:
+      - waddlebot
+      - interactive
+      - memories
+
+  - name: youtube-music-service
+    url: http://youtube-music:8025
+    connect_timeout: 5000
+    read_timeout: 30000
+    tags:
+      - waddlebot
+      - interactive
+      - youtube-music
+
+  - name: spotify-service
+    url: http://spotify:8026
+    connect_timeout: 5000
+    read_timeout: 30000
+    tags:
+      - waddlebot
+      - interactive
+      - spotify
+
+# =============================================================================
+# ROUTES - API Path Mappings
+# =============================================================================
 
 routes:
-  # Router API Routes
-  - name: router-api
-    service: router-service
+  # --- Hub Module Routes (Main API) ---
+  - name: hub-public
+    service: hub-service
     paths:
-      - /api/router
-    strip_path: true
-    preserve_host: false
-    tags:
-      - router
-      - api
-
-  # Router Admin Web UI
-  - name: router-admin
-    service: router-service
-    paths:
-      - /admin
+      - /api/v1/public
     strip_path: false
-    preserve_host: false
+    protocols:
+      - http
+      - https
     tags:
-      - router
-      - admin
+      - public
+      - no-auth
 
-  # Marketplace API Routes
-  - name: marketplace-api
-    service: marketplace-service
+  - name: hub-auth
+    service: hub-service
     paths:
-      - /api/marketplace
-    strip_path: true
-    preserve_host: false
-    tags:
-      - marketplace
-      - api
-
-  # Marketplace Web UI
-  - name: marketplace-web
-    service: marketplace-service
-    paths:
-      - /marketplace
+      - /api/v1/auth
     strip_path: false
-    preserve_host: false
-    tags:
-      - marketplace
-      - web
-
-  # Twitch Collector Webhooks
-  - name: twitch-webhooks
-    service: twitch-collector
-    paths:
-      - /webhooks/twitch
-    strip_path: true
-    preserve_host: false
-    tags:
-      - twitch
-      - webhooks
-
-  # Discord Collector Routes
-  - name: discord-webhooks
-    service: discord-collector
-    paths:
-      - /webhooks/discord
-    strip_path: true
-    preserve_host: false
-    tags:
-      - discord
-      - webhooks
-
-  # Slack Collector Routes  
-  - name: slack-webhooks
-    service: slack-collector
-    paths:
-      - /webhooks/slack
-    strip_path: true
-    preserve_host: false
-    tags:
-      - slack
-      - webhooks
-
-  # AI Interaction API Routes
-  - name: ai-api
-    service: ai-interaction
-    paths:
-      - /api/ai
-    strip_path: true
-    preserve_host: false
-    tags:
-      - ai
-      - api
-    plugins:
-      - name: key-auth
-        config:
-          key_names:
-            - X-API-Key
-            - apikey
-          key_in_body: false
-          key_in_header: true
-          key_in_query: true
-          hide_credentials: true
-
-  # AI Interaction Web UI (if any)
-  - name: ai-interaction-web
-    service: ai-interaction
-    paths:
-      - /ai
-    strip_path: false
-    preserve_host: false
-    tags:
-      - ai
-      - web
-
-  # Health Check Routes (No Authentication)
-  - name: health-checks
-    service: router-service
-    paths:
-      - /health
-    strip_path: false
-    preserve_host: false
-    tags:
-      - health
-
-  # AI Health Check (No Authentication)
-  - name: ai-health-check
-    service: ai-interaction
-    paths:
-      - /ai/health
-    strip_path: false
-    preserve_host: false
-    tags:
-      - ai
-      - health
-
-  # Kong Admin Broker API Routes (Restricted Access)
-  - name: broker-api
-    service: kong-admin-broker
-    paths:
-      - /api/broker
-    strip_path: true
-    preserve_host: false
-    tags:
-      - broker
-      - admin
-      - api
-    plugins:
-      - name: key-auth
-        config:
-          key_names:
-            - X-Broker-Key
-          key_in_body: false
-          key_in_header: true
-          key_in_query: true
-          hide_credentials: true
-
-  # Broker Health Check (No Authentication)
-  - name: broker-health-check
-    service: kong-admin-broker
-    paths:
-      - /broker/health
-    strip_path: false
-    preserve_host: false
-    tags:
-      - broker
-      - health
-
-plugins:
-  # Global Authentication Plugin
-  - name: key-auth
-    config:
-      key_names:
-        - X-API-Key
-        - apikey
-      key_in_body: false
-      key_in_header: true
-      key_in_query: true
-      hide_credentials: true
     protocols:
       - http
       - https
     tags:
       - auth
-      - global
+      - no-auth
 
-  # Global Request Size Limiting
-  - name: request-size-limiting
-    config:
-      allowed_payload_size: 10 # 10MB
+  - name: hub-user
+    service: hub-service
+    paths:
+      - /api/v1/user
+    strip_path: false
+    protocols:
+      - http
+      - https
     tags:
-      - security
-      - global
+      - user
+      - jwt-auth
 
-  # Global IP Restriction (Optional - configure based on environment)
-  # - name: ip-restriction
-  #   config:
-  #     allow:
-  #       - 10.0.0.0/8
-  #       - 192.168.0.0/16
-  #       - 172.16.0.0/12
-  #     deny: []
-  #   tags:
-  #     - security
-  #     - global
-
-  # Request/Response Logging
-  - name: file-log
-    config:
-      path: /var/log/kong/api-access.log
-      reopen: true
+  - name: hub-community
+    service: hub-service
+    paths:
+      - /api/v1/community
+    strip_path: false
+    protocols:
+      - http
+      - https
     tags:
-      - logging
-      - global
+      - community
+      - jwt-auth
 
-consumers:
-  # Example service account consumers (will be created via admin API)
-  - username: twitch-collector-primary
-    keyauth_credentials:
-      - key: "wbot_twitch_primary_key_placeholder"
+  - name: hub-admin
+    service: hub-service
+    paths:
+      - /api/v1/admin
+    strip_path: false
+    protocols:
+      - http
+      - https
     tags:
-      - collector
-      - twitch
+      - admin
+      - jwt-auth
 
-  - username: discord-collector-primary  
-    keyauth_credentials:
-      - key: "wbot_discord_primary_key_placeholder"
-    tags:
-      - collector
-      - discord
-
-  - username: slack-collector-primary
-    keyauth_credentials:
-      - key: "wbot_slack_primary_key_placeholder"
-    tags:
-      - collector
-      - slack
-
-  - username: marketplace-admin
-    keyauth_credentials:
-      - key: "wbot_marketplace_admin_key_placeholder"
+  - name: hub-marketplace
+    service: hub-service
+    paths:
+      - /api/v1/marketplace
+    strip_path: false
+    protocols:
+      - http
+      - https
     tags:
       - marketplace
-      - admin
+      - jwt-auth
 
-  - username: ai-interaction-service
-    keyauth_credentials:
-      - key: "wbot_ai_interaction_key_placeholder"
+  - name: hub-platform
+    service: hub-service
+    paths:
+      - /api/v1/platform
+    strip_path: false
+    protocols:
+      - http
+      - https
     tags:
-      - ai
-      - interaction
+      - platform
+      - jwt-auth
 
-  - username: ai-api-user
-    keyauth_credentials:
-      - key: "wbot_ai_api_user_key_placeholder"
+  - name: hub-superadmin
+    service: hub-service
+    paths:
+      - /api/v1/superadmin
+    strip_path: false
+    protocols:
+      - http
+      - https
     tags:
-      - ai
-      - api
+      - superadmin
+      - jwt-auth
 
-  - username: kong-admin-broker
-    keyauth_credentials:
-      - key: "wbot_broker_master_key_placeholder"
+  - name: hub-internal
+    service: hub-service
+    paths:
+      - /api/v1/internal
+    strip_path: false
+    protocols:
+      - http
+      - https
     tags:
-      - broker
-      - super-admin
+      - internal
+      - api-key-auth
 
-  - username: super-admin-primary
-    keyauth_credentials:
-      - key: "wbot_super_admin_primary_key_placeholder"
-    tags:
-      - super-admin
-      - admin
-
-# ACL Groups for Role-Based Access
-acls:
-  - consumer: twitch-collector-primary
-    group: collectors
-  - consumer: discord-collector-primary
-    group: collectors
-  - consumer: slack-collector-primary
-    group: collectors
-  - consumer: marketplace-admin
-    group: admins
-  - consumer: ai-interaction-service
-    group: services
-  - consumer: ai-api-user
-    group: api-users
-  - consumer: kong-admin-broker
-    group: super-admins
-  - consumer: super-admin-primary
-    group: super-admins
-
-# Rate Limiting by Consumer Group
-upstreams:
-  - name: router-upstream
-    algorithm: round-robin
-    hash_on: none
-    hash_fallback: none
-    slots: 10000
-    targets:
-      - target: router-service:8000
-        weight: 100
+  # --- Router Module ---
+  - name: router-api
+    service: router-service
+    paths:
+      - /api/v1/router
+    strip_path: false
+    protocols:
+      - http
+      - https
     tags:
       - router
-      - upstream
+      - api-key-auth
 
-  - name: marketplace-upstream
-    algorithm: round-robin
-    hash_on: none
-    hash_fallback: none
-    slots: 10000
-    targets:
-      - target: marketplace-service:8001
-        weight: 100
+  # --- Core Module Routes ---
+  - name: identity-api
+    service: identity-service
+    paths:
+      - /api/v1/identity
+    strip_path: false
+    protocols:
+      - http
+      - https
     tags:
-      - marketplace
-      - upstream
+      - identity
+      - jwt-auth
 
-  - name: ai-interaction-upstream
-    algorithm: round-robin
-    hash_on: none
-    hash_fallback: none
-    slots: 10000
-    targets:
-      - target: ai-interaction:8005
-        weight: 100
+  - name: labels-api
+    service: labels-service
+    paths:
+      - /api/v1/labels
+    strip_path: false
+    protocols:
+      - http
+      - https
+    tags:
+      - labels
+      - jwt-auth
+
+  - name: reputation-api
+    service: reputation-service
+    paths:
+      - /api/v1/reputation
+    strip_path: false
+    protocols:
+      - http
+      - https
+    tags:
+      - reputation
+      - jwt-auth
+
+  # --- Interactive Module Routes ---
+  - name: ai-api
+    service: ai-service
+    paths:
+      - /api/v1/ai
+    strip_path: false
+    protocols:
+      - http
+      - https
     tags:
       - ai
-      - upstream
+      - jwt-auth
 
-  - name: kong-admin-broker-upstream
-    algorithm: round-robin
-    hash_on: none
-    hash_fallback: none
-    slots: 10000
-    targets:
-      - target: kong-admin-broker:8000
-        weight: 100
+  - name: ai-researcher-api
+    service: ai-researcher-service
+    paths:
+      - /api/v1/ai-researcher
+    strip_path: false
+    protocols:
+      - http
+      - https
     tags:
-      - broker
-      - upstream
+      - ai-researcher
+      - jwt-auth
+
+  - name: alias-api
+    service: alias-service
+    paths:
+      - /api/v1/alias
+    strip_path: false
+    protocols:
+      - http
+      - https
+    tags:
+      - alias
+      - api-key-auth
+
+  - name: shoutout-api
+    service: shoutout-service
+    paths:
+      - /api/v1/shoutout
+    strip_path: false
+    protocols:
+      - http
+      - https
+    tags:
+      - shoutout
+      - api-key-auth
+
+  - name: inventory-api
+    service: inventory-service
+    paths:
+      - /api/v1/inventory
+    strip_path: false
+    protocols:
+      - http
+      - https
+    tags:
+      - inventory
+      - jwt-auth
+
+  - name: calendar-api
+    service: calendar-service
+    paths:
+      - /api/v1/calendar
+    strip_path: false
+    protocols:
+      - http
+      - https
+    tags:
+      - calendar
+      - jwt-auth
+
+  - name: memories-api
+    service: memories-service
+    paths:
+      - /api/v1/memories
+    strip_path: false
+    protocols:
+      - http
+      - https
+    tags:
+      - memories
+      - jwt-auth
+
+  - name: youtube-music-api
+    service: youtube-music-service
+    paths:
+      - /api/v1/youtube-music
+    strip_path: false
+    protocols:
+      - http
+      - https
+    tags:
+      - youtube-music
+      - jwt-auth
+
+  - name: spotify-api
+    service: spotify-service
+    paths:
+      - /api/v1/spotify
+    strip_path: false
+    protocols:
+      - http
+      - https
+    tags:
+      - spotify
+      - jwt-auth
+
+# =============================================================================
+# CONSUMERS - API Consumers for Auth & Rate Limiting
+# =============================================================================
+
+consumers:
+  - username: anonymous
+    custom_id: anonymous-consumer
+    tags:
+      - anonymous
+
+  - username: authenticated-user
+    custom_id: authenticated-user
+    tags:
+      - authenticated
+
+  - username: service-account
+    custom_id: service-account
+    tags:
+      - service
+      - internal
+
+# =============================================================================
+# PLUGINS - Global Configuration
+# =============================================================================
+
+plugins:
+  # --- Global CORS ---
+  - name: cors
+    config:
+      origins:
+        - "https://hub.waddlebot.io"
+        - "https://waddlebot.io"
+        - "https://api.waddlebot.io"
+        - "http://localhost:3000"
+        - "http://localhost:8060"
+      methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+        - HEAD
+      headers:
+        - Authorization
+        - Content-Type
+        - X-API-Key
+        - X-Request-ID
+        - X-Requested-With
+        - Accept
+        - Origin
+      exposed_headers:
+        - X-Request-ID
+        - X-RateLimit-Limit
+        - X-RateLimit-Remaining
+        - X-RateLimit-Reset
+      credentials: true
+      max_age: 3600
+      preflight_continue: false
+    tags:
+      - global
+      - cors
+
+  # --- Global Request Size Limit ---
+  - name: request-size-limiting
+    config:
+      allowed_payload_size: 10
+      size_unit: megabytes
+    tags:
+      - global
+      - security
+
+  # --- Global Rate Limiting ---
+  - name: rate-limiting
+    config:
+      minute: 60
+      hour: 1000
+      policy: local
+      fault_tolerant: true
+      hide_client_headers: false
+      error_code: 429
+      error_message: "Rate limit exceeded. Please slow down."
+    tags:
+      - global
+      - rate-limiting
+
+  # --- Request ID for tracing ---
+  - name: correlation-id
+    config:
+      header_name: X-Request-ID
+      generator: uuid
+      echo_downstream: true
+    tags:
+      - global
+      - tracing
+
+  # ==========================================================================
+  # JWT AUTHENTICATION - Protected Routes
+  # ==========================================================================
+
+  # JWT for user routes
+  - name: jwt
+    route: hub-user
+    config:
+      claims_to_verify:
+        - exp
+      header_names:
+        - Authorization
+      key_claim_name: iss
+      secret_is_base64: false
+      run_on_preflight: false
+
+  # JWT for community routes
+  - name: jwt
+    route: hub-community
+    config:
+      claims_to_verify:
+        - exp
+      header_names:
+        - Authorization
+      run_on_preflight: false
+
+  # JWT for admin routes
+  - name: jwt
+    route: hub-admin
+    config:
+      claims_to_verify:
+        - exp
+      header_names:
+        - Authorization
+      run_on_preflight: false
+
+  # JWT for marketplace routes
+  - name: jwt
+    route: hub-marketplace
+    config:
+      claims_to_verify:
+        - exp
+      header_names:
+        - Authorization
+      run_on_preflight: false
+
+  # JWT for platform admin routes
+  - name: jwt
+    route: hub-platform
+    config:
+      claims_to_verify:
+        - exp
+      header_names:
+        - Authorization
+      run_on_preflight: false
+
+  # JWT for superadmin routes
+  - name: jwt
+    route: hub-superadmin
+    config:
+      claims_to_verify:
+        - exp
+      header_names:
+        - Authorization
+      run_on_preflight: false
+
+  # JWT for core module routes
+  - name: jwt
+    route: identity-api
+    config:
+      claims_to_verify:
+        - exp
+
+  - name: jwt
+    route: labels-api
+    config:
+      claims_to_verify:
+        - exp
+
+  - name: jwt
+    route: reputation-api
+    config:
+      claims_to_verify:
+        - exp
+
+  # JWT for interactive module routes
+  - name: jwt
+    route: ai-api
+    config:
+      claims_to_verify:
+        - exp
+
+  - name: jwt
+    route: ai-researcher-api
+    config:
+      claims_to_verify:
+        - exp
+
+  - name: jwt
+    route: inventory-api
+    config:
+      claims_to_verify:
+        - exp
+
+  - name: jwt
+    route: calendar-api
+    config:
+      claims_to_verify:
+        - exp
+
+  - name: jwt
+    route: memories-api
+    config:
+      claims_to_verify:
+        - exp
+
+  - name: jwt
+    route: youtube-music-api
+    config:
+      claims_to_verify:
+        - exp
+
+  - name: jwt
+    route: spotify-api
+    config:
+      claims_to_verify:
+        - exp
+
+  # ==========================================================================
+  # API KEY AUTHENTICATION - Service Routes
+  # ==========================================================================
+
+  # API Key for internal hub routes (service-to-service)
+  - name: key-auth
+    route: hub-internal
+    config:
+      key_names:
+        - X-API-Key
+        - apikey
+      hide_credentials: true
+
+  # API Key for router API (service-to-service)
+  - name: key-auth
+    route: router-api
+    config:
+      key_names:
+        - X-API-Key
+        - apikey
+      hide_credentials: true
+
+  # API Key for alias (internal module)
+  - name: key-auth
+    route: alias-api
+    config:
+      key_names:
+        - X-API-Key
+      hide_credentials: true
+
+  # API Key for shoutout (internal module)
+  - name: key-auth
+    route: shoutout-api
+    config:
+      key_names:
+        - X-API-Key
+      hide_credentials: true

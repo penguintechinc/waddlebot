@@ -1,0 +1,693 @@
+# WaddleBot Helm Chart - Default Values
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Global settings
+global:
+  # Container registry for WaddleBot images
+  # For GitHub Container Registry: ghcr.io/owner/repo
+  # For Docker Hub: docker.io/waddlebot
+  # For local registry: localhost:32000/waddlebot
+  imageRegistry: "docker.io/waddlebot"
+
+  # Image tag to deploy (e.g., "latest", commit SHA, or version tag)
+  imageTag: "latest"
+
+  # Image pull policy
+  imagePullPolicy: IfNotPresent
+
+  # Secrets for pulling from private registries (if needed)
+  imagePullSecrets: []
+
+  # Default storage class for persistent volumes
+  storageClass: "standard"
+
+# Namespace configuration
+namespace:
+  create: true
+  name: waddlebot
+
+# Resource presets
+resourcePresets:
+  small:
+    cpu: "100m"
+    memory: "128Mi"
+    cpuLimit: "500m"
+    memoryLimit: "512Mi"
+  medium:
+    cpu: "250m"
+    memory: "256Mi"
+    cpuLimit: "1000m"
+    memoryLimit: "1Gi"
+  large:
+    cpu: "500m"
+    memory: "512Mi"
+    cpuLimit: "2000m"
+    memoryLimit: "2Gi"
+
+# Infrastructure Services
+infrastructure:
+  # PostgreSQL Database
+  postgresql:
+    enabled: true
+    image: postgres:16
+    port: 5432
+    replicas: 1
+    resourcePreset: large
+    persistence:
+      enabled: true
+      size: 20Gi
+    env:
+      POSTGRES_DB: waddlebot
+      POSTGRES_USER: waddlebot
+      # POSTGRES_PASSWORD should be set via secrets
+    readReplicas:
+      enabled: false
+      count: 2
+
+  # Redis Cache & Sessions
+  redis:
+    enabled: true
+    image: redis:7-alpine
+    port: 6379
+    replicas: 1
+    resourcePreset: medium
+    persistence:
+      enabled: true
+      size: 5Gi
+
+  # MinIO Object Storage
+  minio:
+    enabled: true
+    image: minio/minio:latest
+    apiPort: 9000
+    consolePort: 9001
+    replicas: 1
+    resourcePreset: medium
+    persistence:
+      enabled: true
+      size: 50Gi
+    env:
+      # MINIO_ROOT_USER and MINIO_ROOT_PASSWORD should be set via secrets
+      MINIO_BROWSER: "on"
+
+  # Ollama AI Backend
+  ollama:
+    enabled: true
+    image: ollama/ollama:latest
+    port: 11434
+    replicas: 1
+    resourcePreset: large
+    persistence:
+      enabled: true
+      size: 30Gi
+    gpu:
+      enabled: false
+      count: 1
+
+  # Qdrant Vector Database
+  qdrant:
+    enabled: true
+    image: qdrant/qdrant:latest
+    port: 6333
+    grpcPort: 6334
+    replicas: 1
+    resourcePreset: medium
+    persistence:
+      enabled: true
+      size: 10Gi
+
+  # Apache OpenWhisk (Serverless)
+  openwhisk:
+    enabled: false
+    # OpenWhisk requires complex setup - typically deployed separately
+    apiHost: ""
+    apiKey: ""
+
+# Processing Module
+processing:
+  router:
+    enabled: true
+    name: router
+    image: waddlebot-router
+    tag: latest
+    port: 8000
+    replicas: 2
+    resourcePreset: large
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+    env:
+      MODULE_NAME: "router_module"
+      MODULE_VERSION: "1.0.0"
+      PORT: "8000"
+      LOG_LEVEL: "INFO"
+      WORKERS: "4"
+      THREADS_PER_WORKER: "10"
+
+# Admin Modules
+admin:
+  hub:
+    enabled: true
+    name: hub
+    image: waddlebot-hub
+    tag: latest
+    port: 8060
+    replicas: 2
+    resourcePreset: large
+    env:
+      MODULE_NAME: "hub_module"
+      MODULE_VERSION: "1.0.0"
+      PORT: "8060"
+      LOG_LEVEL: "INFO"
+      SESSION_TYPE: "redis"
+
+# Core Modules
+core:
+  identity:
+    enabled: true
+    name: identity-core
+    image: waddlebot-identity-core
+    tag: latest
+    port: 8050
+    replicas: 2
+    resourcePreset: medium
+    env:
+      MODULE_NAME: "identity_core_module"
+      MODULE_VERSION: "1.0.0"
+      PORT: "8050"
+      LOG_LEVEL: "INFO"
+
+  labels:
+    enabled: true
+    name: labels-core
+    image: waddlebot-labels-core
+    tag: latest
+    port: 8023
+    replicas: 2
+    resourcePreset: medium
+    env:
+      MODULE_NAME: "labels_core_module"
+      MODULE_VERSION: "1.0.0"
+      PORT: "8023"
+      LOG_LEVEL: "INFO"
+
+  browserSource:
+    enabled: true
+    name: browser-source
+    image: waddlebot-browser-source
+    tag: latest
+    port: 8027
+    replicas: 2
+    resourcePreset: medium
+    env:
+      MODULE_NAME: "browser_source_core_module"
+      MODULE_VERSION: "1.0.0"
+      PORT: "8027"
+      LOG_LEVEL: "INFO"
+
+  reputation:
+    enabled: true
+    name: reputation
+    image: waddlebot-reputation
+    tag: latest
+    port: 8021
+    replicas: 2
+    resourcePreset: medium
+    env:
+      MODULE_NAME: "reputation_module"
+      MODULE_VERSION: "1.0.0"
+      PORT: "8021"
+      LOG_LEVEL: "INFO"
+
+  community:
+    enabled: true
+    name: community
+    image: waddlebot-community
+    tag: latest
+    port: 8020
+    replicas: 2
+    resourcePreset: medium
+    env:
+      MODULE_NAME: "community_module"
+      MODULE_VERSION: "1.0.0"
+      PORT: "8020"
+      LOG_LEVEL: "INFO"
+
+  aiResearcher:
+    enabled: true
+    name: ai-researcher
+    image: waddlebot-ai-researcher
+    tag: latest
+    port: 8070
+    replicas: 1
+    resourcePreset: large
+    env:
+      MODULE_NAME: "ai_researcher_module"
+      MODULE_VERSION: "1.0.0"
+      PORT: "8070"
+      LOG_LEVEL: "INFO"
+
+# Trigger Modules - Receivers
+trigger:
+  receivers:
+    twitch:
+      enabled: true
+      name: twitch-collector
+      image: waddlebot-twitch-collector
+      tag: latest
+      port: 8002
+      replicas: 2
+      resourcePreset: large
+      env:
+        MODULE_NAME: "twitch_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8002"
+        LOG_LEVEL: "INFO"
+        PLATFORM: "twitch"
+
+    discord:
+      enabled: true
+      name: discord-collector
+      image: waddlebot-discord-collector
+      tag: latest
+      port: 8003
+      replicas: 2
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "discord_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8003"
+        LOG_LEVEL: "INFO"
+        PLATFORM: "discord"
+
+    slack:
+      enabled: true
+      name: slack-collector
+      image: waddlebot-slack-collector
+      tag: latest
+      port: 8004
+      replicas: 2
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "slack_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8004"
+        LOG_LEVEL: "INFO"
+        PLATFORM: "slack"
+
+    youtubeLive:
+      enabled: true
+      name: youtube-live-collector
+      image: waddlebot-youtube-live-collector
+      tag: latest
+      port: 8006
+      replicas: 1
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "youtube_live_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8006"
+        LOG_LEVEL: "INFO"
+        PLATFORM: "youtube"
+
+    kick:
+      enabled: true
+      name: kick-collector
+      image: waddlebot-kick-collector
+      tag: latest
+      port: 8007
+      replicas: 1
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "kick_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8007"
+        LOG_LEVEL: "INFO"
+        PLATFORM: "kick"
+
+# Action Modules - Interactive
+action:
+  interactive:
+    ai:
+      enabled: true
+      name: ai-interaction
+      image: waddlebot-ai-interaction
+      tag: latest
+      port: 8005
+      replicas: 2
+      resourcePreset: large
+      env:
+        MODULE_NAME: "ai_interaction_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8005"
+        LOG_LEVEL: "INFO"
+        AI_PROVIDER: "ollama"
+
+    alias:
+      enabled: true
+      name: alias-interaction
+      image: waddlebot-alias-interaction
+      tag: latest
+      port: 8010
+      replicas: 2
+      resourcePreset: small
+      env:
+        MODULE_NAME: "alias_interaction_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8010"
+        LOG_LEVEL: "INFO"
+
+    shoutout:
+      enabled: true
+      name: shoutout-interaction
+      image: waddlebot-shoutout-interaction
+      tag: latest
+      port: 8011
+      replicas: 2
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "shoutout_interaction_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8011"
+        LOG_LEVEL: "INFO"
+
+    inventory:
+      enabled: true
+      name: inventory-interaction
+      image: waddlebot-inventory-interaction
+      tag: latest
+      port: 8024
+      replicas: 2
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "inventory_interaction_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8024"
+        LOG_LEVEL: "INFO"
+
+    calendar:
+      enabled: true
+      name: calendar-interaction
+      image: waddlebot-calendar-interaction
+      tag: latest
+      port: 8030
+      replicas: 2
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "calendar_interaction_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8030"
+        LOG_LEVEL: "INFO"
+
+    memories:
+      enabled: true
+      name: memories-interaction
+      image: waddlebot-memories-interaction
+      tag: latest
+      port: 8031
+      replicas: 2
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "memories_interaction_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8031"
+        LOG_LEVEL: "INFO"
+
+    youtubeMusic:
+      enabled: true
+      name: youtube-music
+      image: waddlebot-youtube-music
+      tag: latest
+      port: 8025
+      replicas: 1
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "youtube_music_interaction_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8025"
+        LOG_LEVEL: "INFO"
+
+    spotify:
+      enabled: true
+      name: spotify-interaction
+      image: waddlebot-spotify-interaction
+      tag: latest
+      port: 8026
+      replicas: 1
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "spotify_interaction_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8026"
+        LOG_LEVEL: "INFO"
+
+    loyalty:
+      enabled: true
+      name: loyalty-interaction
+      image: waddlebot-loyalty-interaction
+      tag: latest
+      port: 8032
+      replicas: 2
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "loyalty_interaction_module"
+        MODULE_VERSION: "1.0.0"
+        PORT: "8032"
+        LOG_LEVEL: "INFO"
+
+  # Action Modules - Platform Actions
+  platformActions:
+    discord:
+      enabled: true
+      name: discord-action
+      image: waddlebot-discord-action
+      tag: latest
+      httpPort: 8070
+      grpcPort: 50051
+      replicas: 2
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "discord_action_module"
+        MODULE_VERSION: "1.0.0"
+        HTTP_PORT: "8070"
+        GRPC_PORT: "50051"
+        LOG_LEVEL: "INFO"
+        PLATFORM: "discord"
+
+    slack:
+      enabled: true
+      name: slack-action
+      image: waddlebot-slack-action
+      tag: latest
+      httpPort: 8071
+      grpcPort: 50052
+      replicas: 2
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "slack_action_module"
+        MODULE_VERSION: "1.0.0"
+        HTTP_PORT: "8071"
+        GRPC_PORT: "50052"
+        LOG_LEVEL: "INFO"
+        PLATFORM: "slack"
+
+    twitch:
+      enabled: true
+      name: twitch-action
+      image: waddlebot-twitch-action
+      tag: latest
+      httpPort: 8072
+      grpcPort: 50053
+      replicas: 2
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "twitch_action_module"
+        MODULE_VERSION: "1.0.0"
+        HTTP_PORT: "8072"
+        GRPC_PORT: "50053"
+        LOG_LEVEL: "INFO"
+        PLATFORM: "twitch"
+
+    youtube:
+      enabled: true
+      name: youtube-action
+      image: waddlebot-youtube-action
+      tag: latest
+      httpPort: 8073
+      grpcPort: 50054
+      replicas: 1
+      resourcePreset: medium
+      env:
+        MODULE_NAME: "youtube_action_module"
+        MODULE_VERSION: "1.0.0"
+        HTTP_PORT: "8073"
+        GRPC_PORT: "50054"
+        LOG_LEVEL: "INFO"
+        PLATFORM: "youtube"
+
+# Ingress Configuration
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+  hosts:
+    - host: waddlebot.local
+      paths:
+        - path: /
+          pathType: Prefix
+          service: hub
+          port: 8060
+        - path: /api/router
+          pathType: Prefix
+          service: router
+          port: 8000
+        - path: /api/identity
+          pathType: Prefix
+          service: identity-core
+          port: 8050
+        - path: /api/labels
+          pathType: Prefix
+          service: labels-core
+          port: 8023
+        - path: /api/browser-source
+          pathType: Prefix
+          service: browser-source
+          port: 8027
+        - path: /api/reputation
+          pathType: Prefix
+          service: reputation
+          port: 8021
+        - path: /api/community
+          pathType: Prefix
+          service: community
+          port: 8020
+        - path: /webhooks/twitch
+          pathType: Prefix
+          service: twitch-collector
+          port: 8002
+        - path: /webhooks/discord
+          pathType: Prefix
+          service: discord-collector
+          port: 8003
+        - path: /webhooks/slack
+          pathType: Prefix
+          service: slack-collector
+          port: 8004
+  tls:
+    - secretName: waddlebot-tls
+      hosts:
+        - waddlebot.local
+
+# Shared Environment Variables (applied to all modules)
+sharedEnv:
+  # Database Configuration
+  DB_HOST: "postgresql"
+  DB_PORT: "5432"
+  DB_NAME: "waddlebot"
+  DB_USER: "waddlebot"
+  # DB_PASSWORD should be set via secrets
+  DB_POOL_SIZE: "20"
+  DB_MAX_OVERFLOW: "10"
+
+  # Redis Configuration
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  # REDIS_PASSWORD should be set via secrets
+
+  # MinIO Configuration
+  MINIO_ENDPOINT: "minio:9000"
+  MINIO_SECURE: "false"
+  # MINIO_ACCESS_KEY and MINIO_SECRET_KEY should be set via secrets
+
+  # Ollama Configuration
+  OLLAMA_HOST: "http://ollama:11434"
+  OLLAMA_MODEL: "llama3.1"
+
+  # Qdrant Configuration
+  QDRANT_HOST: "qdrant"
+  QDRANT_PORT: "6333"
+  QDRANT_GRPC_PORT: "6334"
+
+  # Router Configuration
+  ROUTER_URL: "http://router:8000"
+
+  # Hub Configuration
+  HUB_URL: "http://hub:8060"
+
+  # Logging Configuration
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"
+  LOG_FILE_ENABLED: "true"
+  LOG_FILE_PATH: "/var/log/waddlebotlog"
+  LOG_FILE_MAX_BYTES: "10485760"
+  LOG_FILE_BACKUP_COUNT: "5"
+
+  # License Server
+  LICENSE_SERVER_URL: "https://license.penguintech.io"
+  RELEASE_MODE: "false"
+
+  # Feature Flags
+  ENABLE_METRICS: "true"
+  ENABLE_TRACING: "false"
+  ENABLE_PROFILING: "false"
+
+# Persistent Volume Claims
+persistence:
+  logs:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+    accessMode: ReadWriteMany
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: "waddlebot"
+
+# Pod Security Context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container Security Context
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop:
+      - ALL
+
+# Monitoring & Observability
+monitoring:
+  prometheus:
+    enabled: false
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+
+  grafana:
+    enabled: false
+    dashboards:
+      enabled: false
+
+# Network Policies
+networkPolicy:
+  enabled: false
+  policyTypes:
+    - Ingress
+    - Egress

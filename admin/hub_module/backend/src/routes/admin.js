@@ -7,6 +7,7 @@ import * as adminController from '../controllers/adminController.js';
 import * as activityController from '../controllers/activityController.js';
 import * as communityProfileController from '../controllers/communityProfileController.js';
 import * as overlayController from '../controllers/overlayController.js';
+import * as loyaltyController from '../controllers/loyaltyController.js';
 import { requireAuth, requireCommunityAdmin } from '../middleware/auth.js';
 
 const router = Router();
@@ -111,5 +112,36 @@ router.get('/:communityId/overlay', requireCommunityAdmin, overlayController.get
 router.put('/:communityId/overlay', requireCommunityAdmin, overlayController.updateOverlay);
 router.post('/:communityId/overlay/rotate', requireCommunityAdmin, overlayController.rotateKey);
 router.get('/:communityId/overlay/stats', requireCommunityAdmin, overlayController.getOverlayStats);
+
+// Loyalty module - Currency configuration
+router.get('/:communityId/loyalty/config', requireCommunityAdmin, loyaltyController.getConfig);
+router.put('/:communityId/loyalty/config', requireCommunityAdmin, loyaltyController.updateConfig);
+
+// Loyalty module - Currency management
+router.get('/:communityId/loyalty/leaderboard', requireCommunityAdmin, loyaltyController.getLeaderboard);
+router.put('/:communityId/loyalty/user/:userId/balance', requireCommunityAdmin, loyaltyController.adjustUserBalance);
+router.post('/:communityId/loyalty/wipe', requireCommunityAdmin, loyaltyController.wipeAllCurrency);
+router.get('/:communityId/loyalty/stats', requireCommunityAdmin, loyaltyController.getStats);
+
+// Loyalty module - Giveaways
+router.get('/:communityId/loyalty/giveaways', requireCommunityAdmin, loyaltyController.getGiveaways);
+router.post('/:communityId/loyalty/giveaways', requireCommunityAdmin, loyaltyController.createGiveaway);
+router.get('/:communityId/loyalty/giveaways/:giveawayId/entries', requireCommunityAdmin, loyaltyController.getGiveawayEntries);
+router.post('/:communityId/loyalty/giveaways/:giveawayId/draw', requireCommunityAdmin, loyaltyController.drawGiveawayWinner);
+router.put('/:communityId/loyalty/giveaways/:giveawayId/end', requireCommunityAdmin, loyaltyController.endGiveaway);
+
+// Loyalty module - Games
+router.get('/:communityId/loyalty/games/config', requireCommunityAdmin, loyaltyController.getGamesConfig);
+router.put('/:communityId/loyalty/games/config', requireCommunityAdmin, loyaltyController.updateGamesConfig);
+router.get('/:communityId/loyalty/games/stats', requireCommunityAdmin, loyaltyController.getGamesStats);
+router.get('/:communityId/loyalty/games/recent', requireCommunityAdmin, loyaltyController.getRecentGames);
+
+// Loyalty module - Gear shop
+router.get('/:communityId/loyalty/gear/categories', requireCommunityAdmin, loyaltyController.getGearCategories);
+router.get('/:communityId/loyalty/gear/items', requireCommunityAdmin, loyaltyController.getGearItems);
+router.post('/:communityId/loyalty/gear/items', requireCommunityAdmin, loyaltyController.createGearItem);
+router.put('/:communityId/loyalty/gear/items/:itemId', requireCommunityAdmin, loyaltyController.updateGearItem);
+router.delete('/:communityId/loyalty/gear/items/:itemId', requireCommunityAdmin, loyaltyController.deleteGearItem);
+router.get('/:communityId/loyalty/gear/stats', requireCommunityAdmin, loyaltyController.getGearStats);
 
 export default router;

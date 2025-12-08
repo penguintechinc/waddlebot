@@ -213,6 +213,7 @@ All modules MUST implement Authentication, Authorization, and Auditing logging:
 - Complete features with proper error handling
 - Security, data integrity, and fault tolerance are non-negotiable
 - No technical debt - address issues properly the first time
+- Use task agents with cheaper models when possible (Haiku or Sonnet if must) to shart out jobs to smartly use tokens
 
 ### Git Workflow
 - **NEVER commit automatically** unless explicitly requested

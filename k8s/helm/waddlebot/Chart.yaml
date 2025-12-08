@@ -1,0 +1,16 @@
+apiVersion: v2
+name: waddlebot
+description: Multi-platform chat bot system with microservices architecture
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.23.0-0"
+keywords:
+  - chatbot
+  - twitch
+  - discord
+  - slack
+  - streaming
+home: https://github.com/waddlebot/waddlebot
+maintainers:
+  - name: WaddleBot Team

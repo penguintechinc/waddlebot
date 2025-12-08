@@ -49,6 +49,7 @@ export const config = {
     calendar: process.env.CALENDAR_API_URL || 'http://calendar:8030',
     memories: process.env.MEMORIES_API_URL || 'http://memories:8031',
     browserSource: process.env.BROWSER_SOURCE_API_URL || 'http://browser-source:8027',
+    loyalty: process.env.LOYALTY_API_URL || 'http://loyalty-interaction:8032',
   },
 
   // Custom Domains
