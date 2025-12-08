@@ -151,10 +151,12 @@ services:
   # =============================================================================
   # KONG API GATEWAY - Single external entry point for all APIs
   # Access via api.waddlebot.io - No direct access to internal services
+  # Kong Manager OSS GUI available at http://localhost:8002/manager
+  # Note: Kong is docker-compose only. Kubernetes uses Nginx Ingress Controller.
   # =============================================================================
 
   kong:
-    image: kong:3.5-alpine
+    image: kong:3.5-ubuntu
     container_name: waddlebot-kong
     environment:
       KONG_DATABASE: "off"
@@ -163,8 +165,11 @@ services:
       KONG_ADMIN_ACCESS_LOG: /dev/stdout
       KONG_PROXY_ERROR_LOG: /dev/stderr
       KONG_ADMIN_ERROR_LOG: /dev/stderr
-      KONG_ADMIN_LISTEN: "127.0.0.1:8001"
+      KONG_ADMIN_LISTEN: "0.0.0.0:8001"
       KONG_PROXY_LISTEN: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+      # Kong Manager OSS configuration
+      KONG_ADMIN_GUI_PATH: /manager
+      KONG_ADMIN_GUI_URL: http://localhost:8002/manager
       # SSL certificates (mount your own in production)
       # KONG_SSL_CERT: /etc/kong/ssl/api.waddlebot.io.crt
       # KONG_SSL_CERT_KEY: /etc/kong/ssl/api.waddlebot.io.key
@@ -174,8 +179,8 @@ services:
     ports:
       - "8000:8000"   # Kong HTTP API (api.waddlebot.io)
       - "8443:8443"   # Kong HTTPS API
-      # Admin API on localhost only for security
-      # - "127.0.0.1:8001:8001"
+      - "127.0.0.1:8001:8001"  # Kong Admin API (localhost only for security)
+      - "8002:8002"   # Kong Manager OSS GUI
     networks:
       - waddlebot-public
       - waddlebot-internal
