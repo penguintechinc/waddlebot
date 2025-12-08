@@ -28,6 +28,10 @@ RUN python -m grpc_tools.protoc \
 # Create log directory
 RUN mkdir -p /var/log/waddlebotlog
 
+# Copy standard healthcheck script
+COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
+RUN chmod 755 /usr/local/bin/healthcheck.py
+
 # Create non-root user
 RUN useradd -m -u 1000 waddlebot && \
     chown -R waddlebot:waddlebot /app /var/log/waddlebotlog
@@ -40,7 +44,7 @@ EXPOSE 50051 8070
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8070/health')"
+    CMD python3 /usr/local/bin/healthcheck.py http://localhost:50051/healthz
 
 # Run application
 CMD ["python", "app.py"]

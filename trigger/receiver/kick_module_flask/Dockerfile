@@ -22,6 +22,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY trigger/receiver/kick_module_flask/ .
 
+# Copy standard healthcheck script
+COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
+RUN chmod 755 /usr/local/bin/healthcheck.py
+
 # Create non-root user
 RUN useradd -m -s /bin/bash appuser && chown -R appuser:appuser /app
 USER appuser
@@ -31,7 +35,7 @@ EXPOSE 8007
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8007/health')" || exit 1
+    CMD python3 /usr/local/bin/healthcheck.py http://localhost:8007/healthz
 
 # Run application
 CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8007"]

@@ -22,6 +22,14 @@ RUN mkdir -p /var/log/waddlebotlog
 
 # Expose port
 EXPOSE 8030
+# Copy standard healthcheck script
+COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
+RUN chmod 755 /usr/local/bin/healthcheck.py
+
 
 # Run with Hypercorn
+# Health check (using /healthz for Kubernetes compatibility)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python3 /usr/local/bin/healthcheck.py http://localhost:8030/healthz
+
 CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8030", "--workers", "4"]

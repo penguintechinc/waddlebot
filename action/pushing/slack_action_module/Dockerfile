@@ -33,6 +33,10 @@ COPY services /app/services/
 # Create log directory
 RUN mkdir -p /var/log/waddlebotlog
 
+# Copy standard healthcheck script
+COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
+RUN chmod 755 /usr/local/bin/healthcheck.py
+
 # Create non-root user
 RUN useradd -m -u 1000 waddlebot && \
     chown -R waddlebot:waddlebot /app /var/log/waddlebotlog
@@ -48,7 +52,7 @@ EXPOSE 50052
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8071/health')" || exit 1
+    CMD python3 /usr/local/bin/healthcheck.py http://localhost:8071/healthz
 
 # Run with Hypercorn
 CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8071", "--workers", "4"]

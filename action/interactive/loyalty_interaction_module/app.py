@@ -90,13 +90,13 @@ async def startup():
         app.config['dal'] = dal
         logger.system("Database initialized")
 
-        # Initialize all services
+        # Initialize all services (order matters due to dependencies)
         currency_service = CurrencyService(dal)
-        earning_config_service = EarningConfigService(dal)
+        earning_config_service = EarningConfigService(dal, currency_service)
         giveaway_service = GiveawayService(dal, currency_service)
         minigame_service = MinigameService(dal, currency_service)
-        duel_service = DuelService(dal, currency_service)
         gear_service = GearService(dal, currency_service)
+        duel_service = DuelService(dal, currency_service, gear_service)
 
         logger.system("All services initialized", result="SUCCESS")
 

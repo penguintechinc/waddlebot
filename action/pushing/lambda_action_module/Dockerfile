@@ -35,10 +35,14 @@ RUN python -m grpc_tools.protoc \
 
 # Expose ports
 EXPOSE 50060 8080
+# Copy standard healthcheck script
+COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
+RUN chmod 755 /usr/local/bin/healthcheck.py
+
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"
+    CMD python3 /usr/local/bin/healthcheck.py http://localhost:50060/healthz
 
 # Run application with Hypercorn
 CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8080", "--workers", "4"]

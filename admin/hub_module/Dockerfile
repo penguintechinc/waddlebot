@@ -24,6 +24,10 @@ WORKDIR /app
 # Install dumb-init and build tools for native modules (bcrypt)
 RUN apk add --no-cache dumb-init python3 make g++
 
+# Copy standard healthcheck script
+COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
+RUN chmod 755 /usr/local/bin/healthcheck.py
+
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
@@ -58,7 +62,7 @@ EXPOSE 8060
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8060/health || exit 1
+    CMD python3 /usr/local/bin/healthcheck.py http://localhost:8060/healthz
 
 # Start with dumb-init
 ENTRYPOINT ["dumb-init", "--"]
