@@ -159,8 +159,12 @@ services:
     image: kong:3.5-ubuntu
     container_name: waddlebot-kong
     environment:
-      KONG_DATABASE: "off"
-      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: postgres
+      KONG_PG_PORT: 5432
+      KONG_PG_DATABASE: kong
+      KONG_PG_USER: kong
+      KONG_PG_PASSWORD: ${KONG_PG_PASSWORD:-kong_db_pass_change_me}
       KONG_PROXY_ACCESS_LOG: /dev/stdout
       KONG_ADMIN_ACCESS_LOG: /dev/stdout
       KONG_PROXY_ERROR_LOG: /dev/stderr
@@ -170,11 +174,13 @@ services:
       # Kong Manager OSS configuration
       KONG_ADMIN_GUI_PATH: /manager
       KONG_ADMIN_GUI_URL: http://localhost:8002/manager
+      KONG_ADMIN_GUI_AUTH: basic-auth
+      KONG_ADMIN_GUI_SESSION_CONF: '{"secret":"${KONG_SESSION_SECRET:-super-secret-session-key-change-in-production}","storage":"kong","cookie_secure":false,"cookie_samesite":"Lax"}'
+      KONG_ENFORCE_RBAC: "on"
       # SSL certificates (mount your own in production)
       # KONG_SSL_CERT: /etc/kong/ssl/api.waddlebot.io.crt
       # KONG_SSL_CERT_KEY: /etc/kong/ssl/api.waddlebot.io.key
     volumes:
-      - ./config/kong/kong.yml:/etc/kong/kong.yml:ro
       - ./config/kong/ssl:/etc/kong/ssl:ro
     ports:
       - "8000:8000"   # Kong HTTP API (api.waddlebot.io)
@@ -185,8 +191,12 @@ services:
       - waddlebot-public
       - waddlebot-internal
     depends_on:
-      - hub
-      - router
+      postgres:
+        condition: service_healthy
+      hub:
+        condition: service_started
+      router:
+        condition: service_started
     healthcheck:
       test: ["CMD", "kong", "health"]
       interval: 30s

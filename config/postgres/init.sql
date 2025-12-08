@@ -1170,12 +1170,49 @@ INSERT INTO loyalty_gear_items (category_id, name, display_name, item_type, rari
     (5, 'dragon_scale', 'Dragon Scale Shield', 'armor', 'epic', 10, 40, 10, 12000, '🐉')
 ON CONFLICT DO NOTHING;
 
+-- ============================================================
+-- KONG API GATEWAY DATABASE SETUP
+-- ============================================================
+-- Create separate database for Kong Gateway
+-- This keeps Kong configuration isolated from WaddleBot data
+
+-- Create Kong database owned by waddlebot (for admin access)
+CREATE DATABASE kong OWNER waddlebot;
+
+-- Create Kong user with limited permissions
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'kong') THEN
+        CREATE ROLE kong WITH LOGIN PASSWORD 'kong_db_pass_change_me';
+    END IF;
+END
+$$;
+
+GRANT CONNECT ON DATABASE kong TO kong;
+
+-- Switch to kong database
+\c kong
+
+-- Grant Kong user full access to public schema only
+GRANT ALL PRIVILEGES ON SCHEMA public TO kong;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO kong;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO kong;
+
+-- Set default privileges for future objects
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO kong;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO kong;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO kong;
+
+-- Switch back to waddlebot database (default)
+\c waddlebot
+
 -- Development notice
 DO $$
 BEGIN
     RAISE NOTICE 'WaddleBot development database initialized successfully';
     RAISE NOTICE 'Database: waddlebot';
     RAISE NOTICE 'Main user: waddlebot / waddlebot123';
+    RAISE NOTICE 'Kong database: kong (user: kong / kong_db_pass_change_me)';
     RAISE NOTICE 'Dev user: waddlebot_dev / dev123';
     RAISE NOTICE 'Global community created: waddlebot-global';
     RAISE NOTICE 'AI Researcher module tables created with pgvector support';
