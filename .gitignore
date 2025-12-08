@@ -170,4 +170,8 @@ cython_debug/
 config/kong/jwt-secrets.yml
 config/kong/ssl/*.key
 config/kong/ssl/*.crt
-config/kong/ssl/*.pemnode_modules/
+config/kong/ssl/*.pem
+
+# Node.js
+node_modules/
+package-lock.json
