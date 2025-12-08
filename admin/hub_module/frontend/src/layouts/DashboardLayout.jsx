@@ -35,6 +35,7 @@ function DashboardLayout() {
     { to: '/superadmin/communities', icon: HomeIcon, label: 'Communities' },
     { to: '/superadmin/modules', icon: BuildingStorefrontIcon, label: 'Module Registry' },
     { to: '/superadmin/platform-config', icon: Cog6ToothIcon, label: 'Platform Config' },
+    { to: '/superadmin/kong', icon: ShieldCheckIcon, label: 'Kong Gateway' },
   ];
 
   const communityNav = communityId

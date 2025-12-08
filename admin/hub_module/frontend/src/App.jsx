@@ -60,6 +60,7 @@ import SuperAdminCommunities from './pages/superadmin/SuperAdminCommunities';
 import SuperAdminCreateCommunity from './pages/superadmin/SuperAdminCreateCommunity';
 import SuperAdminModuleRegistry from './pages/superadmin/SuperAdminModuleRegistry';
 import SuperAdminPlatformConfig from './pages/superadmin/SuperAdminPlatformConfig';
+import SuperAdminKongGateway from './pages/superadmin/SuperAdminKongGateway';
 
 // Loading spinner
 function LoadingSpinner() {
@@ -181,6 +182,7 @@ function App() {
         <Route path="/superadmin/communities/new" element={<SuperAdminCreateCommunity />} />
         <Route path="/superadmin/modules" element={<SuperAdminModuleRegistry />} />
         <Route path="/superadmin/platform-config" element={<SuperAdminPlatformConfig />} />
+        <Route path="/superadmin/kong" element={<SuperAdminKongGateway />} />
       </Route>
 
       {/* Catch all - redirect to home */}

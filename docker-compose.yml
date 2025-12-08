@@ -239,8 +239,8 @@ services:
 
   hub:
     build:
-      context: ./admin/hub_module
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: admin/hub_module/Dockerfile
     container_name: waddlebot-hub
     environment:
       NODE_ENV: production

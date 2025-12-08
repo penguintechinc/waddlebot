@@ -5,13 +5,13 @@ FROM node:20-alpine AS frontend-build
 WORKDIR /app/frontend
 
 # Copy frontend package files
-COPY frontend/package*.json ./
+COPY admin/hub_module/frontend/package*.json ./
 
 # Install frontend dependencies
 RUN npm install
 
 # Copy frontend source
-COPY frontend/ ./
+COPY admin/hub_module/frontend/ ./
 
 # Build frontend
 RUN npm run build
@@ -33,7 +33,7 @@ RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
 # Copy backend package files
-COPY backend/package*.json ./
+COPY admin/hub_module/backend/package*.json ./
 
 # Install production dependencies only
 RUN npm install --only=production
@@ -42,7 +42,7 @@ RUN npm install --only=production
 RUN apk del python3 make g++
 
 # Copy backend source
-COPY --chown=nodejs:nodejs backend/src ./src
+COPY --chown=nodejs:nodejs admin/hub_module/backend/src ./src
 
 # Copy built frontend from build stage
 COPY --chown=nodejs:nodejs --from=frontend-build /app/frontend/dist ./public

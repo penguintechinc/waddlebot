@@ -344,3 +344,60 @@ export const streamApi = {
   getStreamDetails: (communityId, entityId) =>
     api.get(`/api/v1/communities/${communityId}/streams/${entityId}`),
 };
+
+// Kong Gateway API
+export const kongApi = {
+  // Status
+  getKongStatus: () => api.get('/api/v1/superadmin/kong/status'),
+
+  // Services
+  getKongServices: (params) => api.get('/api/v1/superadmin/kong/services', { params }),
+  getKongService: (id) => api.get(`/api/v1/superadmin/kong/services/${id}`),
+  createKongService: (data) => api.post('/api/v1/superadmin/kong/services', data),
+  updateKongService: (id, data) => api.put(`/api/v1/superadmin/kong/services/${id}`, data),
+  deleteKongService: (id) => api.delete(`/api/v1/superadmin/kong/services/${id}`),
+
+  // Routes
+  getKongRoutes: (params) => api.get('/api/v1/superadmin/kong/routes', { params }),
+  getKongRoute: (id) => api.get(`/api/v1/superadmin/kong/routes/${id}`),
+  getKongServiceRoutes: (serviceId) => api.get(`/api/v1/superadmin/kong/services/${serviceId}/routes`),
+  createKongRoute: (serviceId, data) => api.post(`/api/v1/superadmin/kong/services/${serviceId}/routes`, data),
+  updateKongRoute: (id, data) => api.put(`/api/v1/superadmin/kong/routes/${id}`, data),
+  deleteKongRoute: (id) => api.delete(`/api/v1/superadmin/kong/routes/${id}`),
+
+  // Plugins
+  getKongPlugins: (params) => api.get('/api/v1/superadmin/kong/plugins', { params }),
+  getKongPlugin: (id) => api.get(`/api/v1/superadmin/kong/plugins/${id}`),
+  createKongPlugin: (data) => api.post('/api/v1/superadmin/kong/plugins', data),
+  updateKongPlugin: (id, data) => api.put(`/api/v1/superadmin/kong/plugins/${id}`, data),
+  deleteKongPlugin: (id) => api.delete(`/api/v1/superadmin/kong/plugins/${id}`),
+
+  // Consumers
+  getKongConsumers: (params) => api.get('/api/v1/superadmin/kong/consumers', { params }),
+  getKongConsumer: (id) => api.get(`/api/v1/superadmin/kong/consumers/${id}`),
+  createKongConsumer: (data) => api.post('/api/v1/superadmin/kong/consumers', data),
+  deleteKongConsumer: (id) => api.delete(`/api/v1/superadmin/kong/consumers/${id}`),
+
+  // Upstreams
+  getKongUpstreams: (params) => api.get('/api/v1/superadmin/kong/upstreams', { params }),
+  getKongUpstream: (id) => api.get(`/api/v1/superadmin/kong/upstreams/${id}`),
+  createKongUpstream: (data) => api.post('/api/v1/superadmin/kong/upstreams', data),
+  updateKongUpstream: (id, data) => api.put(`/api/v1/superadmin/kong/upstreams/${id}`, data),
+  deleteKongUpstream: (id) => api.delete(`/api/v1/superadmin/kong/upstreams/${id}`),
+
+  // Targets
+  getKongTargets: (upstreamId, params) => api.get(`/api/v1/superadmin/kong/upstreams/${upstreamId}/targets`, { params }),
+  createKongTarget: (upstreamId, data) => api.post(`/api/v1/superadmin/kong/upstreams/${upstreamId}/targets`, data),
+  deleteKongTarget: (upstreamId, targetId) => api.delete(`/api/v1/superadmin/kong/upstreams/${upstreamId}/targets/${targetId}`),
+
+  // Certificates
+  getKongCertificates: (params) => api.get('/api/v1/superadmin/kong/certificates', { params }),
+  getKongCertificate: (id) => api.get(`/api/v1/superadmin/kong/certificates/${id}`),
+  createKongCertificate: (data) => api.post('/api/v1/superadmin/kong/certificates', data),
+  deleteKongCertificate: (id) => api.delete(`/api/v1/superadmin/kong/certificates/${id}`),
+
+  // SNIs
+  getKongSNIs: (params) => api.get('/api/v1/superadmin/kong/snis', { params }),
+  createKongSNI: (data) => api.post('/api/v1/superadmin/kong/snis', data),
+  deleteKongSNI: (id) => api.delete(`/api/v1/superadmin/kong/snis/${id}`),
+};
