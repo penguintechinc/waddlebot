@@ -1,0 +1,31 @@
+# Twitch Action Module Requirements
+
+# Web Framework
+quart==0.19.4
+hypercorn==0.16.0
+
+# gRPC
+grpcio==1.60.0
+grpcio-tools==1.60.0
+protobuf==4.25.1
+
+# Database
+pydal==20231215.1
+
+# HTTP Client
+aiohttp==3.9.1
+
+# Authentication
+pyjwt==2.8.0
+cryptography==41.0.7
+
+# Utilities
+python-dateutil==2.8.2
+
+# Logging
+python-json-logger==2.0.7
+
+# Testing (optional)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0

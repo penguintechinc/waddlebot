@@ -1,0 +1,27 @@
+name: Build spotify-interaction
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'action/interactive/spotify_interaction_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-spotify-interaction.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'action/interactive/spotify_interaction_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build spotify-interaction Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'action/interactive/spotify_interaction_module'
+      module_name: 'spotify-interaction'
+      module_port: '8016'
+    secrets: inherit

@@ -1,0 +1,373 @@
+# WaddleBot Helm Chart - Local/MicroK8s Overrides
+# This file contains overrides for local development and MicroK8s deployments
+
+# Global settings for local development
+global:
+  imageRegistry: "localhost:32000/waddlebot"
+  imagePullPolicy: Always
+  storageClass: "microk8s-hostpath"
+
+# Namespace remains the same
+namespace:
+  create: true
+  name: waddlebot
+
+# Infrastructure Services - Local Configuration
+infrastructure:
+  # PostgreSQL - Single instance for local
+  postgresql:
+    enabled: true
+    replicas: 1
+    resourcePreset: medium
+    persistence:
+      enabled: true
+      size: 5Gi
+    readReplicas:
+      enabled: false
+
+  # Redis - Single instance for local
+  redis:
+    enabled: true
+    replicas: 1
+    resourcePreset: small
+    persistence:
+      enabled: true
+      size: 2Gi
+
+  # MinIO - Single instance for local
+  minio:
+    enabled: true
+    replicas: 1
+    resourcePreset: small
+    persistence:
+      enabled: true
+      size: 10Gi
+
+  # Ollama - With GPU support if available
+  ollama:
+    enabled: true
+    replicas: 1
+    resourcePreset: medium
+    persistence:
+      enabled: true
+      size: 20Gi
+    gpu:
+      enabled: false  # Set to true if GPU available
+
+  # Qdrant - Single instance for local
+  qdrant:
+    enabled: true
+    replicas: 1
+    resourcePreset: small
+    persistence:
+      enabled: true
+      size: 5Gi
+
+  # OpenWhisk - Disabled for local
+  openwhisk:
+    enabled: false
+
+# Processing Module - Local Configuration
+processing:
+  router:
+    enabled: true
+    replicas: 1
+    resourcePreset: medium
+    autoscaling:
+      enabled: false
+
+# Admin Modules - Local Configuration
+admin:
+  hub:
+    enabled: true
+    replicas: 1
+    resourcePreset: medium
+
+# Core Modules - Local Configuration
+core:
+  identity:
+    enabled: true
+    replicas: 1
+    resourcePreset: small
+
+  labels:
+    enabled: true
+    replicas: 1
+    resourcePreset: small
+
+  browserSource:
+    enabled: true
+    replicas: 1
+    resourcePreset: small
+
+  reputation:
+    enabled: true
+    replicas: 1
+    resourcePreset: small
+
+  community:
+    enabled: true
+    replicas: 1
+    resourcePreset: small
+
+  aiResearcher:
+    enabled: true
+    replicas: 1
+    resourcePreset: medium
+
+# Trigger Modules - Local Configuration
+trigger:
+  receivers:
+    twitch:
+      enabled: true
+      replicas: 1
+      resourcePreset: medium
+
+    discord:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+    slack:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+    youtubeLive:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+    kick:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+# Action Modules - Local Configuration
+action:
+  interactive:
+    ai:
+      enabled: true
+      replicas: 1
+      resourcePreset: medium
+
+    alias:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+    shoutout:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+    inventory:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+    calendar:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+    memories:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+    youtubeMusic:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+    spotify:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+    loyalty:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+  platformActions:
+    discord:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+    slack:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+    twitch:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+    youtube:
+      enabled: true
+      replicas: 1
+      resourcePreset: small
+
+# Ingress Configuration - Local/MicroK8s
+ingress:
+  enabled: true
+  className: "public"  # MicroK8s default ingress class
+  annotations:
+    # Remove cert-manager for local
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  hosts:
+    - host: waddlebot.local
+      paths:
+        - path: /
+          pathType: Prefix
+          service: hub
+          port: 8060
+        - path: /api/router
+          pathType: Prefix
+          service: router
+          port: 8000
+        - path: /api/identity
+          pathType: Prefix
+          service: identity-core
+          port: 8050
+        - path: /api/labels
+          pathType: Prefix
+          service: labels-core
+          port: 8023
+        - path: /api/browser-source
+          pathType: Prefix
+          service: browser-source
+          port: 8027
+        - path: /api/reputation
+          pathType: Prefix
+          service: reputation
+          port: 8021
+        - path: /api/community
+          pathType: Prefix
+          service: community
+          port: 8020
+        - path: /webhooks/twitch
+          pathType: Prefix
+          service: twitch-collector
+          port: 8002
+        - path: /webhooks/discord
+          pathType: Prefix
+          service: discord-collector
+          port: 8003
+        - path: /webhooks/slack
+          pathType: Prefix
+          service: slack-collector
+          port: 8004
+  tls: []  # No TLS for local development
+
+# Shared Environment Variables - Local Overrides
+sharedEnv:
+  # Database Configuration
+  DB_HOST: "postgresql"
+  DB_PORT: "5432"
+  DB_NAME: "waddlebot"
+  DB_USER: "waddlebot"
+  DB_POOL_SIZE: "10"
+  DB_MAX_OVERFLOW: "5"
+
+  # Redis Configuration
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+
+  # MinIO Configuration
+  MINIO_ENDPOINT: "minio:9000"
+  MINIO_SECURE: "false"
+
+  # Ollama Configuration
+  OLLAMA_HOST: "http://ollama:11434"
+  OLLAMA_MODEL: "llama3.1"
+
+  # Qdrant Configuration
+  QDRANT_HOST: "qdrant"
+  QDRANT_PORT: "6333"
+  QDRANT_GRPC_PORT: "6334"
+
+  # Router Configuration
+  ROUTER_URL: "http://router:8000"
+
+  # Hub Configuration
+  HUB_URL: "http://hub:8060"
+
+  # Logging Configuration
+  LOG_LEVEL: "DEBUG"
+  LOG_FORMAT: "json"
+  LOG_FILE_ENABLED: "true"
+  LOG_FILE_PATH: "/var/log/waddlebotlog"
+  LOG_FILE_MAX_BYTES: "5242880"
+  LOG_FILE_BACKUP_COUNT: "3"
+
+  # License Server
+  LICENSE_SERVER_URL: "https://license.penguintech.io"
+  RELEASE_MODE: "false"
+
+  # Feature Flags
+  ENABLE_METRICS: "false"
+  ENABLE_TRACING: "false"
+  ENABLE_PROFILING: "false"
+
+  # Development mode
+  DEBUG: "true"
+  DEVELOPMENT_MODE: "true"
+
+# Persistent Volume Claims - Smaller for local
+persistence:
+  logs:
+    enabled: true
+    size: 2Gi
+    storageClass: "microk8s-hostpath"
+    accessMode: ReadWriteMany
+
+# Resource presets - Reduced for local development
+resourcePresets:
+  small:
+    cpu: "50m"
+    memory: "64Mi"
+    cpuLimit: "200m"
+    memoryLimit: "256Mi"
+  medium:
+    cpu: "100m"
+    memory: "128Mi"
+    cpuLimit: "500m"
+    memoryLimit: "512Mi"
+  large:
+    cpu: "200m"
+    memory: "256Mi"
+    cpuLimit: "1000m"
+    memoryLimit: "1Gi"
+
+# Monitoring - Disabled for local
+monitoring:
+  prometheus:
+    enabled: false
+  grafana:
+    enabled: false
+
+# Network Policies - Disabled for local
+networkPolicy:
+  enabled: false
+
+# Pod Security Context - Relaxed for local
+podSecurityContext:
+  runAsNonRoot: false
+  fsGroup: 1000
+
+# Container Security Context - Relaxed for local
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: false
+  capabilities:
+    drop:
+      - ALL

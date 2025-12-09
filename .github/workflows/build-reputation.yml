@@ -1,0 +1,27 @@
+name: Build reputation
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'core/reputation_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-reputation.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'core/reputation_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build reputation Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'core/reputation_module'
+      module_name: 'reputation'
+      module_port: '8054'
+    secrets: inherit

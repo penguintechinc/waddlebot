@@ -1,0 +1,27 @@
+name: Build identity-core
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'core/identity_core_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-identity-core.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'core/identity_core_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build identity-core Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'core/identity_core_module'
+      module_name: 'identity-core'
+      module_port: '8050'
+    secrets: inherit

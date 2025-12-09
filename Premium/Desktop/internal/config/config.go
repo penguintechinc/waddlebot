@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -41,6 +42,57 @@ type Config struct {
 	ModulesDir         string `mapstructure:"modules-dir"`
 	ModuleTimeout      int    `mapstructure:"module-timeout"`
 	MaxConcurrentTasks int    `mapstructure:"max-concurrent-tasks"`
+
+	// OBS Configuration
+	OBS OBSConfig `mapstructure:"obs"`
+
+	// Gateway Configuration
+	Gateway GatewayConfig `mapstructure:"gateway"`
+
+	// Scripting Configuration
+	Scripting ScriptingConfig `mapstructure:"scripting"`
+}
+
+// OBSConfig holds OBS WebSocket connection configuration
+type OBSConfig struct {
+	Enabled              bool          `mapstructure:"enabled"`
+	Host                 string        `mapstructure:"host"`
+	Port                 int           `mapstructure:"port"`
+	Password             string        `mapstructure:"password"`
+	AutoReconnect        bool          `mapstructure:"auto-reconnect"`
+	ReconnectInterval    time.Duration `mapstructure:"reconnect-interval"`
+	MaxReconnectInterval time.Duration `mapstructure:"max-reconnect-interval"`
+	Timeout              time.Duration `mapstructure:"timeout"`
+}
+
+// GatewayConfig holds local API gateway configuration
+type GatewayConfig struct {
+	Enabled        bool     `mapstructure:"enabled"`
+	Host           string   `mapstructure:"host"`
+	Port           int      `mapstructure:"port"`
+	EnableAuth     bool     `mapstructure:"enable-auth"`
+	APIKey         string   `mapstructure:"api-key"`
+	RateLimitRPS   int      `mapstructure:"rate-limit-rps"`
+	EnableCORS     bool     `mapstructure:"enable-cors"`
+	AllowedOrigins []string `mapstructure:"allowed-origins"`
+	WSPingInterval int      `mapstructure:"ws-ping-interval"`
+}
+
+// ScriptingConfig holds scripting engine configuration
+type ScriptingConfig struct {
+	Enabled          bool   `mapstructure:"enabled"`
+	EnableLua        bool   `mapstructure:"enable-lua"`
+	EnablePython     bool   `mapstructure:"enable-python"`
+	EnablePowerShell bool   `mapstructure:"enable-powershell"`
+	EnableBash       bool   `mapstructure:"enable-bash"`
+	ScriptsDir       string `mapstructure:"scripts-dir"`
+	DefaultTimeout   int    `mapstructure:"default-timeout"`
+	MaxMemoryMB      int    `mapstructure:"max-memory-mb"`
+	AllowNetwork     bool   `mapstructure:"allow-network"`
+	AllowFileSystem  bool   `mapstructure:"allow-filesystem"`
+	PythonPath       string `mapstructure:"python-path"`
+	PowerShellPath   string `mapstructure:"powershell-path"`
+	BashPath         string `mapstructure:"bash-path"`
 }
 
 // Load loads the configuration from various sources
@@ -70,6 +122,11 @@ func Load() (*Config, error) {
 		cfg.ModulesDir = filepath.Join(cfg.DataDir, "modules")
 	}
 
+	// Set default scripts directory
+	if cfg.Scripting.ScriptsDir == "" {
+		cfg.Scripting.ScriptsDir = filepath.Join(cfg.DataDir, "scripts")
+	}
+
 	// Ensure data directory exists
 	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
@@ -78,6 +135,13 @@ func Load() (*Config, error) {
 	// Ensure modules directory exists
 	if err := os.MkdirAll(cfg.ModulesDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create modules directory: %w", err)
+	}
+
+	// Ensure scripts directory exists if scripting is enabled
+	if cfg.Scripting.Enabled {
+		if err := os.MkdirAll(cfg.Scripting.ScriptsDir, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create scripts directory: %w", err)
+		}
 	}
 
 	// Set platform-specific defaults
@@ -98,6 +162,42 @@ func setDefaults() {
 	viper.SetDefault("webauthn-timeout", 60)
 	viper.SetDefault("module-timeout", 30)
 	viper.SetDefault("max-concurrent-tasks", 10)
+
+	// OBS defaults
+	viper.SetDefault("obs.enabled", true)
+	viper.SetDefault("obs.host", "localhost")
+	viper.SetDefault("obs.port", 4455)
+	viper.SetDefault("obs.password", "")
+	viper.SetDefault("obs.auto-reconnect", true)
+	viper.SetDefault("obs.reconnect-interval", time.Second)
+	viper.SetDefault("obs.max-reconnect-interval", 30*time.Second)
+	viper.SetDefault("obs.timeout", 10*time.Second)
+
+	// Gateway defaults
+	viper.SetDefault("gateway.enabled", true)
+	viper.SetDefault("gateway.host", "127.0.0.1")
+	viper.SetDefault("gateway.port", 8090)
+	viper.SetDefault("gateway.enable-auth", true)
+	viper.SetDefault("gateway.api-key", "")
+	viper.SetDefault("gateway.rate-limit-rps", 100)
+	viper.SetDefault("gateway.enable-cors", false)
+	viper.SetDefault("gateway.allowed-origins", []string{})
+	viper.SetDefault("gateway.ws-ping-interval", 30)
+
+	// Scripting defaults
+	viper.SetDefault("scripting.enabled", true)
+	viper.SetDefault("scripting.enable-lua", true)
+	viper.SetDefault("scripting.enable-python", true)
+	viper.SetDefault("scripting.enable-powershell", true)
+	viper.SetDefault("scripting.enable-bash", true)
+	viper.SetDefault("scripting.scripts-dir", "")
+	viper.SetDefault("scripting.default-timeout", 30)
+	viper.SetDefault("scripting.max-memory-mb", 256)
+	viper.SetDefault("scripting.allow-network", false)
+	viper.SetDefault("scripting.allow-filesystem", false)
+	viper.SetDefault("scripting.python-path", "python3")
+	viper.SetDefault("scripting.powershell-path", "pwsh")
+	viper.SetDefault("scripting.bash-path", "bash")
 }
 
 // setPlatformDefaults sets platform-specific default values

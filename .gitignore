@@ -1,3 +1,5 @@
+.PLAN*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -160,3 +162,19 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+
+.PLAN*
+.TODO
+.REQUIREMENTS
+
+# Kong API Gateway secrets
+config/kong/jwt-secrets.yml
+config/kong/ssl/*.key
+config/kong/ssl/*.crt
+config/kong/ssl/*.pem
+
+# Node.js
+node_modules/
+package-lock.json
+

@@ -1,0 +1,27 @@
+name: Build community
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'core/community_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-community.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'core/community_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build community Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'core/community_module'
+      module_name: 'community'
+      module_port: '8053'
+    secrets: inherit

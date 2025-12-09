@@ -2,11 +2,11 @@ package testutils
 
 import (
 	"context"
+	"fmt"
 	"time"
 
-	"waddlebot-bridge/internal/auth"
 	"waddlebot-bridge/internal/config"
-	"waddlebot-bridge/internal/modules"
+	"waddlebot-bridge/internal/models"
 	"waddlebot-bridge/internal/storage"
 )
 
@@ -22,11 +22,13 @@ func NewMockStorage() *MockStorage {
 	}
 }
 
+// Set stores a value in mock storage
 func (m *MockStorage) Set(key string, value []byte) error {
 	m.data[key] = value
 	return nil
 }
 
+// Get retrieves a value from mock storage
 func (m *MockStorage) Get(key string) ([]byte, error) {
 	if value, exists := m.data[key]; exists {
 		return value, nil
@@ -34,16 +36,19 @@ func (m *MockStorage) Get(key string) ([]byte, error) {
 	return nil, storage.ErrKeyNotFound
 }
 
+// Delete removes a key from mock storage
 func (m *MockStorage) Delete(key string) error {
 	delete(m.data, key)
 	return nil
 }
 
+// Exists checks if a key exists in mock storage
 func (m *MockStorage) Exists(key string) bool {
 	_, exists := m.data[key]
 	return exists
 }
 
+// List returns all keys with a given prefix in mock storage
 func (m *MockStorage) List(prefix string) ([]string, error) {
 	var keys []string
 	for key := range m.data {
@@ -54,22 +59,27 @@ func (m *MockStorage) List(prefix string) ([]string, error) {
 	return keys, nil
 }
 
+// SetWithBucket stores a value in a named bucket
 func (m *MockStorage) SetWithBucket(bucketName, key string, value []byte) error {
 	return m.Set(bucketName+":"+key, value)
 }
 
+// GetWithBucket retrieves a value from a named bucket
 func (m *MockStorage) GetWithBucket(bucketName, key string) ([]byte, error) {
 	return m.Get(bucketName + ":" + key)
 }
 
+// DeleteWithBucket removes a key from a named bucket
 func (m *MockStorage) DeleteWithBucket(bucketName, key string) error {
 	return m.Delete(bucketName + ":" + key)
 }
 
+// ListWithBucket returns all keys in a bucket with a given prefix
 func (m *MockStorage) ListWithBucket(bucketName, prefix string) ([]string, error) {
 	return m.List(bucketName + ":" + prefix)
 }
 
+// GetAllFromBucket retrieves all key-value pairs from a named bucket
 func (m *MockStorage) GetAllFromBucket(bucketName string) (map[string][]byte, error) {
 	result := make(map[string][]byte)
 	bucketPrefix := bucketName + ":"
@@ -82,6 +92,7 @@ func (m *MockStorage) GetAllFromBucket(bucketName string) (map[string][]byte, er
 	return result, nil
 }
 
+// ClearBucket removes all keys from a named bucket
 func (m *MockStorage) ClearBucket(bucketName string) error {
 	bucketPrefix := bucketName + ":"
 	for key := range m.data {
@@ -92,14 +103,17 @@ func (m *MockStorage) ClearBucket(bucketName string) error {
 	return nil
 }
 
+// Close closes the mock storage
 func (m *MockStorage) Close() error {
 	return nil
 }
 
+// Backup creates a backup of the mock storage (no-op for mock)
 func (m *MockStorage) Backup(backupPath string) error {
 	return nil
 }
 
+// Stats returns statistics about the mock storage
 func (m *MockStorage) Stats() map[string]interface{} {
 	return map[string]interface{}{
 		"keys": len(m.data),
@@ -121,6 +135,7 @@ func NewMockModule(name string) *MockModule {
 	}
 }
 
+// Initialize initializes the mock module
 func (m *MockModule) Initialize(config map[string]string) error {
 	if m.initFunc != nil {
 		return m.initFunc(config)
@@ -128,10 +143,11 @@ func (m *MockModule) Initialize(config map[string]string) error {
 	return nil
 }
 
-func (m *MockModule) GetInfo() *modules.ModuleInfo {
-	var actions []modules.ActionInfo
+// GetInfo returns information about the mock module
+func (m *MockModule) GetInfo() *models.ModuleInfo {
+	var actions []models.ActionInfo
 	for actionName := range m.actions {
-		actions = append(actions, modules.ActionInfo{
+		actions = append(actions, models.ActionInfo{
 			Name:        actionName,
 			Description: "Test action",
 			Parameters:  map[string]interface{}{},
@@ -140,7 +156,7 @@ func (m *MockModule) GetInfo() *modules.ModuleInfo {
 		})
 	}
 
-	return &modules.ModuleInfo{
+	return &models.ModuleInfo{
 		Name:        m.name,
 		Version:     "1.0.0",
 		Description: "Mock module for testing",
@@ -151,17 +167,21 @@ func (m *MockModule) GetInfo() *modules.ModuleInfo {
 	}
 }
 
+// ExecuteAction executes an action in the mock module
 func (m *MockModule) ExecuteAction(ctx context.Context, action string, parameters map[string]string) (map[string]interface{}, error) {
 	if actionFunc, exists := m.actions[action]; exists {
 		return actionFunc(ctx, parameters)
 	}
-	return nil, modules.ErrActionNotFound
+	// Return a generic error instead of importing modules for the error type
+	return nil, fmt.Errorf("action not found: %s", action)
 }
 
-func (m *MockModule) GetActions() []modules.ActionInfo {
+// GetActions returns available actions in the mock module
+func (m *MockModule) GetActions() []models.ActionInfo {
 	return m.GetInfo().Actions
 }
 
+// Cleanup cleans up the mock module resources
 func (m *MockModule) Cleanup() error {
 	return nil
 }
@@ -171,7 +191,7 @@ func (m *MockModule) AddAction(name string, handler func(ctx context.Context, pa
 	m.actions[name] = handler
 }
 
-// SetInitFunc sets the initialization function
+// SetInitFunc sets the initialization function for the mock module
 func (m *MockModule) SetInitFunc(fn func(config map[string]string) error) {
 	m.initFunc = fn
 }
@@ -230,18 +250,18 @@ func (m *MockWebAuthnManager) AddSession(sessionID, userID, communityID string) 
 	}
 }
 
-// ValidateSession validates a session
-func (m *MockWebAuthnManager) ValidateSession(sessionID string) (*auth.AuthSession, error) {
+// ValidateSession validates a session in the mock manager
+func (m *MockWebAuthnManager) ValidateSession(sessionID string) (*models.AuthSession, error) {
 	session, exists := m.sessions[sessionID]
 	if !exists {
-		return nil, auth.ErrSessionNotFound
-	}
-	
-	if !session.Valid || time.Now().After(session.ExpiresAt) {
-		return nil, auth.ErrSessionExpired
+		return nil, fmt.Errorf("session not found")
 	}
 
-	return &auth.AuthSession{
+	if !session.Valid || time.Now().After(session.ExpiresAt) {
+		return nil, fmt.Errorf("session expired")
+	}
+
+	return &models.AuthSession{
 		ID:          session.ID,
 		UserID:      session.UserID,
 		CommunityID: session.CommunityID,
@@ -250,16 +270,16 @@ func (m *MockWebAuthnManager) ValidateSession(sessionID string) (*auth.AuthSessi
 	}, nil
 }
 
-// IsAuthenticated checks if authenticated
+// IsAuthenticated checks if any session is currently authenticated
 func (m *MockWebAuthnManager) IsAuthenticated() bool {
 	return len(m.sessions) > 0
 }
 
-// GetCurrentSession returns current session
-func (m *MockWebAuthnManager) GetCurrentSession() *auth.AuthSession {
+// GetCurrentSession returns the current active session from the mock manager
+func (m *MockWebAuthnManager) GetCurrentSession() *models.AuthSession {
 	for _, session := range m.sessions {
 		if session.Valid && time.Now().Before(session.ExpiresAt) {
-			return &auth.AuthSession{
+			return &models.AuthSession{
 				ID:          session.ID,
 				UserID:      session.UserID,
 				CommunityID: session.CommunityID,
@@ -274,33 +294,33 @@ func (m *MockWebAuthnManager) GetCurrentSession() *auth.AuthSession {
 // TestConfig creates a test configuration
 func TestConfig() *config.Config {
 	return &config.Config{
-		APIURL:      "http://test.waddlebot.io",
-		CommunityID: "test-community",
-		UserID:      "test-user",
-		PollInterval: 30,
-		WebPort:     8080,
-		WebHost:     "127.0.0.1",
-		DataDir:     "/tmp/waddlebot-test",
-		LogLevel:    "info",
+		APIURL:              "http://test.waddlebot.io",
+		CommunityID:         "test-community",
+		UserID:              "test-user",
+		PollInterval:        30,
+		WebPort:             8080,
+		WebHost:             "127.0.0.1",
+		DataDir:             "/tmp/waddlebot-test",
+		LogLevel:            "info",
 		WebAuthnDisplayName: "Test Bridge",
 		WebAuthnOrigin:      "http://127.0.0.1:8080",
 		WebAuthnTimeout:     60,
-		JWTSecret:          "test-secret",
-		ModulesDir:         "/tmp/waddlebot-test/modules",
-		ModuleTimeout:      30,
-		MaxConcurrentTasks: 10,
+		JWTSecret:           "test-secret",
+		ModulesDir:          "/tmp/waddlebot-test/modules",
+		ModuleTimeout:       30,
+		MaxConcurrentTasks:  10,
 	}
 }
 
-// TestModule creates a test module
+// TestModule creates a test module with common test actions
 func TestModule(name string) *MockModule {
 	module := NewMockModule(name)
-	
+
 	// Add some basic test actions
 	module.AddAction("ping", func(ctx context.Context, parameters map[string]string) (map[string]interface{}, error) {
 		return map[string]interface{}{"message": "pong"}, nil
 	})
-	
+
 	module.AddAction("echo", func(ctx context.Context, parameters map[string]string) (map[string]interface{}, error) {
 		message := parameters["message"]
 		if message == "" {
@@ -308,23 +328,18 @@ func TestModule(name string) *MockModule {
 		}
 		return map[string]interface{}{"echo": message}, nil
 	})
-	
+
 	module.AddAction("fail", func(ctx context.Context, parameters map[string]string) (map[string]interface{}, error) {
-		return nil, modules.ErrActionFailed
+		return nil, fmt.Errorf("action execution failed")
 	})
-	
+
 	return module
 }
 
 // ErrKeyNotFound is returned when a key is not found
 var ErrKeyNotFound = storage.ErrKeyNotFound
 
-// Define common test errors
-var (
-	ErrTestFailed = fmt.Errorf("test failed")
-)
-
-// Helper function to create a test context with timeout
+// TestContext creates a test context with a 5 second timeout
 func TestContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 5*time.Second)
 }

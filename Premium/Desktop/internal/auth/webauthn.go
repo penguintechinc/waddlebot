@@ -3,15 +3,16 @@ package auth
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"waddlebot-bridge/internal/config"
 	"waddlebot-bridge/internal/logger"
+	"waddlebot-bridge/internal/models"
 	"waddlebot-bridge/internal/storage"
 )
 
@@ -21,19 +22,12 @@ type WebAuthnManager struct {
 	storage    storage.Storage
 	webauthn   *webauthn.WebAuthn
 	logger     *logrus.Logger
-	sessions   map[string]*AuthSession
+	sessions   map[string]*models.AuthSession
 	jwtSecret  []byte
 }
 
-// AuthSession represents an active authentication session
-type AuthSession struct {
-	ID          string    `json:"id"`
-	UserID      string    `json:"user_id"`
-	CommunityID string    `json:"community_id"`
-	IssuedAt    time.Time `json:"issued_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	Credential  []byte    `json:"credential"`
-}
+// Session is an alias for models.AuthSession to avoid package name stuttering
+type Session = models.AuthSession
 
 // User represents a WebAuthn user
 type User struct {
@@ -72,16 +66,23 @@ func (u *User) WebAuthnIcon() string {
 // NewWebAuthnManager creates a new WebAuthn manager
 func NewWebAuthnManager(cfg *config.Config, store storage.Storage) (*WebAuthnManager, error) {
 	// Configure WebAuthn
+	timeoutDuration := time.Duration(cfg.WebAuthnTimeout) * time.Second
 	wconfig := &webauthn.Config{
 		RPDisplayName: cfg.WebAuthnDisplayName,
 		RPID:          "localhost",
 		RPOrigins:     []string{cfg.GetWebAuthnURL()},
-		AuthenticatorSelection: webauthn.AuthenticatorSelection{
-			RequireResidentKey: webauthn.ResidentKeyNotRequired(),
-			ResidentKey:        webauthn.ResidentKeyNotRequired(),
-			UserVerification:   webauthn.VerificationRequired,
+		AuthenticatorSelection: protocol.AuthenticatorSelection{
+			ResidentKey:      protocol.ResidentKeyRequirementDiscouraged,
+			UserVerification: protocol.VerificationRequired,
 		},
-		Timeout: time.Duration(cfg.WebAuthnTimeout) * time.Second,
+		Timeouts: webauthn.TimeoutsConfig{
+			Registration: webauthn.TimeoutConfig{
+				Timeout: timeoutDuration,
+			},
+			Login: webauthn.TimeoutConfig{
+				Timeout: timeoutDuration,
+			},
+		},
 	}
 
 	// Create WebAuthn instance
@@ -101,7 +102,7 @@ func NewWebAuthnManager(cfg *config.Config, store storage.Storage) (*WebAuthnMan
 		storage:   store,
 		webauthn:  webAuthn,
 		logger:    logger.GetLogger(),
-		sessions:  make(map[string]*AuthSession),
+		sessions:  make(map[string]*Session),
 		jwtSecret: jwtSecret,
 	}
 
@@ -112,7 +113,7 @@ func NewWebAuthnManager(cfg *config.Config, store storage.Storage) (*WebAuthnMan
 }
 
 // StartRegistration starts the WebAuthn registration process
-func (m *WebAuthnManager) StartRegistration(userID, communityID string) (*webauthn.CredentialCreation, error) {
+func (m *WebAuthnManager) StartRegistration(userID, communityID string) (*protocol.CredentialCreation, error) {
 	// Check if user is already registered
 	if _, exists := m.getUserByID(userID); exists {
 		return nil, fmt.Errorf("user %s is already registered", userID)
@@ -164,7 +165,7 @@ func (m *WebAuthnManager) StartRegistration(userID, communityID string) (*webaut
 }
 
 // CompleteRegistration completes the WebAuthn registration process
-func (m *WebAuthnManager) CompleteRegistration(userID string, response []byte) (*AuthSession, error) {
+func (m *WebAuthnManager) CompleteRegistration(userID string, response []byte) (*models.AuthSession, error) {
 	// Get stored session
 	sessionKey := fmt.Sprintf("registration_session_%s", userID)
 	sessionData, err := m.storage.Get(sessionKey)
@@ -190,13 +191,13 @@ func (m *WebAuthnManager) CompleteRegistration(userID string, response []byte) (
 	}
 
 	// Parse the credential creation response
-	var credentialCreationResponse webauthn.CredentialCreationResponse
-	if err := json.Unmarshal(response, &credentialCreationResponse); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal credential response: %w", err)
+	parsedResponse, err := protocol.ParseCredentialCreationResponseBytes(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse credential response: %w", err)
 	}
 
 	// Complete registration
-	credential, err := m.webauthn.CreateCredential(&user, session, &credentialCreationResponse)
+	credential, err := m.webauthn.CreateCredential(&user, session, parsedResponse)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create credential: %w", err)
 	}
@@ -220,7 +221,7 @@ func (m *WebAuthnManager) CompleteRegistration(userID string, response []byte) (
 	m.storage.Delete(userKey)
 
 	// Create auth session
-	authSession := &AuthSession{
+	authSession := &models.AuthSession{
 		ID:          uuid.New().String(),
 		UserID:      userID,
 		CommunityID: user.CommunityID,
@@ -243,7 +244,7 @@ func (m *WebAuthnManager) CompleteRegistration(userID string, response []byte) (
 }
 
 // StartAuthentication starts the WebAuthn authentication process
-func (m *WebAuthnManager) StartAuthentication(userID string) (*webauthn.CredentialAssertion, error) {
+func (m *WebAuthnManager) StartAuthentication(userID string) (*protocol.CredentialAssertion, error) {
 	// Get user
 	user, exists := m.getUserByID(userID)
 	if !exists {
@@ -276,7 +277,7 @@ func (m *WebAuthnManager) StartAuthentication(userID string) (*webauthn.Credenti
 }
 
 // CompleteAuthentication completes the WebAuthn authentication process
-func (m *WebAuthnManager) CompleteAuthentication(userID string, response []byte) (*AuthSession, error) {
+func (m *WebAuthnManager) CompleteAuthentication(userID string, response []byte) (*models.AuthSession, error) {
 	// Get stored session
 	sessionKey := fmt.Sprintf("auth_session_%s", userID)
 	sessionData, err := m.storage.Get(sessionKey)
@@ -296,13 +297,13 @@ func (m *WebAuthnManager) CompleteAuthentication(userID string, response []byte)
 	}
 
 	// Parse the credential assertion response
-	var credentialAssertionResponse webauthn.CredentialAssertionResponse
-	if err := json.Unmarshal(response, &credentialAssertionResponse); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal credential response: %w", err)
+	parsedResponse, err := protocol.ParseCredentialRequestResponseBytes(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse credential response: %w", err)
 	}
 
 	// Complete authentication
-	_, err = m.webauthn.ValidateLogin(user, session, &credentialAssertionResponse)
+	credential, err := m.webauthn.ValidateLogin(user, session, parsedResponse)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate login: %w", err)
 	}
@@ -311,13 +312,13 @@ func (m *WebAuthnManager) CompleteAuthentication(userID string, response []byte)
 	m.storage.Delete(sessionKey)
 
 	// Create auth session
-	authSession := &AuthSession{
+	authSession := &models.AuthSession{
 		ID:          uuid.New().String(),
 		UserID:      userID,
 		CommunityID: user.CommunityID,
 		IssuedAt:    time.Now(),
 		ExpiresAt:   time.Now().Add(24 * time.Hour),
-		Credential:  credentialAssertionResponse.RawID,
+		Credential:  credential.ID,
 	}
 
 	// Store auth session
@@ -334,7 +335,7 @@ func (m *WebAuthnManager) CompleteAuthentication(userID string, response []byte)
 }
 
 // ValidateSession validates an authentication session
-func (m *WebAuthnManager) ValidateSession(sessionID string) (*AuthSession, error) {
+func (m *WebAuthnManager) ValidateSession(sessionID string) (*models.AuthSession, error) {
 	session, exists := m.sessions[sessionID]
 	if !exists {
 		return nil, fmt.Errorf("session not found")
@@ -350,7 +351,7 @@ func (m *WebAuthnManager) ValidateSession(sessionID string) (*AuthSession, error
 }
 
 // GenerateJWT generates a JWT token for the session
-func (m *WebAuthnManager) GenerateJWT(session *AuthSession) (string, error) {
+func (m *WebAuthnManager) GenerateJWT(session *models.AuthSession) (string, error) {
 	claims := jwt.MapClaims{
 		"sub":          session.UserID,
 		"community_id": session.CommunityID,
@@ -364,7 +365,7 @@ func (m *WebAuthnManager) GenerateJWT(session *AuthSession) (string, error) {
 }
 
 // ValidateJWT validates a JWT token
-func (m *WebAuthnManager) ValidateJWT(tokenString string) (*AuthSession, error) {
+func (m *WebAuthnManager) ValidateJWT(tokenString string) (*models.AuthSession, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
@@ -420,7 +421,7 @@ func (m *WebAuthnManager) loadSessions() {
 		return // No existing sessions
 	}
 
-	var sessions map[string]*AuthSession
+	var sessions map[string]*models.AuthSession
 	if err := json.Unmarshal(data, &sessions); err != nil {
 		m.logger.WithError(err).Error("Failed to unmarshal sessions")
 		return
@@ -454,7 +455,7 @@ func (m *WebAuthnManager) IsAuthenticated() bool {
 }
 
 // GetCurrentSession returns the current active session (if any)
-func (m *WebAuthnManager) GetCurrentSession() *AuthSession {
+func (m *WebAuthnManager) GetCurrentSession() *models.AuthSession {
 	for _, session := range m.sessions {
 		if time.Now().Before(session.ExpiresAt) {
 			return session

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"waddlebot-bridge/internal/config"
+	"github.com/go-webauthn/webauthn/webauthn"
 	"waddlebot-bridge/internal/testutils"
 )
 
@@ -101,7 +101,7 @@ func TestWebAuthnManager_ValidateSession(t *testing.T) {
 	}
 
 	// Create a test session
-	session := &AuthSession{
+	session := &Session{
 		ID:          sessionID,
 		UserID:      userID,
 		CommunityID: communityID,
@@ -140,7 +140,7 @@ func TestWebAuthnManager_GenerateJWT(t *testing.T) {
 		t.Fatalf("NewWebAuthnManager failed: %v", err)
 	}
 
-	session := &AuthSession{
+	session := &Session{
 		ID:          "test-session",
 		UserID:      "test-user",
 		CommunityID: "test-community",
@@ -202,7 +202,7 @@ func TestWebAuthnManager_RevokeSession(t *testing.T) {
 	}
 
 	sessionID := "test-session"
-	session := &AuthSession{
+	session := &Session{
 		ID:          sessionID,
 		UserID:      "test-user",
 		CommunityID: "test-community",
@@ -243,7 +243,7 @@ func TestWebAuthnManager_IsAuthenticated(t *testing.T) {
 	}
 
 	// Add a session
-	session := &AuthSession{
+	session := &Session{
 		ID:          "test-session",
 		UserID:      "test-user",
 		CommunityID: "test-community",
@@ -273,7 +273,7 @@ func TestWebAuthnManager_GetCurrentSession(t *testing.T) {
 	}
 
 	// Add a valid session
-	validSession := &AuthSession{
+	validSession := &Session{
 		ID:          "test-session",
 		UserID:      "test-user",
 		CommunityID: "test-community",
@@ -293,7 +293,7 @@ func TestWebAuthnManager_GetCurrentSession(t *testing.T) {
 	}
 
 	// Add an expired session
-	expiredSession := &AuthSession{
+	expiredSession := &Session{
 		ID:          "expired-session",
 		UserID:      "test-user",
 		CommunityID: "test-community",
@@ -358,12 +358,12 @@ func TestAuthSession_Validation(t *testing.T) {
 	
 	tests := []struct {
 		name      string
-		session   *AuthSession
+		session   *Session
 		expectErr bool
 	}{
 		{
 			name: "valid session",
-			session: &AuthSession{
+			session: &Session{
 				ID:          "test-session",
 				UserID:      "test-user",
 				CommunityID: "test-community",
@@ -374,7 +374,7 @@ func TestAuthSession_Validation(t *testing.T) {
 		},
 		{
 			name: "expired session",
-			session: &AuthSession{
+			session: &Session{
 				ID:          "test-session",
 				UserID:      "test-user",
 				CommunityID: "test-community",
@@ -385,7 +385,7 @@ func TestAuthSession_Validation(t *testing.T) {
 		},
 		{
 			name: "empty session ID",
-			session: &AuthSession{
+			session: &Session{
 				ID:          "",
 				UserID:      "test-user",
 				CommunityID: "test-community",
@@ -396,7 +396,7 @@ func TestAuthSession_Validation(t *testing.T) {
 		},
 		{
 			name: "empty user ID",
-			session: &AuthSession{
+			session: &Session{
 				ID:          "test-session",
 				UserID:      "",
 				CommunityID: "test-community",
@@ -407,7 +407,7 @@ func TestAuthSession_Validation(t *testing.T) {
 		},
 		{
 			name: "empty community ID",
-			session: &AuthSession{
+			session: &Session{
 				ID:          "test-session",
 				UserID:      "test-user",
 				CommunityID: "",
@@ -432,7 +432,7 @@ func TestAuthSession_Validation(t *testing.T) {
 }
 
 // Helper function to validate auth session
-func validateAuthSession(session *AuthSession) error {
+func validateAuthSession(session *Session) error {
 	if session.ID == "" {
 		return ErrInvalidCredentials
 	}

@@ -8,18 +8,18 @@ This document describes how to set up and use MinIO S3-compatible object storage
 
 ```bash
 # Start all services including MinIO
-docker-compose -f docker-compose.minio.yml up -d
+docker-compose up -d
 
 # Check service status
-docker-compose -f docker-compose.minio.yml ps
+docker-compose ps
 ```
 
 ### 2. Access Services
 
-- **WaddleBot Portal**: http://localhost:8000
+- **WaddleBot Hub**: http://localhost:8060
+- **Kong API Gateway**: http://localhost:8000
 - **MinIO Console**: http://localhost:9001
 - **MinIO API**: http://localhost:9000
-- **Direct Image Access**: http://localhost/images/
 
 **MinIO Credentials**:
 - Username: `waddlebot`
@@ -27,7 +27,7 @@ docker-compose -f docker-compose.minio.yml ps
 
 ### 3. Test Image Upload
 
-1. Log into the portal at http://localhost:8000
+1. Log into the hub at http://localhost:8060
 2. Navigate to **Images** from the menu
 3. Upload a test image
 4. Verify it appears in MinIO console and is accessible via URL
@@ -36,12 +36,12 @@ docker-compose -f docker-compose.minio.yml ps
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   WaddleBot     │    │      Nginx      │    │     MinIO       │
-│    Portal       │◄──►│   Proxy/CDN     │◄──►│   S3 Storage    │
+│   WaddleBot     │    │      Kong       │    │     MinIO       │
+│    Hub Module   │◄──►│   API Gateway   │◄──►│   S3 Storage    │
 │                 │    │                 │    │                 │
-│ - Image Upload  │    │ - Static Serve  │    │ - Object Store  │
-│ - Gallery       │    │ - Caching       │    │ - Public Access │
-│ - Management    │    │ - CORS          │    │ - Versioning    │
+│ - Image Upload  │    │ - API Routing   │    │ - Object Store  │
+│ - Gallery       │    │ - Auth          │    │ - Public Access │
+│ - Management    │    │ - Rate Limiting │    │ - Versioning    │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                       │                       │
          │              ┌─────────────────┐              │
@@ -172,17 +172,17 @@ git clone <repo-url>
 cd WaddleBot
 
 # Start services
-docker-compose -f docker-compose.minio.yml up -d
+docker-compose up -d
 
 # Check logs
-docker-compose -f docker-compose.minio.yml logs -f portal
+docker-compose logs -f hub
 ```
 
 ### 2. Testing Image Upload
 
 ```bash
 # Upload via curl (requires authentication token)
-curl -X POST http://localhost:8000/images/upload \
+curl -X POST http://localhost:8060/api/v1/images/upload \
   -H "Authorization: Bearer <token>" \
   -F "image_file=@test.jpg" \
   -F "image_type=avatar"
@@ -299,18 +299,14 @@ curl http://localhost:9000/minio/health/live
 ### Logs and Debugging
 
 ```bash
-# Portal logs
-docker-compose logs -f portal
+# Hub module logs
+docker-compose logs -f hub
 
 # MinIO logs
 docker-compose logs -f minio
 
-# Storage service debug info
-docker-compose exec portal python -c "
-from services.s3_storage_service import S3StorageService
-storage = S3StorageService()
-print(storage.get_health_status())
-"
+# Check all service health
+docker-compose ps
 ```
 
 ### Backup and Migration
@@ -353,19 +349,11 @@ docker-compose exec postgres pg_dump -U waddlebot waddlebot > backup.sql
 ### Debug Commands
 
 ```bash
-# Test MinIO connectivity
-docker-compose exec portal python -c "
-import boto3
-client = boto3.client('s3', 
-    endpoint_url='http://minio:9000',
-    aws_access_key_id='waddlebot',
-    aws_secret_access_key='waddlebot123'
-)
-print(client.list_buckets())
-"
+# Test MinIO connectivity from hub container
+docker-compose exec hub wget -qO- http://minio:9000/minio/health/live
 
-# Check storage service status
-docker-compose exec portal curl http://localhost:8000/api/images/storage-status
+# Check hub health
+curl http://localhost:8060/health
 
 # Verify bucket contents
 mc ls -r local/waddlebot-assets/

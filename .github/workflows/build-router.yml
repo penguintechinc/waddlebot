@@ -1,0 +1,27 @@
+name: Build router
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'processing/router_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-router.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'processing/router_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build router Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'processing/router_module'
+      module_name: 'router'
+      module_port: '8000'
+    secrets: inherit

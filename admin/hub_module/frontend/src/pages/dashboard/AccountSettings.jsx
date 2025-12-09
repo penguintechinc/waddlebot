@@ -1,0 +1,415 @@
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
+import api from '../../services/api';
+import {
+  UserCircleIcon,
+  LinkIcon,
+  CheckCircleIcon,
+  KeyIcon,
+  ShieldCheckIcon,
+} from '@heroicons/react/24/outline';
+
+// Platform icons and colors
+const PLATFORMS = {
+  discord: {
+    name: 'Discord',
+    color: '#5865F2',
+    icon: (
+      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/>
+      </svg>
+    ),
+  },
+  twitch: {
+    name: 'Twitch',
+    color: '#9146FF',
+    icon: (
+      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z"/>
+      </svg>
+    ),
+  },
+  slack: {
+    name: 'Slack',
+    color: '#36C5F0',
+    icon: (
+      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/>
+      </svg>
+    ),
+  },
+  youtube: {
+    name: 'YouTube',
+    color: '#FF0000',
+    icon: (
+      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+      </svg>
+    ),
+  },
+  kick: {
+    name: 'KICK',
+    color: '#53FC18',
+    icon: (
+      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
+      </svg>
+    ),
+  },
+};
+
+function AccountSettings() {
+  const { user } = useAuth();
+  const [searchParams] = useSearchParams();
+  const [linkedPlatforms, setLinkedPlatforms] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [linking, setLinking] = useState(null);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
+
+  // Password form state
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [savingPassword, setSavingPassword] = useState(false);
+
+  useEffect(() => {
+    // Check for OAuth callback messages
+    const linked = searchParams.get('linked');
+    const linkError = searchParams.get('error');
+
+    if (linked) {
+      setSuccess(`Successfully linked your ${PLATFORMS[linked]?.name || linked} account!`);
+    } else if (linkError === 'link_denied') {
+      setError('Platform linking was cancelled');
+    } else if (linkError === 'platform_already_linked') {
+      setError('This platform account is already linked to another user');
+    } else if (linkError === 'link_failed') {
+      setError('Failed to link platform. Please try again.');
+    }
+
+    loadUserData();
+  }, [searchParams]);
+
+  const loadUserData = async () => {
+    try {
+      setLoading(true);
+      const response = await api.get('/api/v1/auth/me');
+      if (response.data.success && response.data.user) {
+        setLinkedPlatforms(response.data.user.linkedPlatforms || []);
+      }
+    } catch (err) {
+      console.error('Failed to load user data:', err);
+      setError('Failed to load account information');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLinkPlatform = async (platform) => {
+    try {
+      setError(null);
+      setSuccess(null);
+      setLinking(platform);
+
+      const response = await api.get(`/api/v1/auth/oauth/${platform}/link`);
+      if (response.data.authorizeUrl) {
+        window.location.href = response.data.authorizeUrl;
+      }
+    } catch (err) {
+      console.error('Failed to start linking:', err);
+      setError(err.response?.data?.error?.message || `Failed to link ${PLATFORMS[platform]?.name}`);
+      setLinking(null);
+    }
+  };
+
+  const handleUnlinkPlatform = async (platform) => {
+    if (!confirm(`Are you sure you want to unlink your ${PLATFORMS[platform]?.name} account?`)) {
+      return;
+    }
+
+    try {
+      setError(null);
+      setSuccess(null);
+
+      await api.delete(`/api/v1/auth/oauth/${platform}`);
+      setSuccess(`Successfully unlinked ${PLATFORMS[platform]?.name}`);
+      loadUserData();
+    } catch (err) {
+      console.error('Failed to unlink:', err);
+      setError(err.response?.data?.error?.message || `Failed to unlink ${PLATFORMS[platform]?.name}`);
+    }
+  };
+
+  const handleSetPassword = async (e) => {
+    e.preventDefault();
+
+    if (newPassword !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+
+    try {
+      setSavingPassword(true);
+      setError(null);
+
+      await api.post('/api/v1/auth/password', {
+        currentPassword: user?.hasPassword ? currentPassword : undefined,
+        newPassword,
+      });
+
+      setSuccess('Password updated successfully');
+      setShowPasswordForm(false);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      loadUserData();
+    } catch (err) {
+      setError(err.response?.data?.error?.message || 'Failed to update password');
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+
+  const isLinked = (platform) => {
+    return linkedPlatforms.some(p => p.platform === platform);
+  };
+
+  const getLinkedInfo = (platform) => {
+    return linkedPlatforms.find(p => p.platform === platform);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gold-400"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-4xl">
+      <h1 className="text-2xl font-bold gradient-text mb-6">Account Settings</h1>
+
+      {error && (
+        <div className="p-4 bg-red-500/20 border border-red-500/30 rounded-lg text-red-300 mb-6">
+          {error}
+        </div>
+      )}
+
+      {success && (
+        <div className="p-4 bg-emerald-500/20 border border-emerald-500/30 rounded-lg text-emerald-300 mb-6 flex items-center gap-2">
+          <CheckCircleIcon className="w-5 h-5" />
+          {success}
+        </div>
+      )}
+
+      {/* Profile Information */}
+      <div className="card p-6 mb-6">
+        <div className="flex items-center gap-3 mb-6">
+          <UserCircleIcon className="w-6 h-6 text-gold-400" />
+          <h2 className="text-xl font-semibold text-sky-100">Profile Information</h2>
+        </div>
+
+        <div className="space-y-4">
+          <div className="flex items-center gap-4">
+            {user?.avatarUrl ? (
+              <img src={user.avatarUrl} alt={user.username} className="w-16 h-16 rounded-full" />
+            ) : (
+              <div className="w-16 h-16 rounded-full bg-navy-700 flex items-center justify-center border border-navy-600">
+                <span className="text-2xl text-sky-400 font-bold">
+                  {user?.username?.charAt(0).toUpperCase()}
+                </span>
+              </div>
+            )}
+            <div>
+              <div className="text-lg font-semibold text-sky-100">{user?.username}</div>
+              <div className="text-sm text-navy-400">{user?.email}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Connected Platforms */}
+      <div className="card p-6 mb-6">
+        <div className="flex items-center gap-3 mb-6">
+          <LinkIcon className="w-6 h-6 text-gold-400" />
+          <h2 className="text-xl font-semibold text-sky-100">Connected Platforms</h2>
+        </div>
+
+        <p className="text-navy-300 mb-6">
+          Connect your accounts to use WaddleBot across different platforms. When you log in with a platform,
+          it will automatically be linked to your account.
+        </p>
+
+        <div className="space-y-3">
+          {Object.entries(PLATFORMS).map(([key, platform]) => {
+            const linked = isLinked(key);
+            const info = getLinkedInfo(key);
+
+            return (
+              <div
+                key={key}
+                className={`flex items-center justify-between p-4 rounded-lg border transition-colors ${
+                  linked
+                    ? 'bg-navy-800 border-navy-600'
+                    : 'bg-navy-900 border-navy-700 hover:border-navy-600'
+                }`}
+              >
+                <div className="flex items-center gap-4">
+                  <div
+                    className="w-10 h-10 rounded-lg flex items-center justify-center"
+                    style={{ backgroundColor: `${platform.color}20`, color: platform.color }}
+                  >
+                    {platform.icon}
+                  </div>
+                  <div>
+                    <div className="font-medium text-sky-100">{platform.name}</div>
+                    {linked && info?.username && (
+                      <div className="text-sm text-navy-400">@{info.username}</div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {linked ? (
+                    <>
+                      <span className="text-sm text-emerald-400 flex items-center gap-1">
+                        <CheckCircleIcon className="w-4 h-4" />
+                        Connected
+                      </span>
+                      <button
+                        onClick={() => handleUnlinkPlatform(key)}
+                        className="btn btn-secondary text-sm py-1 px-3"
+                      >
+                        Disconnect
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => handleLinkPlatform(key)}
+                      disabled={linking === key}
+                      className="btn btn-primary text-sm py-1 px-3"
+                      style={{ borderColor: platform.color }}
+                    >
+                      {linking === key ? 'Connecting...' : 'Connect'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Password & Security */}
+      <div className="card p-6">
+        <div className="flex items-center gap-3 mb-6">
+          <ShieldCheckIcon className="w-6 h-6 text-gold-400" />
+          <h2 className="text-xl font-semibold text-sky-100">Password & Security</h2>
+        </div>
+
+        <div className="space-y-4">
+          <div className="flex items-center justify-between p-4 bg-navy-800 rounded-lg border border-navy-700">
+            <div className="flex items-center gap-3">
+              <KeyIcon className="w-5 h-5 text-navy-400" />
+              <div>
+                <div className="font-medium text-sky-100">Password</div>
+                <div className="text-sm text-navy-400">
+                  {user?.hasPassword
+                    ? 'Password is set. You can change it anytime.'
+                    : 'No password set. Add one to enable email login.'}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowPasswordForm(!showPasswordForm)}
+              className="btn btn-secondary text-sm"
+            >
+              {user?.hasPassword ? 'Change' : 'Set Password'}
+            </button>
+          </div>
+
+          {showPasswordForm && (
+            <form onSubmit={handleSetPassword} className="p-4 bg-navy-900 rounded-lg border border-navy-700 space-y-4">
+              {user?.hasPassword && (
+                <div>
+                  <label className="block text-sm font-medium text-sky-200 mb-1">
+                    Current Password
+                  </label>
+                  <input
+                    type="password"
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    className="input"
+                    required={user?.hasPassword}
+                  />
+                </div>
+              )}
+              <div>
+                <label className="block text-sm font-medium text-sky-200 mb-1">
+                  New Password
+                </label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="input"
+                  placeholder="At least 8 characters"
+                  minLength={8}
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-sky-200 mb-1">
+                  Confirm New Password
+                </label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="input"
+                  required
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={savingPassword}
+                  className="btn btn-primary"
+                >
+                  {savingPassword ? 'Saving...' : 'Save Password'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPasswordForm(false);
+                    setCurrentPassword('');
+                    setNewPassword('');
+                    setConfirmPassword('');
+                  }}
+                  className="btn btn-secondary"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+
+          <p className="text-sm text-navy-500">
+            You can always sign in using any connected platform. Setting a password allows you to also sign in with your email.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default AccountSettings;

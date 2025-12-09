@@ -1,0 +1,27 @@
+name: Build slack
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'trigger/receiver/slack_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-slack.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'trigger/receiver/slack_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build slack Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'trigger/receiver/slack_module'
+      module_name: 'slack'
+      module_port: '8012'
+    secrets: inherit

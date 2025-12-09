@@ -53,7 +53,7 @@ MODULE_VERSION=1.0.0
 # Core Modules
 MODULE_NAME_ROUTER=router
 MODULE_NAME_MARKETPLACE=marketplace
-MODULE_NAME_PORTAL=portal
+MODULE_NAME_HUB=hub
 
 # Collector Modules
 MODULE_NAME_TWITCH=twitch
@@ -147,6 +147,39 @@ docker-compose ps
 
 # View logs
 docker-compose logs -f router
+```
+
+#### Testing OpenWhisk Integration
+
+WaddleBot includes serverless platform action modules (OpenWhisk, Lambda, GCP Functions). To test OpenWhisk integration locally:
+
+```bash
+# Start OpenWhisk standalone and related services
+docker-compose up -d openwhisk openwhisk-action postgres redis
+
+# Run the integration test script
+./scripts/test-openwhisk.sh
+```
+
+The test script:
+1. Waits for OpenWhisk standalone to be ready
+2. Deploys a hello world action
+3. Invokes the action through the WaddleBot openwhisk-action module
+4. Verifies the response flow
+
+#### MicroK8s Testing
+
+For local Kubernetes testing with MicroK8s:
+
+```bash
+# Full setup, build, and deploy
+./scripts/mk8s-test.sh all
+
+# Or run individual steps
+./scripts/mk8s-test.sh setup    # Enable required addons
+./scripts/mk8s-test.sh build    # Build and push images
+./scripts/mk8s-test.sh deploy   # Deploy to microk8s
+./scripts/mk8s-test.sh status   # Check deployment status
 ```
 
 ### 2. Kubernetes Deployment (Production)

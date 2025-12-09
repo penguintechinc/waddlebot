@@ -1,0 +1,568 @@
+"""
+Reputation Service - Core CRUD and calculation logic for reputation scores.
+Handles both per-community and global reputation tracking.
+"""
+import time
+from dataclasses import dataclass
+from typing import Optional, List, Dict, Any
+from decimal import Decimal
+
+from config import Config
+
+
+@dataclass
+class ReputationInfo:
+    """Complete reputation information for a user."""
+    score: int
+    tier: str
+    tier_label: str
+    total_events: int = 0
+    last_event_at: Optional[str] = None
+
+
+@dataclass
+class AdjustmentResult:
+    """Result of a reputation adjustment."""
+    success: bool
+    score_before: int
+    score_after: int
+    score_change: float
+    event_id: Optional[int] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class ReputationEvent:
+    """A single reputation event from history."""
+    id: int
+    event_type: str
+    score_change: float
+    score_before: int
+    score_after: int
+    reason: Optional[str]
+    created_at: str
+    metadata: Dict[str, Any]
+
+
+class ReputationService:
+    """
+    Core reputation service for managing user scores.
+
+    Handles:
+    - Per-community reputation (stored in community_members table)
+    - Global reputation (stored in reputation_global table)
+    - Score adjustments with audit logging
+    - FICO-style tier calculation
+    """
+
+    def __init__(self, dal, weight_manager, logger):
+        self.dal = dal
+        self.weight_manager = weight_manager
+        self.logger = logger
+
+    def _get_tier(self, score: int) -> tuple:
+        """Get tier name and label for a score."""
+        for tier_name, tier_info in Config.REPUTATION_TIERS.items():
+            if tier_info['min'] <= score <= tier_info['max']:
+                return tier_name, tier_info['label']
+        return 'poor', 'Poor'
+
+    def _clamp_score(self, score: float, min_score: int, max_score: int) -> int:
+        """Clamp score to valid bounds."""
+        return max(min_score, min(max_score, int(round(score))))
+
+    async def get_reputation(
+        self,
+        community_id: int,
+        user_id: int,
+        platform: Optional[str] = None,
+        platform_user_id: Optional[str] = None
+    ) -> Optional[ReputationInfo]:
+        """
+        Get reputation for a user in a specific community.
+
+        Can lookup by hub_user_id OR platform/platform_user_id.
+        Returns None if user not found in community.
+        """
+        try:
+            if user_id:
+                # Lookup by hub_user_id
+                result = self.dal.executesql(
+                    """SELECT cm.reputation, cm.updated_at,
+                              (SELECT COUNT(*) FROM reputation_events re
+                               WHERE re.community_id = cm.community_id
+                               AND re.hub_user_id = cm.hub_user_id) as event_count,
+                              (SELECT MAX(created_at) FROM reputation_events re
+                               WHERE re.community_id = cm.community_id
+                               AND re.hub_user_id = cm.hub_user_id) as last_event
+                       FROM community_members cm
+                       WHERE cm.community_id = %s AND cm.hub_user_id = %s""",
+                    [community_id, user_id]
+                )
+            elif platform and platform_user_id:
+                # Lookup by platform identity
+                result = self.dal.executesql(
+                    """SELECT cm.reputation, cm.updated_at,
+                              (SELECT COUNT(*) FROM reputation_events re
+                               WHERE re.community_id = cm.community_id
+                               AND re.hub_user_id = cm.hub_user_id) as event_count,
+                              (SELECT MAX(created_at) FROM reputation_events re
+                               WHERE re.community_id = cm.community_id
+                               AND re.hub_user_id = cm.hub_user_id) as last_event
+                       FROM community_members cm
+                       JOIN hub_users hu ON hu.id = cm.hub_user_id
+                       JOIN user_identities ui ON ui.hub_user_id = hu.id
+                       WHERE cm.community_id = %s
+                         AND ui.platform = %s
+                         AND ui.platform_user_id = %s""",
+                    [community_id, platform, platform_user_id]
+                )
+            else:
+                return None
+
+            if not result or len(result) == 0:
+                return None
+
+            row = result[0]
+            score = row[0] if row[0] is not None else Config.REPUTATION_DEFAULT
+            tier_name, tier_label = self._get_tier(score)
+
+            return ReputationInfo(
+                score=score,
+                tier=tier_name,
+                tier_label=tier_label,
+                total_events=row[2] or 0,
+                last_event_at=str(row[3]) if row[3] else None
+            )
+
+        except Exception as e:
+            self.logger.error(f"Failed to get reputation: {e}")
+            return None
+
+    async def get_global_reputation(self, user_id: int) -> Optional[ReputationInfo]:
+        """Get global (cross-community) reputation for a user."""
+        try:
+            result = self.dal.executesql(
+                """SELECT score, total_events, last_event_at
+                   FROM reputation_global
+                   WHERE hub_user_id = %s""",
+                [user_id]
+            )
+
+            if not result or len(result) == 0:
+                # Return default if no global record exists
+                tier_name, tier_label = self._get_tier(Config.REPUTATION_DEFAULT)
+                return ReputationInfo(
+                    score=Config.REPUTATION_DEFAULT,
+                    tier=tier_name,
+                    tier_label=tier_label,
+                    total_events=0,
+                    last_event_at=None
+                )
+
+            row = result[0]
+            score = row[0]
+            tier_name, tier_label = self._get_tier(score)
+
+            return ReputationInfo(
+                score=score,
+                tier=tier_name,
+                tier_label=tier_label,
+                total_events=row[1] or 0,
+                last_event_at=str(row[2]) if row[2] else None
+            )
+
+        except Exception as e:
+            self.logger.error(f"Failed to get global reputation: {e}")
+            return None
+
+    async def adjust(
+        self,
+        community_id: int,
+        user_id: int,
+        event_type: str,
+        platform: str,
+        platform_user_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        reason: Optional[str] = None,
+        amount_multiplier: float = 1.0
+    ) -> AdjustmentResult:
+        """
+        Adjust reputation based on an event.
+
+        Uses weight configuration to determine score change.
+        Updates both community and global reputation.
+        Creates audit log entry.
+
+        Args:
+            community_id: Community where event occurred
+            user_id: Hub user ID (can be None if not linked)
+            event_type: Type of event (chatMessage, follow, ban, etc.)
+            platform: Platform where event occurred
+            platform_user_id: User's ID on the platform
+            metadata: Additional event data (donation amount, etc.)
+            reason: Human-readable reason for change
+            amount_multiplier: Multiplier for scaled events (donations, cheers)
+        """
+        metadata = metadata or {}
+
+        try:
+            # Get weights for this community
+            weights = await self.weight_manager.get_weights(community_id)
+            base_weight = weights.get_weight(event_type)
+
+            if base_weight == 0.0:
+                # Event type not configured for reputation impact
+                return AdjustmentResult(
+                    success=True,
+                    score_before=0,
+                    score_after=0,
+                    score_change=0.0,
+                    error="Event type has no reputation weight"
+                )
+
+            # Calculate actual change with multiplier
+            score_change = float(base_weight) * amount_multiplier
+
+            # Get or create community membership
+            member_result = self.dal.executesql(
+                """SELECT cm.id, cm.reputation, cm.hub_user_id
+                   FROM community_members cm
+                   WHERE cm.community_id = %s
+                   AND (cm.hub_user_id = %s OR cm.hub_user_id IS NULL)
+                   ORDER BY cm.hub_user_id IS NOT NULL DESC
+                   LIMIT 1""",
+                [community_id, user_id] if user_id else [community_id, None]
+            )
+
+            if not member_result or len(member_result) == 0:
+                # Create new member record
+                current_score = weights.starting_score
+                self.dal.executesql(
+                    """INSERT INTO community_members
+                       (community_id, hub_user_id, reputation, role)
+                       VALUES (%s, %s, %s, 'member')""",
+                    [community_id, user_id, current_score]
+                )
+                self.dal.commit()
+                member_id = None  # Will fetch after insert
+            else:
+                row = member_result[0]
+                member_id = row[0]
+                current_score = row[1] if row[1] is not None else weights.starting_score
+                user_id = row[2]  # Use the stored hub_user_id
+
+            score_before = current_score
+            new_score = self._clamp_score(
+                current_score + score_change,
+                weights.min_score,
+                weights.max_score
+            )
+            score_after = new_score
+
+            # Update community reputation
+            self.dal.executesql(
+                """UPDATE community_members
+                   SET reputation = %s, updated_at = NOW()
+                   WHERE community_id = %s AND hub_user_id = %s""",
+                [score_after, community_id, user_id]
+            )
+
+            # Create audit log entry
+            import json
+            self.dal.executesql(
+                """INSERT INTO reputation_events
+                   (community_id, hub_user_id, platform, platform_user_id,
+                    event_type, score_change, score_before, score_after,
+                    reason, metadata)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                [community_id, user_id, platform, platform_user_id,
+                 event_type, score_change, score_before, score_after,
+                 reason, json.dumps(metadata)]
+            )
+
+            # Update global reputation if user is linked
+            if user_id:
+                await self._update_global_reputation(user_id, score_change)
+
+            self.dal.commit()
+
+            self.logger.audit(
+                "Reputation adjusted",
+                community_id=community_id,
+                user_id=user_id,
+                event_type=event_type,
+                score_before=score_before,
+                score_after=score_after,
+                change=score_change
+            )
+
+            return AdjustmentResult(
+                success=True,
+                score_before=score_before,
+                score_after=score_after,
+                score_change=score_change
+            )
+
+        except Exception as e:
+            self.logger.error(f"Failed to adjust reputation: {e}")
+            return AdjustmentResult(
+                success=False,
+                score_before=0,
+                score_after=0,
+                score_change=0.0,
+                error=str(e)
+            )
+
+    async def _update_global_reputation(
+        self,
+        user_id: int,
+        score_change: float
+    ) -> None:
+        """Update global reputation for a linked user."""
+        try:
+            # Upsert global reputation record
+            result = self.dal.executesql(
+                """INSERT INTO reputation_global (hub_user_id, score, total_events)
+                   VALUES (%s, %s, 1)
+                   ON CONFLICT (hub_user_id) DO UPDATE
+                   SET score = LEAST(850, GREATEST(300,
+                       reputation_global.score + EXCLUDED.score - %s)),
+                       total_events = reputation_global.total_events + 1,
+                       last_event_at = NOW(),
+                       updated_at = NOW()""",
+                [user_id, Config.REPUTATION_DEFAULT + score_change,
+                 Config.REPUTATION_DEFAULT]
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to update global reputation: {e}")
+
+    async def set_reputation(
+        self,
+        community_id: int,
+        user_id: int,
+        score: int,
+        reason: str,
+        admin_id: int
+    ) -> AdjustmentResult:
+        """
+        Manually set reputation score (admin action).
+
+        Creates audit log with admin attribution.
+        """
+        try:
+            # Get weights for bounds checking
+            weights = await self.weight_manager.get_weights(community_id)
+
+            # Clamp to valid range
+            new_score = self._clamp_score(score, weights.min_score, weights.max_score)
+
+            # Get current score
+            result = self.dal.executesql(
+                """SELECT reputation FROM community_members
+                   WHERE community_id = %s AND hub_user_id = %s""",
+                [community_id, user_id]
+            )
+
+            if not result or len(result) == 0:
+                return AdjustmentResult(
+                    success=False,
+                    score_before=0,
+                    score_after=0,
+                    score_change=0.0,
+                    error="User not found in community"
+                )
+
+            score_before = result[0][0] or weights.starting_score
+            score_change = new_score - score_before
+
+            # Update score
+            self.dal.executesql(
+                """UPDATE community_members
+                   SET reputation = %s, updated_at = NOW()
+                   WHERE community_id = %s AND hub_user_id = %s""",
+                [new_score, community_id, user_id]
+            )
+
+            # Audit log with admin attribution
+            import json
+            self.dal.executesql(
+                """INSERT INTO reputation_events
+                   (community_id, hub_user_id, platform, platform_user_id,
+                    event_type, score_change, score_before, score_after,
+                    reason, metadata)
+                   VALUES (%s, %s, 'admin', %s, 'manual_set', %s, %s, %s, %s, %s)""",
+                [community_id, user_id, str(admin_id),
+                 score_change, score_before, new_score,
+                 reason, json.dumps({'admin_id': admin_id})]
+            )
+
+            self.dal.commit()
+
+            self.logger.audit(
+                "Reputation manually set",
+                community_id=community_id,
+                user_id=user_id,
+                admin_id=admin_id,
+                score_before=score_before,
+                score_after=new_score,
+                reason=reason
+            )
+
+            return AdjustmentResult(
+                success=True,
+                score_before=score_before,
+                score_after=new_score,
+                score_change=score_change
+            )
+
+        except Exception as e:
+            self.logger.error(f"Failed to set reputation: {e}")
+            return AdjustmentResult(
+                success=False,
+                score_before=0,
+                score_after=0,
+                score_change=0.0,
+                error=str(e)
+            )
+
+    async def get_history(
+        self,
+        community_id: int,
+        user_id: int,
+        limit: int = 50,
+        offset: int = 0
+    ) -> List[ReputationEvent]:
+        """Get reputation event history for a user in a community."""
+        try:
+            result = self.dal.executesql(
+                """SELECT id, event_type, score_change, score_before,
+                          score_after, reason, created_at, metadata
+                   FROM reputation_events
+                   WHERE community_id = %s AND hub_user_id = %s
+                   ORDER BY created_at DESC
+                   LIMIT %s OFFSET %s""",
+                [community_id, user_id, limit, offset]
+            )
+
+            events = []
+            for row in result:
+                events.append(ReputationEvent(
+                    id=row[0],
+                    event_type=row[1],
+                    score_change=float(row[2]),
+                    score_before=row[3],
+                    score_after=row[4],
+                    reason=row[5],
+                    created_at=str(row[6]),
+                    metadata=row[7] if row[7] else {}
+                ))
+
+            return events
+
+        except Exception as e:
+            self.logger.error(f"Failed to get reputation history: {e}")
+            return []
+
+    async def get_leaderboard(
+        self,
+        community_id: int,
+        limit: int = 25,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Get reputation leaderboard for a community."""
+        try:
+            result = self.dal.executesql(
+                """SELECT cm.hub_user_id, hu.username, hu.avatar_url,
+                          cm.reputation,
+                          RANK() OVER (ORDER BY cm.reputation DESC) as rank
+                   FROM community_members cm
+                   JOIN hub_users hu ON hu.id = cm.hub_user_id
+                   WHERE cm.community_id = %s AND cm.is_active = true
+                   ORDER BY cm.reputation DESC
+                   LIMIT %s OFFSET %s""",
+                [community_id, limit, offset]
+            )
+
+            leaderboard = []
+            for row in result:
+                score = row[3]
+                tier_name, tier_label = self._get_tier(score)
+                leaderboard.append({
+                    'user_id': row[0],
+                    'username': row[1],
+                    'avatar_url': row[2],
+                    'score': score,
+                    'tier': tier_name,
+                    'tier_label': tier_label,
+                    'rank': row[4]
+                })
+
+            return leaderboard
+
+        except Exception as e:
+            self.logger.error(f"Failed to get leaderboard: {e}")
+            return []
+
+    async def get_global_leaderboard(
+        self,
+        limit: int = 25,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Get global reputation leaderboard."""
+        try:
+            result = self.dal.executesql(
+                """SELECT rg.hub_user_id, hu.username, hu.avatar_url,
+                          rg.score, rg.total_events,
+                          RANK() OVER (ORDER BY rg.score DESC) as rank
+                   FROM reputation_global rg
+                   JOIN hub_users hu ON hu.id = rg.hub_user_id
+                   ORDER BY rg.score DESC
+                   LIMIT %s OFFSET %s""",
+                [limit, offset]
+            )
+
+            leaderboard = []
+            for row in result:
+                score = row[3]
+                tier_name, tier_label = self._get_tier(score)
+                leaderboard.append({
+                    'user_id': row[0],
+                    'username': row[1],
+                    'avatar_url': row[2],
+                    'score': score,
+                    'total_events': row[4],
+                    'tier': tier_name,
+                    'tier_label': tier_label,
+                    'rank': row[5]
+                })
+
+            return leaderboard
+
+        except Exception as e:
+            self.logger.error(f"Failed to get global leaderboard: {e}")
+            return []
+
+    async def initialize_member(
+        self,
+        community_id: int,
+        user_id: int
+    ) -> bool:
+        """Initialize reputation for a new community member."""
+        try:
+            weights = await self.weight_manager.get_weights(community_id)
+
+            self.dal.executesql(
+                """UPDATE community_members
+                   SET reputation = %s
+                   WHERE community_id = %s AND hub_user_id = %s
+                   AND reputation IS NULL""",
+                [weights.starting_score, community_id, user_id]
+            )
+            self.dal.commit()
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize member reputation: {e}")
+            return False

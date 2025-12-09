@@ -1,0 +1,27 @@
+name: Build youtube-live
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'trigger/receiver/youtube_live_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-youtube-live.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'trigger/receiver/youtube_live_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build youtube-live Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'trigger/receiver/youtube_live_module'
+      module_name: 'youtube-live'
+      module_port: '8013'
+    secrets: inherit

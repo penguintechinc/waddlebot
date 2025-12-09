@@ -18,48 +18,48 @@ import (
 
 // Client handles communication with the WaddleBot API
 type Client struct {
-	config       *config.Config
+	config        *config.Config
 	authenticator *auth.WebAuthnManager
 	moduleManager *modules.Manager
-	logger       *logrus.Logger
-	httpClient   *http.Client
+	logger        *logrus.Logger
+	httpClient    *http.Client
 }
 
-// BridgeInfo represents bridge information
-type BridgeInfo struct {
-	BridgeID    string    `json:"bridge_id"`
-	UserID      string    `json:"user_id"`
-	CommunityID string    `json:"community_id"`
-	Status      string    `json:"status"`
-	Version     string    `json:"version"`
-	Platform    string    `json:"platform"`
-	LastSeen    time.Time `json:"last_seen"`
-	Capabilities []string `json:"capabilities"`
+// Info represents bridge information
+type Info struct {
+	BridgeID     string    `json:"bridge_id"`
+	UserID       string    `json:"user_id"`
+	CommunityID  string    `json:"community_id"`
+	Status       string    `json:"status"`
+	Version      string    `json:"version"`
+	Platform     string    `json:"platform"`
+	LastSeen     time.Time `json:"last_seen"`
+	Capabilities []string  `json:"capabilities"`
 }
 
 // RegistrationRequest represents a bridge registration request
 type RegistrationRequest struct {
-	UserID      string            `json:"user_id"`
-	CommunityID string            `json:"community_id"`
-	BridgeInfo  BridgeInfo        `json:"bridge_info"`
+	UserID      string               `json:"user_id"`
+	CommunityID string               `json:"community_id"`
+	BridgeInfo  Info                 `json:"bridge_info"`
 	Modules     []modules.ModuleInfo `json:"modules"`
 }
 
 // RegistrationResponse represents the response from bridge registration
 type RegistrationResponse struct {
-	Success     bool   `json:"success"`
-	BridgeID    string `json:"bridge_id"`
-	Message     string `json:"message"`
-	PollInterval int   `json:"poll_interval"`
+	Success      bool   `json:"success"`
+	BridgeID     string `json:"bridge_id"`
+	Message      string `json:"message"`
+	PollInterval int    `json:"poll_interval"`
 }
 
 // NewClient creates a new bridge client
 func NewClient(cfg *config.Config, authenticator *auth.WebAuthnManager, moduleManager *modules.Manager) (*Client, error) {
 	return &Client{
-		config:       cfg,
+		config:        cfg,
 		authenticator: authenticator,
 		moduleManager: moduleManager,
-		logger:       logger.GetLogger(),
+		logger:        logger.GetLogger(),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -90,7 +90,7 @@ func (c *Client) RegisterBridge(ctx context.Context) error {
 	moduleInfos := c.moduleManager.GetModuleInfos()
 
 	// Create registration request
-	bridgeInfo := BridgeInfo{
+	bridgeInfo := Info{
 		UserID:      c.config.UserID,
 		CommunityID: c.config.CommunityID,
 		Status:      "active",
@@ -123,7 +123,7 @@ func (c *Client) RegisterBridge(ctx context.Context) error {
 	registrationURL := c.config.GetAPIEndpoint("/api/bridge/register")
 
 	// Create request
-	req, err := http.NewRequestWithContext(ctx, "POST", registrationURL, 
+	req, err := http.NewRequestWithContext(ctx, "POST", registrationURL,
 		strings.NewReader(string(requestData)))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -204,7 +204,7 @@ func (c *Client) SendHeartbeat(ctx context.Context) error {
 	heartbeatURL := c.config.GetAPIEndpoint("/api/bridge/heartbeat")
 
 	// Create request
-	req, err := http.NewRequestWithContext(ctx, "POST", heartbeatURL, 
+	req, err := http.NewRequestWithContext(ctx, "POST", heartbeatURL,
 		strings.NewReader(string(heartbeatData)))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -235,7 +235,7 @@ func (c *Client) SendHeartbeat(ctx context.Context) error {
 }
 
 // GetBridgeInfo retrieves bridge information from the server
-func (c *Client) GetBridgeInfo(ctx context.Context) (*BridgeInfo, error) {
+func (c *Client) GetBridgeInfo(ctx context.Context) (*Info, error) {
 	// Get authentication token
 	token, err := c.GetAuthToken()
 	if err != nil {
@@ -276,7 +276,7 @@ func (c *Client) GetBridgeInfo(ctx context.Context) (*BridgeInfo, error) {
 	}
 
 	// Parse response
-	var bridgeInfo BridgeInfo
+	var bridgeInfo Info
 	if err := json.Unmarshal(body, &bridgeInfo); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}

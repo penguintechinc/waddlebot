@@ -14,10 +14,13 @@ import (
 	"waddlebot-bridge/internal/auth"
 	"waddlebot-bridge/internal/bridge"
 	"waddlebot-bridge/internal/config"
+	"waddlebot-bridge/internal/gateway"
 	"waddlebot-bridge/internal/license"
 	"waddlebot-bridge/internal/logger"
 	"waddlebot-bridge/internal/modules"
+	"waddlebot-bridge/internal/obs"
 	"waddlebot-bridge/internal/poller"
+	"waddlebot-bridge/internal/scripting"
 	"waddlebot-bridge/internal/server"
 	"waddlebot-bridge/internal/storage"
 )
@@ -119,6 +122,34 @@ func runBridge(cmd *cobra.Command, args []string) {
 	// Initialize module manager
 	moduleManager := modules.NewManager(cfg, store)
 
+	// Initialize OBS client if enabled
+	var obsClient *obs.Client
+	if cfg.OBS.Enabled {
+		obsConfig := obs.Config{
+			Host:                 cfg.OBS.Host,
+			Port:                 cfg.OBS.Port,
+			Password:             cfg.OBS.Password,
+			AutoReconnect:        cfg.OBS.AutoReconnect,
+			ReconnectInterval:    cfg.OBS.ReconnectInterval,
+			MaxReconnectInterval: cfg.OBS.MaxReconnectInterval,
+			Timeout:              cfg.OBS.Timeout,
+			Enabled:              cfg.OBS.Enabled,
+		}
+		obsClient = obs.NewClient(obsConfig, log)
+		log.Info("OBS integration enabled")
+	}
+
+	// Initialize scripting manager if enabled
+	var scriptManager *scripting.Manager
+	if cfg.Scripting.Enabled {
+		scriptManager, err = scripting.NewManager(cfg.Scripting, log)
+		if err != nil {
+			log.WithError(err).Warn("Failed to initialize scripting manager")
+		} else {
+			log.WithField("engines", scriptManager.GetEnabledTypes()).Info("Scripting engine initialized")
+		}
+	}
+
 	// Initialize bridge client
 	bridgeClient, err := bridge.NewClient(cfg, authenticator, moduleManager)
 	if err != nil {
@@ -131,6 +162,16 @@ func runBridge(cmd *cobra.Command, args []string) {
 	// Initialize web server for WebAuthn
 	webServer := server.NewWebServer(cfg, authenticator, bridgeClient)
 
+	// Initialize local API gateway if enabled
+	var gatewayServer *gateway.Gateway
+	if cfg.Gateway.Enabled {
+		gatewayServer = gateway.New(cfg.Gateway, obsClient, log)
+		log.WithFields(map[string]interface{}{
+			"host": cfg.Gateway.Host,
+			"port": cfg.Gateway.Port,
+		}).Info("Local API gateway enabled")
+	}
+
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -141,7 +182,31 @@ func runBridge(cmd *cobra.Command, args []string) {
 
 	// Start components
 	log.Info("Starting WaddleBot Premium Desktop Bridge...")
-	
+
+	// Start OBS client if enabled
+	if obsClient != nil {
+		go func() {
+			if err := obsClient.Connect(ctx); err != nil {
+				log.WithError(err).Warn("OBS connection failed - will retry automatically")
+			} else {
+				log.Info("Connected to OBS Studio")
+				// Start event listener
+				if err := obsClient.StartEventListener(); err != nil {
+					log.WithError(err).Error("Failed to start OBS event listener")
+				}
+			}
+		}()
+	}
+
+	// Start local API gateway if enabled
+	if gatewayServer != nil {
+		go func() {
+			if err := gatewayServer.Start(ctx); err != nil {
+				log.WithError(err).Error("Gateway server error")
+			}
+		}()
+	}
+
 	// Start web server
 	go func() {
 		if err := webServer.Start(ctx); err != nil {
@@ -157,13 +222,31 @@ func runBridge(cmd *cobra.Command, args []string) {
 	}()
 
 	// Display connection info
-	log.WithFields(map[string]interface{}{
-		"community_id":   cfg.CommunityID,
-		"user_id":        cfg.UserID,
-		"poll_interval":  cfg.PollInterval,
-		"api_url":        cfg.APIURL,
-		"web_port":       cfg.WebPort,
-	}).Info("Bridge initialized successfully")
+	connectionInfo := map[string]interface{}{
+		"community_id":  cfg.CommunityID,
+		"user_id":       cfg.UserID,
+		"poll_interval": cfg.PollInterval,
+		"api_url":       cfg.APIURL,
+		"web_port":      cfg.WebPort,
+	}
+
+	if cfg.OBS.Enabled {
+		connectionInfo["obs_enabled"] = true
+		connectionInfo["obs_host"] = cfg.OBS.Host
+		connectionInfo["obs_port"] = cfg.OBS.Port
+	}
+
+	if cfg.Gateway.Enabled {
+		connectionInfo["gateway_enabled"] = true
+		connectionInfo["gateway_port"] = cfg.Gateway.Port
+	}
+
+	if cfg.Scripting.Enabled && scriptManager != nil {
+		connectionInfo["scripting_enabled"] = true
+		connectionInfo["script_engines"] = scriptManager.GetEnabledTypes()
+	}
+
+	log.WithFields(connectionInfo).Info("Bridge initialized successfully")
 
 	// Wait for shutdown signal
 	<-sigChan
@@ -171,6 +254,24 @@ func runBridge(cmd *cobra.Command, args []string) {
 
 	// Cancel context to stop all components
 	cancel()
+
+	// Shutdown OBS client
+	if obsClient != nil {
+		if err := obsClient.Disconnect(); err != nil {
+			log.WithError(err).Warn("Error disconnecting from OBS")
+		} else {
+			log.Info("Disconnected from OBS Studio")
+		}
+	}
+
+	// Shutdown gateway server
+	if gatewayServer != nil {
+		if err := gatewayServer.Stop(); err != nil {
+			log.WithError(err).Warn("Error stopping gateway server")
+		} else {
+			log.Info("Gateway server stopped")
+		}
+	}
 
 	// Give components time to shutdown gracefully
 	time.Sleep(2 * time.Second)

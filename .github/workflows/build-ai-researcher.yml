@@ -1,0 +1,27 @@
+name: Build ai-researcher
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'core/ai_researcher_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-ai-researcher.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'core/ai_researcher_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ai-researcher Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'core/ai_researcher_module'
+      module_name: 'ai-researcher'
+      module_port: '8056'
+    secrets: inherit

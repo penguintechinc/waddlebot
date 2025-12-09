@@ -1,0 +1,27 @@
+name: Build shoutout-interaction
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'action/interactive/shoutout_interaction_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-shoutout-interaction.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'action/interactive/shoutout_interaction_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build shoutout-interaction Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'action/interactive/shoutout_interaction_module'
+      module_name: 'shoutout-interaction'
+      module_port: '8007'
+    secrets: inherit

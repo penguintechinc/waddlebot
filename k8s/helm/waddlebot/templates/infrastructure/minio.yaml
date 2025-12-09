@@ -1,0 +1,137 @@
+{{- if .Values.minio.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.minio.persistence.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  accessModes:
+    - {{ .Values.minio.persistence.accessMode }}
+  {{- if .Values.minio.persistence.storageClass }}
+  storageClassName: {{ .Values.minio.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.minio.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: minio
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: storage
+    spec:
+      containers:
+      - name: minio
+        image: {{ .Values.minio.image.repository }}:{{ .Values.minio.image.tag }}
+        imagePullPolicy: {{ .Values.minio.image.pullPolicy }}
+        command:
+        - /bin/sh
+        - -c
+        - minio server /data --console-address :9001
+        ports:
+        - name: api
+          containerPort: 9000
+          protocol: TCP
+        - name: console
+          containerPort: 9001
+          protocol: TCP
+        env:
+        - name: MINIO_ROOT_USER
+          valueFrom:
+            secretKeyRef:
+              name: waddlebot-secrets
+              key: MINIO_ROOT_USER
+        - name: MINIO_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: waddlebot-secrets
+              key: MINIO_ROOT_PASSWORD
+        - name: MINIO_DOMAIN
+          value: {{ .Values.minio.domain | quote }}
+        volumeMounts:
+        - name: minio-data
+          mountPath: /data
+        resources:
+          requests:
+            memory: {{ .Values.minio.resources.requests.memory }}
+            cpu: {{ .Values.minio.resources.requests.cpu }}
+          limits:
+            memory: {{ .Values.minio.resources.limits.memory }}
+            cpu: {{ .Values.minio.resources.limits.cpu }}
+        livenessProbe:
+          httpGet:
+            path: /minio/health/live
+            port: api
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 20
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: api
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 20
+          failureThreshold: 3
+      volumes:
+      - name: minio-data
+        persistentVolumeClaim:
+          claimName: {{ .Values.minio.persistence.name }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.minio.service.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: {{ .Values.minio.service.type }}
+  ports:
+  - port: {{ .Values.minio.service.apiPort }}
+    targetPort: api
+    protocol: TCP
+    name: api
+    {{- if and (eq .Values.minio.service.type "NodePort") .Values.minio.service.nodePortApi }}
+    nodePort: {{ .Values.minio.service.nodePortApi }}
+    {{- end }}
+  - port: {{ .Values.minio.service.consolePort }}
+    targetPort: console
+    protocol: TCP
+    name: console
+    {{- if and (eq .Values.minio.service.type "NodePort") .Values.minio.service.nodePortConsole }}
+    nodePort: {{ .Values.minio.service.nodePortConsole }}
+    {{- end }}
+  selector:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

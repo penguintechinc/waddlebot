@@ -1,0 +1,27 @@
+name: Build analytics-core
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'core/analytics_core_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-analytics-core.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'core/analytics_core_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build analytics-core Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'core/analytics_core_module'
+      module_name: 'analytics-core'
+      module_port: '8057'
+    secrets: inherit

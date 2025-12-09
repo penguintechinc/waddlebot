@@ -1,0 +1,117 @@
+{{- if .Values.qdrant.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.qdrant.persistence.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: vectordb
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  accessModes:
+    - {{ .Values.qdrant.persistence.accessMode }}
+  {{- if .Values.qdrant.persistence.storageClass }}
+  storageClassName: {{ .Values.qdrant.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.qdrant.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qdrant
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: vectordb
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: qdrant
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: vectordb
+    spec:
+      containers:
+      - name: qdrant
+        image: {{ .Values.qdrant.image.repository }}:{{ .Values.qdrant.image.tag }}
+        imagePullPolicy: {{ .Values.qdrant.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: 6333
+          protocol: TCP
+        - name: grpc
+          containerPort: 6334
+          protocol: TCP
+        volumeMounts:
+        - name: qdrant-data
+          mountPath: /qdrant/storage
+        resources:
+          requests:
+            memory: {{ .Values.qdrant.resources.requests.memory }}
+            cpu: {{ .Values.qdrant.resources.requests.cpu }}
+          limits:
+            memory: {{ .Values.qdrant.resources.limits.memory }}
+            cpu: {{ .Values.qdrant.resources.limits.cpu }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+      volumes:
+      - name: qdrant-data
+        persistentVolumeClaim:
+          claimName: {{ .Values.qdrant.persistence.name }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.qdrant.service.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: vectordb
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: {{ .Values.qdrant.service.type }}
+  ports:
+  - port: {{ .Values.qdrant.service.port }}
+    targetPort: http
+    protocol: TCP
+    name: http
+    {{- if and (eq .Values.qdrant.service.type "NodePort") .Values.qdrant.service.nodePort }}
+    nodePort: {{ .Values.qdrant.service.nodePort }}
+    {{- end }}
+  - port: 6334
+    targetPort: grpc
+    protocol: TCP
+    name: grpc
+  selector:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

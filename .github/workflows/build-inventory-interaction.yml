@@ -1,0 +1,27 @@
+name: Build inventory-interaction
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'action/interactive/inventory_interaction_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-inventory-interaction.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'action/interactive/inventory_interaction_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build inventory-interaction Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'action/interactive/inventory_interaction_module'
+      module_name: 'inventory-interaction'
+      module_port: '8008'
+    secrets: inherit

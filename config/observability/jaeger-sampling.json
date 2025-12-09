@@ -1,0 +1,139 @@
+{
+  "service_strategies": [
+    {
+      "service": "router-service",
+      "type": "probabilistic",
+      "param": 1.0,
+      "operation_strategies": [
+        {
+          "operation": "/health",
+          "type": "probabilistic",
+          "param": 0.1
+        },
+        {
+          "operation": "/healthz",
+          "type": "probabilistic",
+          "param": 0.1
+        },
+        {
+          "operation": "/metrics",
+          "type": "probabilistic",
+          "param": 0.05
+        }
+      ]
+    },
+    {
+      "service": "twitch-receiver",
+      "type": "probabilistic",
+      "param": 0.5,
+      "operation_strategies": [
+        {
+          "operation": "/webhook",
+          "type": "probabilistic",
+          "param": 0.3
+        }
+      ]
+    },
+    {
+      "service": "discord-receiver",
+      "type": "probabilistic",
+      "param": 0.5
+    },
+    {
+      "service": "slack-receiver",
+      "type": "probabilistic",
+      "param": 0.5
+    },
+    {
+      "service": "ai-interaction",
+      "type": "probabilistic",
+      "param": 1.0
+    },
+    {
+      "service": "alias-interaction",
+      "type": "probabilistic",
+      "param": 0.3
+    },
+    {
+      "service": "shoutout-interaction",
+      "type": "probabilistic",
+      "param": 0.3
+    },
+    {
+      "service": "inventory-interaction",
+      "type": "probabilistic",
+      "param": 0.5
+    },
+    {
+      "service": "calendar-interaction",
+      "type": "probabilistic",
+      "param": 0.5
+    },
+    {
+      "service": "memories-interaction",
+      "type": "probabilistic",
+      "param": 0.5
+    },
+    {
+      "service": "youtube-music-interaction",
+      "type": "probabilistic",
+      "param": 0.7
+    },
+    {
+      "service": "spotify-interaction",
+      "type": "probabilistic",
+      "param": 0.7
+    },
+    {
+      "service": "identity-core",
+      "type": "probabilistic",
+      "param": 0.4
+    },
+    {
+      "service": "labels-core",
+      "type": "probabilistic",
+      "param": 0.2
+    },
+    {
+      "service": "browser-source-core",
+      "type": "probabilistic",
+      "param": 0.8
+    },
+    {
+      "service": "reputation-core",
+      "type": "probabilistic",
+      "param": 0.3
+    },
+    {
+      "service": "community-core",
+      "type": "probabilistic",
+      "param": 0.4
+    },
+    {
+      "service": "analytics-core",
+      "type": "probabilistic",
+      "param": 0.6
+    },
+    {
+      "service": "hub-backend",
+      "type": "probabilistic",
+      "param": 0.3,
+      "operation_strategies": [
+        {
+          "operation": "/api/health",
+          "type": "probabilistic",
+          "param": 0.05
+        },
+        {
+          "operation": "/api/metrics",
+          "type": "probabilistic",
+          "param": 0.05
+        }
+      ]
+    }
+  ],
+  "default_strategy": {
+    "type": "probabilistic",
+    "param": 0.1
+  }
+}

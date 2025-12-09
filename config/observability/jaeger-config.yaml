@@ -1,0 +1,308 @@
+# Jaeger All-in-One Configuration for WaddleBot
+# ==============================================
+#
+# This configuration sets up Jaeger for distributed tracing across WaddleBot services.
+#
+# Jaeger provides:
+# - Trace collection and storage
+# - Service dependency graph
+# - Performance monitoring
+# - Root cause analysis
+#
+# Usage with Docker Compose:
+#   docker-compose -f docker-compose.observability.yml up jaeger
+#
+# Access Jaeger UI: http://localhost:16686
+
+version: '3.8'
+
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: waddlebot-jaeger
+    hostname: jaeger
+    restart: unless-stopped
+
+    # Environment configuration
+    environment:
+      # Collector settings
+      COLLECTOR_ZIPKIN_HOST_PORT: :9411
+      COLLECTOR_OTLP_ENABLED: true
+
+      # Storage settings (in-memory for development, use Cassandra/Elasticsearch for production)
+      SPAN_STORAGE_TYPE: memory
+
+      # Memory storage settings
+      MEMORY_MAX_TRACES: 10000
+
+      # Query settings
+      QUERY_BASE_PATH: /
+
+      # Sampling settings (always sample for development)
+      SAMPLING_STRATEGIES_FILE: /etc/jaeger/sampling_strategies.json
+
+      # Admin settings
+      ADMIN_HTTP_HOST_PORT: :14269
+
+      # Logging
+      LOG_LEVEL: info
+
+    # Port mappings
+    ports:
+      # Jaeger UI
+      - "16686:16686"
+
+      # Collector ports
+      - "14268:14268"  # HTTP - accept jaeger.thrift directly from clients
+      - "14250:14250"  # gRPC - used by jaeger-agent to send spans
+      - "9411:9411"    # Zipkin compatible endpoint
+
+      # Agent ports (for UDP)
+      - "6831:6831/udp"  # Compact thrift protocol
+      - "6832:6832/udp"  # Binary thrift protocol
+      - "5778:5778"      # HTTP - serve configs, sampling strategies
+
+      # OTLP ports
+      - "4317:4317"      # OTLP gRPC
+      - "4318:4318"      # OTLP HTTP
+
+      # Admin port
+      - "14269:14269"    # Admin port (health check, metrics)
+
+    # Volumes for configuration and data persistence
+    volumes:
+      - ./jaeger-sampling.json:/etc/jaeger/sampling_strategies.json:ro
+      # For production, use persistent storage:
+      # - jaeger_data:/badger
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:14269/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    # Networking
+    networks:
+      - waddlebot-observability
+
+  # Optional: Jaeger Agent (for sidecar deployment pattern)
+  # jaeger-agent:
+  #   image: jaegertracing/jaeger-agent:latest
+  #   container_name: waddlebot-jaeger-agent
+  #   hostname: jaeger-agent
+  #   restart: unless-stopped
+  #
+  #   environment:
+  #     REPORTER_GRPC_HOST_PORT: jaeger:14250
+  #     LOG_LEVEL: info
+  #
+  #   ports:
+  #     - "6831:6831/udp"
+  #     - "6832:6832/udp"
+  #     - "5778:5778"
+  #
+  #   networks:
+  #     - waddlebot-observability
+  #
+  #   depends_on:
+  #     - jaeger
+
+networks:
+  waddlebot-observability:
+    driver: bridge
+    name: waddlebot-observability
+
+# For production deployment with persistent storage:
+# volumes:
+#   jaeger_data:
+#     driver: local
+
+---
+# Jaeger Sampling Strategies Configuration
+# Save this as: jaeger-sampling.json
+
+{
+  "service_strategies": [
+    {
+      "service": "router-service",
+      "type": "probabilistic",
+      "param": 1.0,
+      "operation_strategies": [
+        {
+          "operation": "health",
+          "type": "probabilistic",
+          "param": 0.1
+        }
+      ]
+    },
+    {
+      "service": "twitch-receiver",
+      "type": "probabilistic",
+      "param": 0.5
+    },
+    {
+      "service": "discord-receiver",
+      "type": "probabilistic",
+      "param": 0.5
+    },
+    {
+      "service": "slack-receiver",
+      "type": "probabilistic",
+      "param": 0.5
+    },
+    {
+      "service": "ai-interaction",
+      "type": "probabilistic",
+      "param": 1.0
+    },
+    {
+      "service": "hub-backend",
+      "type": "probabilistic",
+      "param": 0.3
+    }
+  ],
+  "default_strategy": {
+    "type": "probabilistic",
+    "param": 0.1
+  }
+}
+
+---
+# Production Jaeger Deployment with Cassandra
+# ==========================================
+# For production use, deploy Jaeger with Cassandra backend:
+
+# services:
+#   cassandra:
+#     image: cassandra:4.0
+#     container_name: waddlebot-cassandra
+#     environment:
+#       CASSANDRA_DC: dc1
+#       CASSANDRA_RACK: rack1
+#     volumes:
+#       - cassandra_data:/var/lib/cassandra
+#     networks:
+#       - waddlebot-observability
+#
+#   cassandra-schema:
+#     image: jaegertracing/jaeger-cassandra-schema:latest
+#     container_name: waddlebot-jaeger-cassandra-schema
+#     environment:
+#       CQLSH_HOST: cassandra
+#       DATACENTER: dc1
+#       MODE: prod
+#       KEYSPACE: jaeger_v1_dc1
+#       REPLICATION_FACTOR: 1
+#     networks:
+#       - waddlebot-observability
+#     depends_on:
+#       - cassandra
+#
+#   jaeger-collector:
+#     image: jaegertracing/jaeger-collector:latest
+#     container_name: waddlebot-jaeger-collector
+#     environment:
+#       SPAN_STORAGE_TYPE: cassandra
+#       CASSANDRA_SERVERS: cassandra
+#       CASSANDRA_KEYSPACE: jaeger_v1_dc1
+#       COLLECTOR_ZIPKIN_HOST_PORT: :9411
+#       COLLECTOR_OTLP_ENABLED: true
+#     ports:
+#       - "14268:14268"
+#       - "14250:14250"
+#       - "9411:9411"
+#       - "4317:4317"
+#       - "4318:4318"
+#     networks:
+#       - waddlebot-observability
+#     depends_on:
+#       - cassandra
+#       - cassandra-schema
+#
+#   jaeger-query:
+#     image: jaegertracing/jaeger-query:latest
+#     container_name: waddlebot-jaeger-query
+#     environment:
+#       SPAN_STORAGE_TYPE: cassandra
+#       CASSANDRA_SERVERS: cassandra
+#       CASSANDRA_KEYSPACE: jaeger_v1_dc1
+#       QUERY_BASE_PATH: /
+#     ports:
+#       - "16686:16686"
+#       - "16687:16687"
+#     networks:
+#       - waddlebot-observability
+#     depends_on:
+#       - cassandra
+#       - cassandra-schema
+#
+#   jaeger-agent:
+#     image: jaegertracing/jaeger-agent:latest
+#     container_name: waddlebot-jaeger-agent
+#     environment:
+#       REPORTER_GRPC_HOST_PORT: jaeger-collector:14250
+#     ports:
+#       - "6831:6831/udp"
+#       - "6832:6832/udp"
+#       - "5778:5778"
+#     networks:
+#       - waddlebot-observability
+#     depends_on:
+#       - jaeger-collector
+
+# volumes:
+#   cassandra_data:
+#     driver: local
+
+---
+# Kubernetes Deployment for Jaeger
+# =================================
+# For Kubernetes deployment, use Jaeger Operator:
+
+# apiVersion: jaegertracing.io/v1
+# kind: Jaeger
+# metadata:
+#   name: waddlebot-jaeger
+#   namespace: waddlebot
+# spec:
+#   strategy: production
+#   storage:
+#     type: elasticsearch
+#     options:
+#       es:
+#         server-urls: http://elasticsearch:9200
+#         index-prefix: waddlebot
+#   ingress:
+#     enabled: true
+#     hosts:
+#       - jaeger.waddlebot.local
+#   collector:
+#     replicas: 3
+#     resources:
+#       limits:
+#         cpu: 1000m
+#         memory: 2Gi
+#       requests:
+#         cpu: 500m
+#         memory: 1Gi
+#   query:
+#     replicas: 2
+#     resources:
+#       limits:
+#         cpu: 500m
+#         memory: 1Gi
+#       requests:
+#         cpu: 250m
+#         memory: 512Mi

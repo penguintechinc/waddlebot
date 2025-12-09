@@ -2,43 +2,21 @@ name: Container Builds
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
     paths:
-      - 'router_module/**'
-      - 'marketplace_module/**'
-      - 'portal_module/**'
-      - 'kong_admin_broker/**'
-      - 'twitch_module/**'
-      - 'discord_module/**'
-      - 'slack_module/**'
-      - 'ai_interaction_module/**'
-      - 'inventory_interaction_module/**'
-      - 'labels_core_module/**'
-      - 'alias_interaction_module/**'
-      - 'shoutout_interaction_module/**'
-      - 'libs/**'
-      - 'kong/**'
+      - 'processing/router_module/**'
+      - 'trigger/receiver/**'
+      - 'action/interactive/**'
+      - 'action/pushing/**'
+      - 'action/security/**'
+      - 'core/**'
+      - 'admin/hub_module/**'
+      - 'libs/flask_core/**'
       - 'docker-compose.yml'
+      - '.version'
       - '.github/workflows/containers.yml'
   pull_request:
     branches: [ main, develop ]
-    paths:
-      - 'router_module/**'
-      - 'marketplace_module/**'
-      - 'portal_module/**'
-      - 'kong_admin_broker/**'
-      - 'twitch_module/**'
-      - 'discord_module/**'
-      - 'slack_module/**'
-      - 'ai_interaction_module/**'
-      - 'inventory_interaction_module/**'
-      - 'labels_core_module/**'
-      - 'alias_interaction_module/**'
-      - 'shoutout_interaction_module/**'
-      - 'libs/**'
-      - 'kong/**'
-      - 'docker-compose.yml'
-      - '.github/workflows/containers.yml'
   workflow_dispatch:
 
 env:
@@ -46,6 +24,60 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Determine version and tag suffix
+  determine-version:
+    name: Determine Version and Tags
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      suffix: ${{ steps.version.outputs.suffix }}
+      is_release: ${{ steps.version.outputs.is_release }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Determine version and suffix
+        id: version
+        run: |
+          # Read version from .version file
+          if [ -f .version ]; then
+            VERSION=$(cat .version | tr -d '[:space:]')
+          else
+            VERSION="0.0.0"
+          fi
+
+          echo "version=v${VERSION}" >> $GITHUB_OUTPUT
+
+          # Check if .version file changed (indicates a release)
+          if git diff HEAD^ HEAD --name-only | grep -q "^.version$"; then
+            IS_RELEASE="true"
+          else
+            IS_RELEASE="false"
+          fi
+
+          # Determine suffix based on branch and release status
+          if [ "$IS_RELEASE" = "true" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            # Version release on main: no suffix, plus 'latest' tag
+            SUFFIX=""
+            echo "suffix=" >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "Building RELEASE: v${VERSION} and latest"
+          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            # Main branch, not a release: -beta suffix
+            SUFFIX="-beta"
+            echo "suffix=-beta" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "Building BETA: v${VERSION}-beta"
+          else
+            # Non-main branch: -alpha suffix
+            SUFFIX="-alpha"
+            echo "suffix=-alpha" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "Building ALPHA: v${VERSION}-alpha"
+          fi
+
   # Detect changed modules
   detect-changes:
     name: Detect Changed Modules
@@ -119,7 +151,7 @@ jobs:
   build-core:
     name: Build Core Modules
     runs-on: ubuntu-latest
-    needs: detect-changes
+    needs: [determine-version, detect-changes]
     if: needs.detect-changes.outputs.router == 'true' || needs.detect-changes.outputs.marketplace == 'true' || needs.detect-changes.outputs.portal == 'true' || needs.detect-changes.outputs.kong-admin == 'true' || needs.detect-changes.outputs.libs == 'true' || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
@@ -160,10 +192,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.name }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.determine-version.outputs.version }}${{ needs.determine-version.outputs.suffix }}
+            type=raw,value=latest,enable=${{ needs.determine-version.outputs.is_release == 'true' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -203,7 +233,7 @@ jobs:
   build-collectors:
     name: Build Collector Modules
     runs-on: ubuntu-latest
-    needs: detect-changes
+    needs: [determine-version, detect-changes]
     if: needs.detect-changes.outputs.twitch == 'true' || needs.detect-changes.outputs.discord == 'true' || needs.detect-changes.outputs.slack == 'true' || needs.detect-changes.outputs.libs == 'true' || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
@@ -240,10 +270,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.name }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.determine-version.outputs.version }}${{ needs.determine-version.outputs.suffix }}
+            type=raw,value=latest,enable=${{ needs.determine-version.outputs.is_release == 'true' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -283,7 +311,7 @@ jobs:
   build-interactions:
     name: Build Interaction Modules
     runs-on: ubuntu-latest
-    needs: detect-changes
+    needs: [determine-version, detect-changes]
     if: needs.detect-changes.outputs.ai-interaction == 'true' || needs.detect-changes.outputs.inventory-interaction == 'true' || needs.detect-changes.outputs.labels-core == 'true' || needs.detect-changes.outputs.alias-interaction == 'true' || needs.detect-changes.outputs.shoutout-interaction == 'true' || needs.detect-changes.outputs.libs == 'true' || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
@@ -328,10 +356,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.name }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.determine-version.outputs.version }}${{ needs.determine-version.outputs.suffix }}
+            type=raw,value=latest,enable=${{ needs.determine-version.outputs.is_release == 'true' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -371,7 +397,7 @@ jobs:
   build-kong:
     name: Build Kong Infrastructure
     runs-on: ubuntu-latest
-    needs: detect-changes
+    needs: [determine-version, detect-changes]
     if: needs.detect-changes.outputs.kong == 'true' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout code
@@ -393,10 +419,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/kong
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.determine-version.outputs.version }}${{ needs.determine-version.outputs.suffix }}
+            type=raw,value=latest,enable=${{ needs.determine-version.outputs.is_release == 'true' }}
 
       - name: Build and push Kong image
         uses: docker/build-push-action@v5
@@ -499,11 +523,61 @@ jobs:
         with:
           sarif_file: 'trivy-${{ matrix.image }}.sarif'
 
+  # Create GitHub Release
+  create-release:
+    name: Create Pre-Release
+    runs-on: ubuntu-latest
+    needs: [determine-version, build-core, build-collectors, build-interactions]
+    if: needs.determine-version.outputs.is_release == 'true' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+
+          # Check if release already exists
+          if gh release view "$VERSION" > /dev/null 2>&1; then
+            echo "⏭️ Release $VERSION already exists, skipping"
+            exit 0
+          fi
+
+          # Create release notes
+          cat << EOF > release_notes.md
+          ## Pre-Release $VERSION
+
+          This is an automated pre-release created when the .version file was updated.
+
+          **Container Images Built:**
+          - All modules tagged with \`$VERSION\` and \`latest\`
+          - Available at \`ghcr.io/${{ github.repository }}\`
+
+          ### Changes
+
+          See commit history for detailed changes since last release.
+
+          ---
+          *This pre-release was automatically generated by the CI/CD pipeline.*
+          EOF
+
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --notes-file release_notes.md \
+            --prerelease \
+            --target ${{ github.sha }}
+
+          echo "✅ Created pre-release $VERSION"
+
   # Notify on completion
   notify:
     name: Notify Build Status
     runs-on: ubuntu-latest
-    needs: [build-core, build-collectors, build-interactions, integration-tests, security-scan]
+    needs: [determine-version, build-core, build-collectors, build-interactions, integration-tests, security-scan]
     if: always()
     steps:
       - name: Build Status Summary

@@ -1,0 +1,27 @@
+name: Build security-core
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'core/security_core_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-security-core.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'core/security_core_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build security-core Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'core/security_core_module'
+      module_name: 'security-core'
+      module_port: '8055'
+    secrets: inherit
