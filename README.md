@@ -108,8 +108,7 @@ Infrastructure (PostgreSQL, Redis, MinIO, Qdrant)
 ![Admin Members](docs/screenshots/admin-members.png)
 ![Admin Announcements](docs/screenshots/admin-announcements.png)
 
-### Loyalty & Engagement
-![Loyalty System](docs/screenshots/admin-loyalty.png)
+### OBS Integration
 ![OBS Overlays](docs/screenshots/admin-overlays.png)
 
 ### Super Admin

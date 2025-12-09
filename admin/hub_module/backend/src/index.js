@@ -272,6 +272,43 @@ async function initializeDatabase() {
       ON announcement_broadcasts(announcement_id)
     `);
 
+    // Create community_overlay_tokens table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS community_overlay_tokens (
+        id SERIAL PRIMARY KEY,
+        community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+        overlay_key VARCHAR(64) NOT NULL UNIQUE,
+        previous_key VARCHAR(64),
+        is_active BOOLEAN DEFAULT true,
+        theme_config JSONB DEFAULT '{}',
+        enabled_sources JSONB DEFAULT '["alerts", "chat", "goals", "ticker"]',
+        last_accessed TIMESTAMP,
+        access_count INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        rotated_at TIMESTAMP,
+        UNIQUE(community_id)
+      )
+    `);
+
+    // Create overlay_access_log table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS overlay_access_log (
+        id SERIAL PRIMARY KEY,
+        community_id INTEGER NOT NULL,
+        overlay_key VARCHAR(64),
+        ip_address VARCHAR(45),
+        user_agent TEXT,
+        accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create index for overlay access log
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_overlay_access_log_community
+      ON overlay_access_log(community_id, accessed_at DESC)
+    `);
+
     // Check if default admin exists in hub_users (unified auth system)
     const adminCheck = await query(
       'SELECT id FROM hub_users WHERE email = $1',

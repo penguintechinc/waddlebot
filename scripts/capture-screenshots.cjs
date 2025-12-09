@@ -6,18 +6,19 @@ const BASE_URL = 'http://localhost:8060';
 const OUTPUT_DIR = path.join(__dirname, '..', 'docs', 'screenshots');
 
 // WaddleBot Hub pages to capture
+// Note: Community ID 2 is the first real community (ID 1 may not exist)
+const COMMUNITY_ID = 2;
 const pages = [
   { name: 'login', path: '/login' },
   { name: 'dashboard', path: '/dashboard' },
   { name: 'communities', path: '/communities' },
-  { name: 'community-dashboard', path: '/dashboard/community/1' },
-  { name: 'admin-overview', path: '/admin/1' },
-  { name: 'admin-members', path: '/admin/1/members' },
-  { name: 'admin-announcements', path: '/admin/1/announcements' },
-  { name: 'admin-servers', path: '/admin/1/servers' },
-  { name: 'admin-modules', path: '/admin/1/modules' },
-  { name: 'admin-loyalty', path: '/admin/1/loyalty' },
-  { name: 'admin-overlays', path: '/admin/1/overlays' },
+  { name: 'community-dashboard', path: `/dashboard/community/${COMMUNITY_ID}` },
+  { name: 'admin-overview', path: `/admin/${COMMUNITY_ID}` },
+  { name: 'admin-members', path: `/admin/${COMMUNITY_ID}/members` },
+  { name: 'admin-announcements', path: `/admin/${COMMUNITY_ID}/announcements` },
+  { name: 'admin-servers', path: `/admin/${COMMUNITY_ID}/servers` },
+  { name: 'admin-modules', path: `/admin/${COMMUNITY_ID}/modules` },
+  { name: 'admin-overlays', path: `/admin/${COMMUNITY_ID}/overlays` },
   { name: 'superadmin-dashboard', path: '/superadmin' },
   { name: 'superadmin-communities', path: '/superadmin/communities' },
 ];
