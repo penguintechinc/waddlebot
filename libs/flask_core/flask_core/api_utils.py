@@ -501,47 +501,9 @@ def rate_limit(requests_per_minute: int = 60):
     return decorator
 
 
-def validate_request(schema: Dict[str, Any]):
-    """
-    Decorator to validate request JSON against schema.
-
-    Args:
-        schema: Dictionary defining required fields and types
-
-    Usage:
-        @app.route('/create', methods=['POST'])
-        @validate_request({'name': str, 'age': int})
-        async def create_user():
-            data = await request.get_json()
-            return success_response(data)
-    """
-    def decorator(f: Callable) -> Callable:
-        @wraps(f)
-        async def decorated_function(*args, **kwargs):
-            try:
-                data = await request.get_json()
-            except Exception:
-                return error_response("Invalid JSON", status_code=400)
-
-            # Validate required fields
-            errors = {}
-            for field, field_type in schema.items():
-                if field not in data:
-                    errors[field] = "Field is required"
-                elif not isinstance(data[field], field_type):
-                    errors[field] = f"Field must be of type {field_type.__name__}"
-
-            if errors:
-                return error_response(
-                    "Validation failed",
-                    status_code=400,
-                    details=errors
-                )
-
-            return await f(*args, **kwargs)
-
-        return decorated_function
-    return decorator
+# validate_request decorator has been REMOVED in favor of the new Pydantic-based
+# validation system in flask_core.validation (validate_json, validate_query, validate_form).
+# See flask_core/validation.py for the replacement implementation.
 
 
 def cors_headers(

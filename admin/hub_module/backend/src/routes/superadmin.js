@@ -6,6 +6,7 @@ import * as superadminController from '../controllers/superadminController.js';
 import * as platformConfigController from '../controllers/platformConfigController.js';
 import * as kongController from '../controllers/kongController.js';
 import { requireAuth, requireSuperAdmin } from '../middleware/auth.js';
+import { validators, validationRules, validateRequest } from '../middleware/validation.js';
 
 const router = Router();
 
@@ -19,26 +20,73 @@ router.get('/dashboard', superadminController.getDashboardStats);
 // Community management
 router.get('/communities', superadminController.listCommunities);
 router.get('/communities/:id', superadminController.getCommunity);
-router.post('/communities', superadminController.createCommunity);
-router.put('/communities/:id', superadminController.updateCommunity);
+router.post('/communities',
+  validationRules.createCommunity,
+  validateRequest,
+  superadminController.createCommunity
+);
+router.put('/communities/:id',
+  validators.text('name', { min: 3, max: 100 }),
+  validators.text('display_name', { min: 3, max: 255 }),
+  validators.text('description', { min: 0, max: 5000 }),
+  validators.boolean('is_public'),
+  validators.boolean('allow_join_requests'),
+  validateRequest,
+  superadminController.updateCommunity
+);
 router.delete('/communities/:id', superadminController.deleteCommunity);
-router.post('/communities/:id/reassign', superadminController.reassignOwner);
+router.post('/communities/:id/reassign',
+  validators.integer('new_owner_id', { min: 1 }),
+  validateRequest,
+  superadminController.reassignOwner
+);
 
 // Module registry management
 router.get('/marketplace/modules', superadminController.getAllModules);
-router.post('/marketplace/modules', superadminController.createModule);
-router.put('/marketplace/modules/:id', superadminController.updateModule);
+router.post('/marketplace/modules',
+  validators.text('name', { min: 3, max: 100 }),
+  validators.text('description', { min: 10, max: 5000 }),
+  validators.text('version', { min: 1, max: 20 }),
+  validators.text('author', { min: 1, max: 100 }),
+  validators.url('repository_url'),
+  validators.boolean('is_official'),
+  validateRequest,
+  superadminController.createModule
+);
+router.put('/marketplace/modules/:id',
+  validators.text('name', { min: 3, max: 100 }),
+  validators.text('description', { min: 10, max: 5000 }),
+  validators.text('version', { min: 1, max: 20 }),
+  validators.boolean('is_active'),
+  validateRequest,
+  superadminController.updateModule
+);
 router.put('/marketplace/modules/:id/publish', superadminController.publishModule);
 router.delete('/marketplace/modules/:id', superadminController.deleteModule);
 
 // Platform configuration management
 router.get('/platform-config', platformConfigController.getPlatformConfigs);
-router.put('/platform-config/:platform', platformConfigController.updatePlatformConfig);
+router.put('/platform-config/:platform',
+  validators.text('client_id', { min: 1, max: 500 }),
+  validators.text('client_secret', { min: 1, max: 500 }),
+  validators.url('redirect_uri'),
+  validators.boolean('enabled'),
+  validateRequest,
+  platformConfigController.updatePlatformConfig
+);
 router.post('/platform-config/:platform/test', platformConfigController.testPlatformConnection);
 
 // Hub settings management (signup, email, etc.)
 router.get('/settings', platformConfigController.getHubSettings);
-router.put('/settings', platformConfigController.updateHubSettings);
+router.put('/settings',
+  validators.boolean('allow_public_signup'),
+  validators.boolean('require_email_verification'),
+  validators.text('smtp_host', { min: 0, max: 255 }),
+  validators.integer('smtp_port', { min: 1, max: 65535 }),
+  validators.boolean('smtp_secure'),
+  validateRequest,
+  platformConfigController.updateHubSettings
+);
 
 // Kong Gateway management
 router.get('/kong/status', kongController.getStatus);

@@ -21,6 +21,7 @@ import {
   CurrencyDollarIcon,
   MegaphoneIcon,
   FireIcon,
+  CommandLineIcon,
 } from '@heroicons/react/24/outline';
 
 function AdminLayout() {
@@ -34,6 +35,7 @@ function AdminLayout() {
         { to: `/admin/${communityId}`, icon: HomeIcon, label: 'Overview', exact: true },
         { to: `/admin/${communityId}/members`, icon: UserGroupIcon, label: 'Members' },
         { to: `/admin/${communityId}/announcements`, icon: MegaphoneIcon, label: 'Announcements' },
+        { to: `/admin/${communityId}/workflows`, icon: CommandLineIcon, label: 'Workflows', premium: true },
         { to: `/admin/${communityId}/analytics`, icon: ChartBarIcon, label: 'Analytics' },
         { to: `/admin/${communityId}/security`, icon: FireIcon, label: 'Security' },
         { to: `/admin/${communityId}/servers`, icon: ServerStackIcon, label: 'Linked Servers' },
@@ -143,14 +145,21 @@ function AdminLayout() {
               <Link
                 key={item.to}
                 to={item.to}
-                className={`flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
+                className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors ${
                   isActive(item.to, item.exact)
                     ? 'bg-gold-500/20 text-gold-400 border border-gold-500/30'
                     : 'text-navy-300 hover:bg-navy-800 hover:text-sky-300'
                 }`}
               >
-                <item.icon className="w-5 h-5" />
-                <span className="text-sm font-medium">{item.label}</span>
+                <div className="flex items-center space-x-3">
+                  <item.icon className="w-5 h-5" />
+                  <span className="text-sm font-medium">{item.label}</span>
+                </div>
+                {item.premium && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-gold-500 text-navy-900 font-bold">
+                    PRO
+                  </span>
+                )}
               </Link>
             ))}
 

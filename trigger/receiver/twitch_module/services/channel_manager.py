@@ -4,6 +4,7 @@ Twitch Channel Manager - Manages which channels the bot is in
 import asyncio
 from typing import Dict, Any, Optional, Set
 from flask_core import setup_aaa_logging
+from .cache_manager import TwitchCacheManager
 
 
 class ChannelManager:
@@ -15,10 +16,11 @@ class ChannelManager:
     - Map channels to communities
     """
 
-    def __init__(self, dal, bot, refresh_interval: int = 300):
+    def __init__(self, dal, bot, refresh_interval: int = 300, cache_manager: Optional[TwitchCacheManager] = None):
         self.dal = dal
         self.bot = bot
         self.refresh_interval = refresh_interval
+        self.cache = cache_manager
         self.logger = setup_aaa_logging('channel_manager', '2.0.0')
 
         self._active_channels: Dict[str, Dict[str, Any]] = {}
@@ -26,7 +28,14 @@ class ChannelManager:
         self._running = False
 
     async def load_channels(self) -> Dict[str, Dict[str, Any]]:
-        """Load channels from database"""
+        """Load channels from database with caching"""
+        # Try cache first
+        if self.cache:
+            cached_channels = await self.cache.get_channels()
+            if cached_channels:
+                self.logger.debug(f"Loaded {len(cached_channels)} channels from cache")
+                return cached_channels
+
         channels = {}
         try:
             result = self.dal.executesql(
@@ -56,6 +65,11 @@ class ChannelManager:
                 }
 
             self.logger.info(f"Loaded {len(channels)} Twitch channels from database")
+
+            # Cache the result
+            if self.cache and channels:
+                await self.cache.set_channels(channels)
+
         except Exception as e:
             self.logger.error(f"Failed to load channels: {e}")
         return channels
@@ -66,6 +80,10 @@ class ChannelManager:
 
         # Initial load
         self._active_channels = await self.load_channels()
+
+        # Warm cache on startup
+        if self.cache and self._active_channels:
+            await self.cache.warm_channels(self._active_channels)
 
         # Start refresh task
         self._refresh_task = asyncio.create_task(self._refresh_loop())
@@ -126,10 +144,23 @@ class ChannelManager:
         """Get info for a specific channel"""
         return self._active_channels.get(channel_name.lower())
 
-    def get_community_id(self, channel_name: str) -> Optional[int]:
-        """Get community ID for a channel"""
+    async def get_community_id(self, channel_name: str) -> Optional[int]:
+        """Get community ID for a channel with caching"""
+        # Try cache first
+        if self.cache:
+            cached_id = await self.cache.get_community_id(channel_name)
+            if cached_id is not None:
+                return cached_id
+
+        # Fallback to in-memory
         info = self.get_channel_info(channel_name)
-        return info.get('community_id') if info else None
+        community_id = info.get('community_id') if info else None
+
+        # Cache the result
+        if self.cache and community_id is not None:
+            await self.cache.set_community_id(channel_name, community_id)
+
+        return community_id
 
     def get_all_channels(self) -> Dict[str, Dict[str, Any]]:
         """Get all active channels"""

@@ -14,3 +14,7 @@ class Config:
     ROUTER_API_URL = os.getenv('ROUTER_API_URL', 'http://router-service:8000/api/v1/router')
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
     SECRET_KEY = os.getenv('SECRET_KEY', 'change-me-in-production')
+
+    # Twitch API credentials
+    TWITCH_CLIENT_ID = os.getenv('TWITCH_CLIENT_ID', '')
+    TWITCH_CLIENT_SECRET = os.getenv('TWITCH_CLIENT_SECRET', '')

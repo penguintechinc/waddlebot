@@ -1,0 +1,317 @@
+# Prometheus Configuration for WaddleBot
+# =======================================
+#
+# This configuration sets up Prometheus to scrape metrics from all WaddleBot services.
+#
+# Usage:
+#   docker run -p 9090:9090 -v $(pwd)/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
+#
+# Or with docker-compose:
+#   prometheus:
+#     image: prom/prometheus:latest
+#     ports:
+#       - "9090:9090"
+#     volumes:
+#       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+#       - prometheus_data:/prometheus
+#     command:
+#       - '--config.file=/etc/prometheus/prometheus.yml'
+#       - '--storage.tsdb.path=/prometheus'
+#       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+#       - '--web.console.templates=/usr/share/prometheus/consoles'
+
+global:
+  scrape_interval: 15s      # How frequently to scrape targets
+  evaluation_interval: 15s  # How frequently to evaluate rules
+  scrape_timeout: 10s       # Timeout for scraping targets
+
+  # Attach these labels to all metrics
+  external_labels:
+    environment: 'production'
+    cluster: 'waddlebot-main'
+
+# Alertmanager configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - 'alertmanager:9093'
+
+# Rule files (for alerting and recording rules)
+# rule_files:
+#   - 'alerts.yml'
+#   - 'recording_rules.yml'
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          tier: 'monitoring'
+
+  # Processing Layer - Router Module
+  - job_name: 'router-service'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['router-service:8000']
+        labels:
+          service: 'router'
+          tier: 'processing'
+          module_type: 'processing'
+    # Optional: Service discovery via DNS
+    # dns_sd_configs:
+    #   - names: ['router-service.default.svc.cluster.local']
+    #     type: 'A'
+    #     port: 8000
+
+  # Trigger Layer - Receivers
+  - job_name: 'twitch-receiver'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['twitch-module:8001']
+        labels:
+          service: 'twitch-receiver'
+          tier: 'trigger'
+          module_type: 'receiver'
+          platform: 'twitch'
+
+  - job_name: 'discord-receiver'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['discord-module:8002']
+        labels:
+          service: 'discord-receiver'
+          tier: 'trigger'
+          module_type: 'receiver'
+          platform: 'discord'
+
+  - job_name: 'slack-receiver'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['slack-module:8003']
+        labels:
+          service: 'slack-receiver'
+          tier: 'trigger'
+          module_type: 'receiver'
+          platform: 'slack'
+
+  # Action Layer - Interactive Modules
+  - job_name: 'ai-interaction'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['ai-interaction:8005']
+        labels:
+          service: 'ai-interaction'
+          tier: 'action'
+          module_type: 'interactive'
+
+  - job_name: 'alias-interaction'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['alias-interaction:8006']
+        labels:
+          service: 'alias-interaction'
+          tier: 'action'
+          module_type: 'interactive'
+
+  - job_name: 'shoutout-interaction'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['shoutout-interaction:8007']
+        labels:
+          service: 'shoutout-interaction'
+          tier: 'action'
+          module_type: 'interactive'
+
+  - job_name: 'inventory-interaction'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['inventory-interaction:8008']
+        labels:
+          service: 'inventory-interaction'
+          tier: 'action'
+          module_type: 'interactive'
+
+  - job_name: 'calendar-interaction'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['calendar-interaction:8009']
+        labels:
+          service: 'calendar-interaction'
+          tier: 'action'
+          module_type: 'interactive'
+
+  - job_name: 'memories-interaction'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['memories-interaction:8010']
+        labels:
+          service: 'memories-interaction'
+          tier: 'action'
+          module_type: 'interactive'
+
+  - job_name: 'youtube-music-interaction'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['youtube-music-interaction:8011']
+        labels:
+          service: 'youtube-music-interaction'
+          tier: 'action'
+          module_type: 'interactive'
+
+  - job_name: 'spotify-interaction'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['spotify-interaction:8012']
+        labels:
+          service: 'spotify-interaction'
+          tier: 'action'
+          module_type: 'interactive'
+
+  # Core Layer - Platform Services
+  - job_name: 'identity-core'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['identity-core:8050']
+        labels:
+          service: 'identity-core'
+          tier: 'core'
+          module_type: 'core'
+
+  - job_name: 'labels-core'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['labels-core:8051']
+        labels:
+          service: 'labels-core'
+          tier: 'core'
+          module_type: 'core'
+
+  - job_name: 'browser-source-core'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['browser-source-core:8052']
+        labels:
+          service: 'browser-source-core'
+          tier: 'core'
+          module_type: 'core'
+
+  - job_name: 'reputation-core'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['reputation-core:8053']
+        labels:
+          service: 'reputation-core'
+          tier: 'core'
+          module_type: 'core'
+
+  - job_name: 'community-core'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['community-core:8054']
+        labels:
+          service: 'community-core'
+          tier: 'core'
+          module_type: 'core'
+
+  - job_name: 'analytics-core'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['analytics-core:8055']
+        labels:
+          service: 'analytics-core'
+          tier: 'core'
+          module_type: 'core'
+
+  # Admin Layer - Hub Module
+  - job_name: 'hub-backend'
+    metrics_path: '/api/metrics'
+    static_configs:
+      - targets: ['hub-backend:5000']
+        labels:
+          service: 'hub-backend'
+          tier: 'admin'
+          module_type: 'hub'
+
+  # Infrastructure Services
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+        labels:
+          service: 'postgres'
+          tier: 'infrastructure'
+          component: 'database'
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: 'redis'
+          tier: 'infrastructure'
+          component: 'cache'
+
+  # Kubernetes Service Discovery (for production K8s deployment)
+  # Uncomment when deploying to Kubernetes
+  # - job_name: 'kubernetes-pods'
+  #   kubernetes_sd_configs:
+  #     - role: pod
+  #   relabel_configs:
+  #     # Only scrape pods with prometheus.io/scrape: "true" annotation
+  #     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+  #       action: keep
+  #       regex: true
+  #
+  #     # Use prometheus.io/path annotation for metrics path
+  #     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+  #       action: replace
+  #       target_label: __metrics_path__
+  #       regex: (.+)
+  #
+  #     # Use prometheus.io/port annotation for metrics port
+  #     - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+  #       action: replace
+  #       regex: ([^:]+)(?::\d+)?;(\d+)
+  #       replacement: $1:$2
+  #       target_label: __address__
+  #
+  #     # Add pod labels
+  #     - action: labelmap
+  #       regex: __meta_kubernetes_pod_label_(.+)
+  #
+  #     # Add namespace
+  #     - source_labels: [__meta_kubernetes_namespace]
+  #       action: replace
+  #       target_label: kubernetes_namespace
+  #
+  #     # Add pod name
+  #     - source_labels: [__meta_kubernetes_pod_name]
+  #       action: replace
+  #       target_label: kubernetes_pod_name
+
+  # Node exporter for system metrics (optional)
+  # - job_name: 'node-exporter'
+  #   static_configs:
+  #     - targets: ['node-exporter:9100']
+  #       labels:
+  #         service: 'node-exporter'
+  #         tier: 'infrastructure'
+
+  # cAdvisor for container metrics (optional)
+  # - job_name: 'cadvisor'
+  #   static_configs:
+  #     - targets: ['cadvisor:8080']
+  #       labels:
+  #         service: 'cadvisor'
+  #         tier: 'infrastructure'
+
+# Remote write configuration (for long-term storage)
+# remote_write:
+#   - url: "http://cortex:9009/api/prom/push"
+#   - url: "http://thanos-receive:19291/api/v1/receive"
+
+# Remote read configuration
+# remote_read:
+#   - url: "http://thanos-query:19191/api/v1/query"

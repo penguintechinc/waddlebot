@@ -28,12 +28,17 @@ from flask_core import (  # noqa: E402
     auth_required,
     success_response,
     error_response,
-    create_health_blueprint
+    create_health_blueprint,
+    validate_json
 )
 
 from config import Config  # noqa: E402
 from services.ai_service import AIService  # noqa: E402
 from services.router_service import RouterService  # noqa: E402
+from validation_models import (  # noqa: E402
+    InteractionRequest,
+    ProviderConfigRequest
+)
 
 # Initialize Quart app
 app = Quart(__name__)
@@ -116,8 +121,9 @@ async def index():
 
 # Main interaction endpoint
 @ai_bp.route('/interaction', methods=['POST'])
+@validate_json(InteractionRequest)
 @async_endpoint
-async def interaction():
+async def interaction(validated_data: InteractionRequest):
     """
     Main interaction endpoint for processing messages and events.
 
@@ -134,19 +140,14 @@ async def interaction():
     }
     """
     try:
-        data = await request.get_json()
-
-        # Validate required fields
-        session_id = data.get('session_id')
-        if not session_id:
-            return error_response("session_id is required", status_code=400)
-
-        message_type = data.get('message_type', 'chatMessage')
-        message_content = data.get('message_content', '')
-        user_id = data.get('user_id')
-        entity_id = data.get('entity_id')
-        platform = data.get('platform')
-        username = data.get('username', user_id)
+        # Extract validated fields
+        session_id = validated_data.session_id
+        message_type = validated_data.message_type
+        message_content = validated_data.message_content
+        user_id = validated_data.user_id
+        entity_id = validated_data.entity_id
+        platform = validated_data.platform
+        username = validated_data.username
 
         logger.audit(
             action="process_interaction",
@@ -160,7 +161,8 @@ async def interaction():
         asyncio.create_task(
             process_interaction(
                 session_id, message_type, message_content,
-                user_id, entity_id, platform, username, data
+                user_id, entity_id, platform, username,
+                validated_data.dict()
             )
         )
 
@@ -326,9 +328,15 @@ async def chat_completions():
     OpenAI-compatible chat completions endpoint.
 
     Compatible with OpenAI API format for easy integration.
+    Note: Validation is done manually here to maintain OpenAI API compatibility.
     """
     try:
         data = await request.get_json()
+
+        if not data:
+            return error_response(
+                "Request body must be valid JSON", status_code=400
+            )
 
         messages = data.get('messages', [])
         model = data.get('model', Config.AI_MODEL)
@@ -340,6 +348,16 @@ async def chat_completions():
         if not messages:
             return error_response(  # noqa: E501
                 "messages array is required", status_code=400
+            )
+
+        if not isinstance(messages, list):
+            return error_response(
+                "messages must be an array", status_code=400
+            )
+
+        if len(messages) > 50:
+            return error_response(
+                "messages array cannot exceed 50 items", status_code=400
             )
 
         # Extract last user message
@@ -419,60 +437,65 @@ async def get_models():
 
 
 # Get/Update configuration
-@ai_bp.route('/config', methods=['GET', 'PUT'])
+@ai_bp.route('/config', methods=['GET'])
 @auth_required
 @async_endpoint
-async def config():
-    """Get or update AI module configuration"""
+async def get_config():
+    """Get AI module configuration"""
     try:
-        if request.method == 'GET':
-            # Return current configuration
-            return success_response({
+        # Return current configuration
+        return success_response({
+            "provider": Config.AI_PROVIDER,
+            "model": Config.AI_MODEL,
+            "temperature": Config.AI_TEMPERATURE,
+            "max_tokens": Config.AI_MAX_TOKENS,
+            "system_prompt": Config.SYSTEM_PROMPT,
+            "question_triggers": Config.QUESTION_TRIGGERS,
+            "respond_to_events": Config.RESPOND_TO_EVENTS,
+            "event_response_types": Config.EVENT_RESPONSE_TYPES
+        })
+
+    except Exception as e:
+        logger.error(f"Config endpoint error: {e}")
+        return error_response(str(e), status_code=500)
+
+
+@ai_bp.route('/config', methods=['PUT'])
+@auth_required
+@validate_json(ProviderConfigRequest)
+@async_endpoint
+async def update_config(validated_data: ProviderConfigRequest):
+    """Update AI module configuration with validation"""
+    try:
+        # Update configuration with validated data
+        if validated_data.model is not None:
+            Config.AI_MODEL = validated_data.model
+        if validated_data.temperature is not None:
+            Config.AI_TEMPERATURE = validated_data.temperature
+        if validated_data.max_tokens is not None:
+            Config.AI_MAX_TOKENS = validated_data.max_tokens
+        if validated_data.system_prompt is not None:
+            Config.SYSTEM_PROMPT = validated_data.system_prompt
+
+        # Note: api_key and base_url would be stored in database
+        # in production, not in Config
+
+        logger.audit(
+            action="update_config",
+            user=request.current_user['username'],
+            community=str(validated_data.community_id),
+            result="SUCCESS"
+        )
+
+        return success_response({
+            "message": "Configuration updated successfully",
+            "config": {
                 "provider": Config.AI_PROVIDER,
                 "model": Config.AI_MODEL,
                 "temperature": Config.AI_TEMPERATURE,
-                "max_tokens": Config.AI_MAX_TOKENS,
-                "system_prompt": Config.SYSTEM_PROMPT,
-                "question_triggers": Config.QUESTION_TRIGGERS,
-                "respond_to_events": Config.RESPOND_TO_EVENTS,
-                "event_response_types": Config.EVENT_RESPONSE_TYPES
-            })
-
-        else:  # PUT
-            data = await request.get_json()
-
-            # Update configuration
-            if 'model' in data:
-                Config.AI_MODEL = data['model']
-            if 'temperature' in data:
-                Config.AI_TEMPERATURE = float(data['temperature'])
-            if 'max_tokens' in data:
-                Config.AI_MAX_TOKENS = int(data['max_tokens'])
-            if 'system_prompt' in data:
-                Config.SYSTEM_PROMPT = data['system_prompt']
-            if 'question_triggers' in data:
-                Config.QUESTION_TRIGGERS = data['question_triggers']
-            if 'respond_to_events' in data:
-                Config.RESPOND_TO_EVENTS = bool(data['respond_to_events'])
-            if 'event_response_types' in data:
-                Config.EVENT_RESPONSE_TYPES = data['event_response_types']
-
-            logger.audit(
-                action="update_config",
-                user=request.current_user['username'],
-                community="system",
-                result="SUCCESS"
-            )
-
-            return success_response({
-                "message": "Configuration updated successfully",
-                "config": {
-                    "provider": Config.AI_PROVIDER,
-                    "model": Config.AI_MODEL,
-                    "temperature": Config.AI_TEMPERATURE,
-                    "max_tokens": Config.AI_MAX_TOKENS
-                }
-            })
+                "max_tokens": Config.AI_MAX_TOKENS
+            }
+        })
 
     except Exception as e:
         logger.error(f"Config endpoint error: {e}")
@@ -487,7 +510,19 @@ async def test():
     """Test AI generation with custom input"""
     try:
         data = await request.get_json()
+
+        if not data:
+            return error_response(
+                "Request body must be valid JSON", status_code=400
+            )
+
         test_message = data.get('message', 'What is the weather like?')
+
+        # Validate message length
+        if len(test_message) > 10000:
+            return error_response(
+                "message cannot exceed 10000 characters", status_code=400
+            )
 
         response_text = await ai_service.generate_response(
             message_content=test_message,

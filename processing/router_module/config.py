@@ -47,3 +47,6 @@ class Config:
     # Reputation module integration
     REPUTATION_API_URL = os.getenv('REPUTATION_API_URL', 'http://reputation:8021')
     REPUTATION_ENABLED = os.getenv('REPUTATION_ENABLED', 'true').lower() == 'true'
+
+    # Workflow core module integration
+    WORKFLOW_CORE_URL = os.getenv('WORKFLOW_CORE_URL', 'http://workflow-core:8070')

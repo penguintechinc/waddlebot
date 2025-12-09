@@ -33,7 +33,9 @@ from flask_core import (  # noqa: E402
     success_response,
     error_response,
     create_health_blueprint,
-    init_database
+    init_database,
+    validate_json,
+    validate_query
 )
 
 from config import Config  # noqa: E402
@@ -43,6 +45,22 @@ from services.giveaway_service import GiveawayService  # noqa: E402
 from services.minigame_service import MinigameService  # noqa: E402
 from services.duel_service import DuelService  # noqa: E402
 from services.gear_service import GearService  # noqa: E402
+from validation_models import (  # noqa: E402
+    CurrencyTransferRequest,
+    SetBalanceRequest,
+    GearActionRequest,
+    GearCreateRequest,
+    CoinflipRequest,
+    SlotsRequest,
+    RouletteRequest,
+    DuelChallengeRequest,
+    DuelActionRequest,
+    GiveawayCreateRequest,
+    GiveawayEntryRequest,
+    LeaderboardParams,
+    EarningConfigUpdate,
+    EventEarningRequest
+)  # noqa: E402
 
 # Initialize Quart app
 app = Quart(__name__)
@@ -263,42 +281,27 @@ async def remove_currency(community_id: int):
 
 
 @currency_bp.route('/<int:community_id>/transfer', methods=['POST'])
+@validate_json(CurrencyTransferRequest)
 @async_endpoint
-async def transfer_currency(community_id: int):
+async def transfer_currency(validated_data: CurrencyTransferRequest):
     """Transfer currency between users"""
     try:
-        data = await request.get_json()
-
-        from_user_id = data.get('from_user_id')
-        to_user_id = data.get('to_user_id')
-        amount = data.get('amount')
-        platform = data.get('platform', 'twitch')
-
-        if not from_user_id or not to_user_id or amount is None:
-            return error_response(
-                "from_user_id, to_user_id, and amount are required",
-                status_code=400
-            )
-
-        if amount <= 0:
-            return error_response("Amount must be positive", status_code=400)
-
         result = await currency_service.transfer(
-            community_id=community_id,
-            platform=platform,
-            from_user_id=from_user_id,
-            to_user_id=to_user_id,
-            amount=amount
+            community_id=validated_data.community_id,
+            platform=validated_data.platform,
+            from_user_id=validated_data.from_user_id,
+            to_user_id=validated_data.to_user_id,
+            amount=validated_data.amount
         )
 
         if result.success:
             logger.audit(
                 action="transfer_currency",
-                community=community_id,
-                user=from_user_id,
+                community=validated_data.community_id,
+                user=validated_data.from_user_id,
                 result="SUCCESS",
-                amount=amount,
-                to_user=to_user_id
+                amount=validated_data.amount,
+                to_user=validated_data.to_user_id
             )
 
         return success_response({
@@ -308,22 +311,20 @@ async def transfer_currency(community_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Transfer currency error: {e}", community=community_id)
+        logger.error(f"Transfer currency error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
 @currency_bp.route('/<int:community_id>/leaderboard', methods=['GET'])
+@validate_query(LeaderboardParams)
 @async_endpoint
-async def get_leaderboard(community_id: int):
+async def get_leaderboard(query_params: LeaderboardParams, community_id: int):
     """Get top users by balance"""
     try:
-        limit = int(request.args.get('limit', 10))
-        platform = request.args.get('platform', 'twitch')
-
         leaderboard = await currency_service.get_leaderboard(
             community_id=community_id,
-            platform=platform,
-            limit=limit
+            platform=query_params.platform,
+            limit=query_params.limit
         )
 
         return success_response({
@@ -345,35 +346,25 @@ async def get_leaderboard(community_id: int):
 
 @currency_bp.route('/<int:community_id>/balance/<string:user_id>', methods=['PUT'])
 @auth_required
+@validate_json(SetBalanceRequest)
 @async_endpoint
-async def set_balance(community_id: int, user_id: str):
+async def set_balance(validated_data: SetBalanceRequest, community_id: int, user_id: str):
     """Set exact balance (admin only)"""
     try:
-        data = await request.get_json()
-
-        balance = data.get('balance')
-        platform = data.get('platform', 'twitch')
-
-        if balance is None:
-            return error_response("balance is required", status_code=400)
-
-        if balance < 0:
-            return error_response("Balance cannot be negative", status_code=400)
-
         result = await currency_service.set_balance(
-            community_id=community_id,
-            platform=platform,
-            platform_user_id=user_id,
-            balance=balance
+            community_id=validated_data.community_id,
+            platform=validated_data.platform,
+            platform_user_id=validated_data.user_id,
+            balance=validated_data.balance
         )
 
         if result.success:
             logger.audit(
                 action="set_balance",
-                community=community_id,
-                user=user_id,
+                community=validated_data.community_id,
+                user=validated_data.user_id,
                 result="SUCCESS",
-                balance=balance
+                balance=validated_data.balance
             )
 
         return success_response({
@@ -383,7 +374,7 @@ async def set_balance(community_id: int, user_id: str):
         })
 
     except Exception as e:
-        logger.error(f"Set balance error: {e}", community=community_id)
+        logger.error(f"Set balance error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
@@ -450,21 +441,26 @@ async def get_earning_config(community_id: int):
 
 @config_bp.route('/config/<int:community_id>', methods=['PUT'])
 @auth_required
+@validate_json(EarningConfigUpdate)
 @async_endpoint
-async def update_earning_config(community_id: int):
+async def update_earning_config(validated_data: EarningConfigUpdate, community_id: int):
     """Update earning configuration"""
     try:
-        data = await request.get_json()
+        # Extract only non-None fields for update
+        update_data = {
+            k: v for k, v in validated_data.dict().items()
+            if v is not None and k != 'community_id'
+        }
 
         result = await earning_config_service.update_config(
-            community_id=community_id,
-            **data
+            community_id=validated_data.community_id,
+            **update_data
         )
 
         if result:
             logger.audit(
                 action="update_earning_config",
-                community=community_id,
+                community=validated_data.community_id,
                 result="SUCCESS",
                 user=request.current_user.get('username', 'unknown')
             )
@@ -475,7 +471,7 @@ async def update_earning_config(community_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Update earning config error: {e}", community=community_id)
+        logger.error(f"Update earning config error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
@@ -511,38 +507,26 @@ async def process_chat_earning(community_id: int):
 
 
 @config_bp.route('/earning/<int:community_id>/event', methods=['POST'])
+@validate_json(EventEarningRequest)
 @async_endpoint
-async def process_event_earning(community_id: int):
+async def process_event_earning(validated_data: EventEarningRequest, community_id: int):
     """Process event earning (follow, sub, raid, etc.)"""
     try:
-        data = await request.get_json()
-
-        user_id = data.get('user_id')
-        event_type = data.get('event_type')
-        event_data = data.get('event_data', {})
-        platform = data.get('platform', 'twitch')
-
-        if not user_id or not event_type:
-            return error_response(
-                "user_id and event_type are required",
-                status_code=400
-            )
-
         result = await earning_config_service.process_event_earning(
-            community_id=community_id,
-            platform=platform,
-            platform_user_id=user_id,
-            event_type=event_type,
-            event_data=event_data
+            community_id=validated_data.community_id,
+            platform=validated_data.platform,
+            platform_user_id=validated_data.user_id,
+            event_type=validated_data.event_type,
+            event_data=validated_data.event_data
         )
 
         if result.earned:
             logger.audit(
                 action="event_earning",
-                community=community_id,
-                user=user_id,
+                community=validated_data.community_id,
+                user=validated_data.user_id,
                 result="SUCCESS",
-                event_type=event_type,
+                event_type=validated_data.event_type,
                 amount=result.amount
             )
 
@@ -554,7 +538,7 @@ async def process_event_earning(community_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Process event earning error: {e}", community=community_id)
+        logger.error(f"Process event earning error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
@@ -564,38 +548,24 @@ async def process_event_earning(community_id: int):
 
 @giveaway_bp.route('/<int:community_id>', methods=['POST'])
 @auth_required
+@validate_json(GiveawayCreateRequest)
 @async_endpoint
-async def create_giveaway(community_id: int):
+async def create_giveaway(validated_data: GiveawayCreateRequest, community_id: int):
     """Create a new giveaway"""
     try:
-        data = await request.get_json()
-
-        title = data.get('title')
-        prize = data.get('prize')
-        entry_cost = data.get('entry_cost', 0)
-        duration_minutes = data.get('duration_minutes', 60)
-        max_entries = data.get('max_entries')
-        reputation_weighted = data.get('reputation_weighted', False)
-
-        if not title or not prize:
-            return error_response(
-                "title and prize are required",
-                status_code=400
-            )
-
         giveaway = await giveaway_service.create_giveaway(
-            community_id=community_id,
-            title=title,
-            prize=prize,
-            entry_cost=entry_cost,
-            duration_minutes=duration_minutes,
-            max_entries=max_entries,
-            reputation_weighted=reputation_weighted
+            community_id=validated_data.community_id,
+            title=validated_data.title,
+            prize=validated_data.prize,
+            entry_cost=validated_data.entry_cost,
+            duration_minutes=validated_data.duration_minutes,
+            max_entries=validated_data.max_entries,
+            reputation_weighted=validated_data.reputation_weighted
         )
 
         logger.audit(
             action="create_giveaway",
-            community=community_id,
+            community=validated_data.community_id,
             result="SUCCESS",
             user=request.current_user.get('username', 'unknown'),
             giveaway_id=giveaway.giveaway_id
@@ -610,7 +580,7 @@ async def create_giveaway(community_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Create giveaway error: {e}", community=community_id)
+        logger.error(f"Create giveaway error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
@@ -681,32 +651,25 @@ async def get_giveaway(community_id: int, giveaway_id: int):
 
 
 @giveaway_bp.route('/<int:community_id>/<int:giveaway_id>/enter', methods=['POST'])
+@validate_json(GiveawayEntryRequest)
 @async_endpoint
-async def enter_giveaway(community_id: int, giveaway_id: int):
+async def enter_giveaway(validated_data: GiveawayEntryRequest, community_id: int, giveaway_id: int):
     """Enter a giveaway"""
     try:
-        data = await request.get_json()
-
-        user_id = data.get('user_id')
-        platform = data.get('platform', 'twitch')
-
-        if not user_id:
-            return error_response("user_id is required", status_code=400)
-
         result = await giveaway_service.enter_giveaway(
-            community_id=community_id,
-            giveaway_id=giveaway_id,
-            platform=platform,
-            platform_user_id=user_id
+            community_id=validated_data.community_id,
+            giveaway_id=validated_data.giveaway_id,
+            platform=validated_data.platform,
+            platform_user_id=validated_data.user_id
         )
 
         if result.success:
             logger.audit(
                 action="enter_giveaway",
-                community=community_id,
-                user=user_id,
+                community=validated_data.community_id,
+                user=validated_data.user_id,
                 result="SUCCESS",
-                giveaway_id=giveaway_id
+                giveaway_id=validated_data.giveaway_id
             )
 
         return success_response({
@@ -716,7 +679,7 @@ async def enter_giveaway(community_id: int, giveaway_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Enter giveaway error: {e}", community=community_id)
+        logger.error(f"Enter giveaway error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
@@ -787,39 +750,32 @@ async def end_giveaway(community_id: int, giveaway_id: int):
 # ============================================================================
 
 @games_bp.route('/<int:community_id>/slots', methods=['POST'])
+@validate_json(SlotsRequest)
 @async_endpoint
-async def play_slots(community_id: int):
+async def play_slots(validated_data: SlotsRequest, community_id: int):
     """Play slot machine"""
     try:
-        data = await request.get_json()
-
-        user_id = data.get('user_id')
-        bet = data.get('bet')
-        platform = data.get('platform', 'twitch')
-
-        if not user_id or bet is None:
-            return error_response("user_id and bet are required", status_code=400)
-
-        if bet < Config.MIN_BET or bet > Config.MAX_BET:
+        # Additional config-based validation
+        if validated_data.bet < Config.MIN_BET or validated_data.bet > Config.MAX_BET:
             return error_response(
                 f"Bet must be between {Config.MIN_BET} and {Config.MAX_BET}",
                 status_code=400
             )
 
         result = await minigame_service.play_slots(
-            community_id=community_id,
-            platform=platform,
-            platform_user_id=user_id,
-            bet=bet
+            community_id=validated_data.community_id,
+            platform=validated_data.platform,
+            platform_user_id=validated_data.user_id,
+            bet=validated_data.bet
         )
 
         if result.success:
             logger.audit(
                 action="play_slots",
-                community=community_id,
-                user=user_id,
+                community=validated_data.community_id,
+                user=validated_data.user_id,
                 result="SUCCESS",
-                bet=bet,
+                bet=validated_data.bet,
                 winnings=result.winnings
             )
 
@@ -833,52 +789,38 @@ async def play_slots(community_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Play slots error: {e}", community=community_id)
+        logger.error(f"Play slots error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
 @games_bp.route('/<int:community_id>/coinflip', methods=['POST'])
+@validate_json(CoinflipRequest)
 @async_endpoint
-async def play_coinflip(community_id: int):
+async def play_coinflip(validated_data: CoinflipRequest, community_id: int):
     """Play coinflip"""
     try:
-        data = await request.get_json()
-
-        user_id = data.get('user_id')
-        bet = data.get('bet')
-        choice = data.get('choice')  # heads or tails
-        platform = data.get('platform', 'twitch')
-
-        if not user_id or bet is None or not choice:
-            return error_response(
-                "user_id, bet, and choice are required",
-                status_code=400
-            )
-
-        if choice.lower() not in ['heads', 'tails']:
-            return error_response("choice must be 'heads' or 'tails'", status_code=400)
-
-        if bet < Config.MIN_BET or bet > Config.MAX_BET:
+        # Additional config-based validation
+        if validated_data.bet < Config.MIN_BET or validated_data.bet > Config.MAX_BET:
             return error_response(
                 f"Bet must be between {Config.MIN_BET} and {Config.MAX_BET}",
                 status_code=400
             )
 
         result = await minigame_service.play_coinflip(
-            community_id=community_id,
-            platform=platform,
-            platform_user_id=user_id,
-            bet=bet,
-            choice=choice.lower()
+            community_id=validated_data.community_id,
+            platform=validated_data.platform,
+            platform_user_id=validated_data.user_id,
+            bet=validated_data.bet,
+            choice=validated_data.choice
         )
 
         if result.success:
             logger.audit(
                 action="play_coinflip",
-                community=community_id,
-                user=user_id,
+                community=validated_data.community_id,
+                user=validated_data.user_id,
                 result="SUCCESS",
-                bet=bet,
+                bet=validated_data.bet,
                 won=result.won
             )
 
@@ -892,51 +834,39 @@ async def play_coinflip(community_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Play coinflip error: {e}", community=community_id)
+        logger.error(f"Play coinflip error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
 @games_bp.route('/<int:community_id>/roulette', methods=['POST'])
+@validate_json(RouletteRequest)
 @async_endpoint
-async def play_roulette(community_id: int):
+async def play_roulette(validated_data: RouletteRequest, community_id: int):
     """Play roulette"""
     try:
-        data = await request.get_json()
-
-        user_id = data.get('user_id')
-        bet = data.get('bet')
-        bet_type = data.get('bet_type')  # number, red, black, odd, even
-        bet_value = data.get('bet_value')  # specific number or None
-        platform = data.get('platform', 'twitch')
-
-        if not user_id or bet is None or not bet_type:
-            return error_response(
-                "user_id, bet, and bet_type are required",
-                status_code=400
-            )
-
-        if bet < Config.MIN_BET or bet > Config.MAX_BET:
+        # Additional config-based validation
+        if validated_data.bet < Config.MIN_BET or validated_data.bet > Config.MAX_BET:
             return error_response(
                 f"Bet must be between {Config.MIN_BET} and {Config.MAX_BET}",
                 status_code=400
             )
 
         result = await minigame_service.play_roulette(
-            community_id=community_id,
-            platform=platform,
-            platform_user_id=user_id,
-            bet=bet,
-            bet_type=bet_type.lower(),
-            bet_value=bet_value
+            community_id=validated_data.community_id,
+            platform=validated_data.platform,
+            platform_user_id=validated_data.user_id,
+            bet=validated_data.bet,
+            bet_type=validated_data.bet_type,
+            bet_value=validated_data.bet_value
         )
 
         if result.success:
             logger.audit(
                 action="play_roulette",
-                community=community_id,
-                user=user_id,
+                community=validated_data.community_id,
+                user=validated_data.user_id,
                 result="SUCCESS",
-                bet=bet,
+                bet=validated_data.bet,
                 won=result.won
             )
 
@@ -951,7 +881,7 @@ async def play_roulette(community_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Play roulette error: {e}", community=community_id)
+        logger.error(f"Play roulette error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
@@ -987,45 +917,34 @@ async def get_game_stats(community_id: int, user_id: str):
 # ============================================================================
 
 @duel_bp.route('/<int:community_id>/challenge', methods=['POST'])
+@validate_json(DuelChallengeRequest)
 @async_endpoint
-async def create_duel_challenge(community_id: int):
+async def create_duel_challenge(validated_data: DuelChallengeRequest, community_id: int):
     """Create a duel challenge"""
     try:
-        data = await request.get_json()
-
-        challenger_id = data.get('challenger_id')
-        opponent_id = data.get('opponent_id')
-        wager = data.get('wager')
-        platform = data.get('platform', 'twitch')
-
-        if not challenger_id or not opponent_id or wager is None:
-            return error_response(
-                "challenger_id, opponent_id, and wager are required",
-                status_code=400
-            )
-
-        if wager < Config.MIN_BET or wager > Config.MAX_BET:
+        # Additional config-based validation
+        if validated_data.wager < Config.MIN_BET or validated_data.wager > Config.MAX_BET:
             return error_response(
                 f"Wager must be between {Config.MIN_BET} and {Config.MAX_BET}",
                 status_code=400
             )
 
         result = await duel_service.create_challenge(
-            community_id=community_id,
-            platform=platform,
-            challenger_id=challenger_id,
-            opponent_id=opponent_id,
-            wager=wager
+            community_id=validated_data.community_id,
+            platform=validated_data.platform,
+            challenger_id=validated_data.challenger_id,
+            opponent_id=validated_data.opponent_id,
+            wager=validated_data.wager
         )
 
         if result.success:
             logger.audit(
                 action="create_duel",
-                community=community_id,
-                user=challenger_id,
+                community=validated_data.community_id,
+                user=validated_data.challenger_id,
                 result="SUCCESS",
-                opponent=opponent_id,
-                wager=wager
+                opponent=validated_data.opponent_id,
+                wager=validated_data.wager
             )
 
         return success_response({
@@ -1035,35 +954,28 @@ async def create_duel_challenge(community_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Create duel error: {e}", community=community_id)
+        logger.error(f"Create duel error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
 @duel_bp.route('/<int:community_id>/accept', methods=['POST'])
+@validate_json(DuelActionRequest)
 @async_endpoint
-async def accept_duel(community_id: int):
+async def accept_duel(validated_data: DuelActionRequest, community_id: int):
     """Accept a duel challenge"""
     try:
-        data = await request.get_json()
-
-        duel_id = data.get('duel_id')
-        platform = data.get('platform', 'twitch')
-
-        if not duel_id:
-            return error_response("duel_id is required", status_code=400)
-
         result = await duel_service.accept_challenge(
-            community_id=community_id,
-            platform=platform,
-            duel_id=duel_id
+            community_id=validated_data.community_id,
+            platform=validated_data.platform,
+            duel_id=validated_data.duel_id
         )
 
         if result.success:
             logger.audit(
                 action="accept_duel",
-                community=community_id,
+                community=validated_data.community_id,
                 result="SUCCESS",
-                duel_id=duel_id,
+                duel_id=validated_data.duel_id,
                 winner=result.winner_id
             )
 
@@ -1076,25 +988,19 @@ async def accept_duel(community_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Accept duel error: {e}", community=community_id)
+        logger.error(f"Accept duel error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
 @duel_bp.route('/<int:community_id>/decline', methods=['POST'])
+@validate_json(DuelActionRequest)
 @async_endpoint
-async def decline_duel(community_id: int):
+async def decline_duel(validated_data: DuelActionRequest, community_id: int):
     """Decline a duel challenge"""
     try:
-        data = await request.get_json()
-
-        duel_id = data.get('duel_id')
-
-        if not duel_id:
-            return error_response("duel_id is required", status_code=400)
-
         result = await duel_service.decline_challenge(
-            community_id=community_id,
-            duel_id=duel_id
+            community_id=validated_data.community_id,
+            duel_id=validated_data.duel_id
         )
 
         return success_response({
@@ -1103,7 +1009,7 @@ async def decline_duel(community_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Decline duel error: {e}", community=community_id)
+        logger.error(f"Decline duel error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
@@ -1265,33 +1171,25 @@ async def get_user_inventory(community_id: int, user_id: str):
 
 
 @gear_bp.route('/<int:community_id>/buy', methods=['POST'])
+@validate_json(GearActionRequest)
 @async_endpoint
-async def buy_item(community_id: int):
+async def buy_item(validated_data: GearActionRequest, community_id: int):
     """Buy a gear item"""
     try:
-        data = await request.get_json()
-
-        user_id = data.get('user_id')
-        item_id = data.get('item_id')
-        platform = data.get('platform', 'twitch')
-
-        if not user_id or not item_id:
-            return error_response("user_id and item_id are required", status_code=400)
-
         result = await gear_service.buy_item(
-            community_id=community_id,
-            platform=platform,
-            platform_user_id=user_id,
-            item_id=item_id
+            community_id=validated_data.community_id,
+            platform=validated_data.platform,
+            platform_user_id=validated_data.user_id,
+            item_id=validated_data.item_id
         )
 
         if result.success:
             logger.audit(
                 action="buy_gear",
-                community=community_id,
-                user=user_id,
+                community=validated_data.community_id,
+                user=validated_data.user_id,
                 result="SUCCESS",
-                item_id=item_id
+                item_id=validated_data.item_id
             )
 
         return success_response({
@@ -1301,29 +1199,21 @@ async def buy_item(community_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Buy item error: {e}", community=community_id)
+        logger.error(f"Buy item error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
 @gear_bp.route('/<int:community_id>/equip', methods=['POST'])
+@validate_json(GearActionRequest)
 @async_endpoint
-async def equip_item(community_id: int):
+async def equip_item(validated_data: GearActionRequest, community_id: int):
     """Equip a gear item"""
     try:
-        data = await request.get_json()
-
-        user_id = data.get('user_id')
-        item_id = data.get('item_id')
-        platform = data.get('platform', 'twitch')
-
-        if not user_id or not item_id:
-            return error_response("user_id and item_id are required", status_code=400)
-
         result = await gear_service.equip_item(
-            community_id=community_id,
-            platform=platform,
-            platform_user_id=user_id,
-            item_id=item_id
+            community_id=validated_data.community_id,
+            platform=validated_data.platform,
+            platform_user_id=validated_data.user_id,
+            item_id=validated_data.item_id
         )
 
         return success_response({
@@ -1332,29 +1222,21 @@ async def equip_item(community_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Equip item error: {e}", community=community_id)
+        logger.error(f"Equip item error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 
 @gear_bp.route('/<int:community_id>/unequip', methods=['POST'])
+@validate_json(GearActionRequest)
 @async_endpoint
-async def unequip_item(community_id: int):
+async def unequip_item(validated_data: GearActionRequest, community_id: int):
     """Unequip a gear item"""
     try:
-        data = await request.get_json()
-
-        user_id = data.get('user_id')
-        item_id = data.get('item_id')
-        platform = data.get('platform', 'twitch')
-
-        if not user_id or not item_id:
-            return error_response("user_id and item_id are required", status_code=400)
-
         result = await gear_service.unequip_item(
-            community_id=community_id,
-            platform=platform,
-            platform_user_id=user_id,
-            item_id=item_id
+            community_id=validated_data.community_id,
+            platform=validated_data.platform,
+            platform_user_id=validated_data.user_id,
+            item_id=validated_data.item_id
         )
 
         return success_response({
@@ -1363,7 +1245,7 @@ async def unequip_item(community_id: int):
         })
 
     except Exception as e:
-        logger.error(f"Unequip item error: {e}", community=community_id)
+        logger.error(f"Unequip item error: {e}", community=validated_data.community_id)
         return error_response(str(e), status_code=500)
 
 

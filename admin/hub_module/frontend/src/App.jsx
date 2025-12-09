@@ -51,6 +51,7 @@ import LoyaltyLeaderboard from './pages/admin/LoyaltyLeaderboard';
 import LoyaltyGiveaways from './pages/admin/LoyaltyGiveaways';
 import LoyaltyGames from './pages/admin/LoyaltyGames';
 import LoyaltyGear from './pages/admin/LoyaltyGear';
+import AdminWorkflows from './pages/admin/AdminWorkflows';
 
 // Platform admin pages
 import PlatformDashboard from './pages/platform/PlatformDashboard';
@@ -139,6 +140,7 @@ function App() {
       >
         <Route path="/admin/:communityId" element={<AdminHome />} />
         <Route path="/admin/:communityId/members" element={<AdminMembers />} />
+        <Route path="/admin/:communityId/workflows" element={<AdminWorkflows />} />
         <Route path="/admin/:communityId/modules" element={<AdminModules />} />
         <Route path="/admin/:communityId/marketplace" element={<AdminMarketplace />} />
         <Route path="/admin/:communityId/browser-sources" element={<AdminBrowserSources />} />

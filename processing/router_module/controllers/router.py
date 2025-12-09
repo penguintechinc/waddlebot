@@ -3,27 +3,35 @@ import asyncio
 
 from quart import Blueprint, request, current_app
 from flask_core import async_endpoint, success_response
+from flask_core.validation import validate_json
+
+from validation_models import (
+    RouterEventRequest,
+    RouterBatchRequest,
+    RouterResponseRequest
+)
 
 router_bp = Blueprint('router', __name__)
 
 
 @router_bp.route('/events', methods=['POST'])
+@validate_json(RouterEventRequest)
 @async_endpoint
-async def process_event():
+async def process_event(validated_data: RouterEventRequest):
     """Process single event"""
-    data = await request.get_json()
     processor = current_app.config['command_processor']
-    result = await processor.process_event(data)
+    result = await processor.process_event(validated_data.dict())
     return success_response(result)
 
 
 @router_bp.route('/events/batch', methods=['POST'])
+@validate_json(RouterBatchRequest)
 @async_endpoint
-async def process_events_batch():
+async def process_events_batch(validated_data: RouterBatchRequest):
     """Process up to 100 events concurrently"""
-    events = await request.get_json()
     processor = current_app.config['command_processor']
-    results = await asyncio.gather(*[processor.process_event(e) for e in events[:100]])
+    events_list = [event.dict() for event in validated_data.events]
+    results = await asyncio.gather(*[processor.process_event(e) for e in events_list])
     return success_response({"results": results, "count": len(results)})
 
 
@@ -37,12 +45,12 @@ async def list_commands():
 
 
 @router_bp.route('/responses', methods=['POST'])
+@validate_json(RouterResponseRequest)
 @async_endpoint
-async def submit_response():
+async def submit_response(validated_data: RouterResponseRequest):
     """Receive response from interaction module"""
-    data = await request.get_json()
     processor = current_app.config['command_processor']
-    await processor.handle_module_response(data)
+    await processor.handle_module_response(validated_data.dict())
     return success_response({"message": "Response received"})
 
 

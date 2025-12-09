@@ -16,6 +16,15 @@ from config import Config
 from flask_core import (
     async_endpoint, auth_required, create_health_blueprint, init_database,
     setup_aaa_logging, success_response, error_response)
+from flask_core.validation import validate_json, validate_query
+
+from validation_models import (
+    EventCreateRequest, EventSearchParams, EventUpdateRequest,
+    EventApprovalRequest, RSVPRequest, AttendeeSearchParams,
+    EventFullTextSearchParams, UpcomingEventsParams,
+    PermissionsConfigRequest, CategoryCreateRequest,
+    ContextSwitchRequest
+)
 
 
 app = Quart(__name__)
@@ -94,99 +103,138 @@ async def startup():
 # EVENT MANAGEMENT ENDPOINTS
 # ============================================================================
 
-@calendar_bp.route('/<int:community_id>/events', methods=['GET', 'POST'])
+@calendar_bp.route('/<int:community_id>/events', methods=['GET'])
 @async_endpoint
-async def events(community_id):
-    """List or create events."""
-    if request.method == 'GET':
-        # GET /api/v1/calendar/<community_id>/events
-        # Query params: status, date_from, date_to, category_id, tags, entity_id, offset, limit
-        filters = {
-            'status': request.args.get('status'),
-            'date_from': request.args.get('date_from'),
-            'date_to': request.args.get('date_to'),
-            'category_id': request.args.get('category_id'),
-            'entity_id': request.args.get('entity_id'),
-            'tags': request.args.getlist('tags')
-        }
-        # Remove None values
-        filters = {k: v for k, v in filters.items() if v is not None}
+@validate_query(EventSearchParams)
+async def list_events(community_id, query_params: EventSearchParams):
+    """
+    List events with validated query parameters.
 
-        pagination = {
-            'offset': int(request.args.get('offset', 0)),
-            'limit': int(request.args.get('limit', 50))
-        }
+    CRITICAL FIX: Uses Pydantic validation to prevent 500 errors from
+    unsafe int() conversions on lines 116-117 of original code.
+    """
+    # Build filters from validated query params
+    filters = {}
+    if query_params.status:
+        filters['status'] = query_params.status
+    if query_params.date_from:
+        filters['date_from'] = query_params.date_from.isoformat()
+    if query_params.date_to:
+        filters['date_to'] = query_params.date_to.isoformat()
+    if query_params.category_id:
+        filters['category_id'] = query_params.category_id
+    if query_params.entity_id:
+        filters['entity_id'] = query_params.entity_id
+    if query_params.tags:
+        filters['tags'] = query_params.tags
+    if query_params.platform:
+        filters['platform'] = query_params.platform
 
-        event_list = await calendar_service.list_events(
-            community_id, filters, pagination
-        )
-        return success_response({'events': event_list, 'count': len(event_list)})
-    else:
-        # POST /api/v1/calendar/<community_id>/events
-        data = await request.get_json()
-        data['community_id'] = community_id
-        user_context = get_user_context()
+    pagination = {
+        'offset': query_params.offset,
+        'limit': query_params.limit
+    }
 
-        event = await calendar_service.create_event(data, user_context)
-        if event:
-            return success_response(event, status_code=201)
-        else:
-            return error_response("Failed to create event", status_code=400)
+    event_list = await calendar_service.list_events(
+        community_id, filters, pagination
+    )
+    return success_response({'events': event_list, 'count': len(event_list)})
 
 
-@calendar_bp.route('/<int:community_id>/events/<int:event_id>', methods=['GET', 'PUT', 'DELETE'])
+@calendar_bp.route('/<int:community_id>/events', methods=['POST'])
 @async_endpoint
-async def event_detail(community_id, event_id):
-    """Get, update, or delete event."""
-    if request.method == 'GET':
-        # GET /api/v1/calendar/<community_id>/events/<event_id>
-        include_attendees = request.args.get('include_attendees', 'false').lower() == 'true'
-        event = await calendar_service.get_event(event_id, include_attendees)
-        if event:
-            return success_response(event)
-        else:
-            return error_response("Event not found", status_code=404)
+@validate_json(EventCreateRequest)
+async def create_event(validated_data: EventCreateRequest, community_id):
+    """Create new event with validated data."""
+    # Override community_id from path parameter
+    event_data = validated_data.dict()
+    event_data['community_id'] = community_id
+    user_context = get_user_context()
 
-    elif request.method == 'PUT':
-        # PUT /api/v1/calendar/<community_id>/events/<event_id>
-        data = await request.get_json()
-        user_context = get_user_context()
-
-        event = await calendar_service.update_event(event_id, data, user_context)
-        if event:
-            return success_response(event)
-        else:
-            return error_response("Failed to update event", status_code=400)
-
+    event = await calendar_service.create_event(event_data, user_context)
+    if event:
+        return success_response(event, status_code=201)
     else:
-        # DELETE /api/v1/calendar/<community_id>/events/<event_id>
-        user_context = get_user_context()
-        success = await calendar_service.delete_event(event_id, user_context)
-        if success:
-            return success_response({"message": "Event deleted successfully"})
-        else:
-            return error_response("Failed to delete event", status_code=400)
+        return error_response("Failed to create event", status_code=400)
+
+
+@calendar_bp.route('/<int:community_id>/events/<int:event_id>', methods=['GET'])
+@async_endpoint
+async def get_event(community_id, event_id):
+    """Get event details."""
+    include_attendees = request.args.get('include_attendees', 'false').lower() == 'true'
+    event = await calendar_service.get_event(event_id, include_attendees)
+    if event:
+        return success_response(event)
+    else:
+        return error_response("Event not found", status_code=404)
+
+
+@calendar_bp.route('/<int:community_id>/events/<int:event_id>', methods=['PUT'])
+@async_endpoint
+@validate_json(EventUpdateRequest)
+async def update_event(validated_data: EventUpdateRequest, community_id, event_id):
+    """Update event with validated data."""
+    user_context = get_user_context()
+    event_data = validated_data.dict(exclude_unset=True)  # Only include fields that were set
+
+    event = await calendar_service.update_event(event_id, event_data, user_context)
+    if event:
+        return success_response(event)
+    else:
+        return error_response("Failed to update event", status_code=400)
+
+
+@calendar_bp.route('/<int:community_id>/events/<int:event_id>', methods=['DELETE'])
+@async_endpoint
+async def delete_event(community_id, event_id):
+    """Delete event."""
+    user_context = get_user_context()
+    success = await calendar_service.delete_event(event_id, user_context)
+    if success:
+        return success_response({"message": "Event deleted successfully"})
+    else:
+        return error_response("Failed to delete event", status_code=400)
 
 
 @calendar_bp.route('/<int:community_id>/events/<int:event_id>/approve', methods=['POST'])
 @async_endpoint
-async def approve_event(community_id, event_id):
-    """Approve pending event (admin only)."""
+@validate_json(EventApprovalRequest)
+async def approve_event(validated_data: EventApprovalRequest, community_id, event_id):
+    """
+    Approve or reject pending event with validated data (admin only).
+
+    Unified endpoint for both approval and rejection actions.
+    """
     user_context = get_user_context()
-    event = await calendar_service.approve_event(event_id, user_context)
-    if event:
-        return success_response(event)
+
+    if validated_data.status == 'approved':
+        event = await calendar_service.approve_event(event_id, user_context)
+        if event:
+            return success_response(event)
+        else:
+            return error_response("Failed to approve event", status_code=400)
     else:
-        return error_response("Failed to approve event", status_code=400)
+        # rejected
+        reason = validated_data.notes or validated_data.reason or 'No reason provided'
+        success = await calendar_service.reject_event(event_id, reason, user_context)
+        if success:
+            return success_response({"message": "Event rejected successfully"})
+        else:
+            return error_response("Failed to reject event", status_code=400)
 
 
 @calendar_bp.route('/<int:community_id>/events/<int:event_id>/reject', methods=['POST'])
 @async_endpoint
-async def reject_event(community_id, event_id):
-    """Reject pending event with reason (admin only)."""
-    data = await request.get_json()
-    reason = data.get('reason', 'No reason provided')
+@validate_json(EventApprovalRequest)
+async def reject_event(validated_data: EventApprovalRequest, community_id, event_id):
+    """
+    Reject pending event with reason (admin only).
+
+    Deprecated: Use /approve endpoint with status='rejected' instead.
+    """
     user_context = get_user_context()
+    reason = validated_data.notes or validated_data.reason or 'No reason provided'
 
     success = await calendar_service.reject_event(event_id, reason, user_context)
     if success:
@@ -211,41 +259,43 @@ async def cancel_event(community_id, event_id):
 # RSVP MANAGEMENT ENDPOINTS
 # ============================================================================
 
-@calendar_bp.route('/<int:community_id>/events/<int:event_id>/rsvp', methods=['POST', 'PUT', 'DELETE'])
+@calendar_bp.route('/<int:community_id>/events/<int:event_id>/rsvp', methods=['POST', 'PUT'])
 @async_endpoint
-async def rsvp(community_id, event_id):
-    """Create, update, or cancel RSVP."""
+@validate_json(RSVPRequest)
+async def create_or_update_rsvp(validated_data: RSVPRequest, community_id, event_id):
+    """Create or update RSVP with validated data."""
     user_context = get_user_context()
 
-    if request.method in ['POST', 'PUT']:
-        # POST/PUT /api/v1/calendar/<community_id>/events/<event_id>/rsvp
-        data = await request.get_json()
-        rsvp_status = data.get('status', 'yes')  # yes/no/maybe
-        guest_count = data.get('guest_count', 0)
-        user_note = data.get('note')
-
-        result = await rsvp_service.rsvp_event(
-            event_id, user_context, rsvp_status, guest_count, user_note
-        )
-        if result:
-            return success_response(result)
-        else:
-            return error_response("Failed to RSVP", status_code=400)
+    result = await rsvp_service.rsvp_event(
+        event_id, user_context,
+        validated_data.status,
+        validated_data.guest_count,
+        validated_data.note
+    )
+    if result:
+        return success_response(result)
     else:
-        # DELETE /api/v1/calendar/<community_id>/events/<event_id>/rsvp
-        success = await rsvp_service.cancel_rsvp(event_id, user_context)
-        if success:
-            return success_response({"message": "RSVP cancelled successfully"})
-        else:
-            return error_response("Failed to cancel RSVP", status_code=400)
+        return error_response("Failed to RSVP", status_code=400)
+
+
+@calendar_bp.route('/<int:community_id>/events/<int:event_id>/rsvp', methods=['DELETE'])
+@async_endpoint
+async def cancel_rsvp(community_id, event_id):
+    """Cancel RSVP."""
+    user_context = get_user_context()
+    success = await rsvp_service.cancel_rsvp(event_id, user_context)
+    if success:
+        return success_response({"message": "RSVP cancelled successfully"})
+    else:
+        return error_response("Failed to cancel RSVP", status_code=400)
 
 
 @calendar_bp.route('/<int:community_id>/events/<int:event_id>/attendees', methods=['GET'])
 @async_endpoint
-async def attendees(community_id, event_id):
-    """Get attendee list."""
-    status = request.args.get('status')  # Optional filter: yes/no/maybe
-    attendee_list = await rsvp_service.get_attendees(event_id, status)
+@validate_query(AttendeeSearchParams)
+async def get_attendees(query_params: AttendeeSearchParams, community_id, event_id):
+    """Get attendee list with optional filtering."""
+    attendee_list = await rsvp_service.get_attendees(event_id, query_params.status)
     return success_response({'attendees': attendee_list, 'count': len(attendee_list)})
 
 
@@ -255,42 +305,44 @@ async def attendees(community_id, event_id):
 
 @calendar_bp.route('/<int:community_id>/search', methods=['GET'])
 @async_endpoint
-async def search_events(community_id):
-    """Full-text search on events."""
-    query = request.args.get('q', '')
-    if not query:
-        return error_response("Search query required", status_code=400)
+@validate_query(EventFullTextSearchParams)
+async def search_events(query_params: EventFullTextSearchParams, community_id):
+    """Full-text search on events with validated parameters."""
+    filters = {}
+    if query_params.category_id:
+        filters['category_id'] = query_params.category_id
+    if query_params.date_from:
+        filters['date_from'] = query_params.date_from.isoformat()
+    if query_params.date_to:
+        filters['date_to'] = query_params.date_to.isoformat()
 
-    filters = {
-        'category_id': request.args.get('category_id'),
-        'date_from': request.args.get('date_from'),
-        'date_to': request.args.get('date_to')
-    }
-    filters = {k: v for k, v in filters.items() if v is not None}
-
-    events = await calendar_service.search_events(community_id, query, filters)
-    return success_response({'events': events, 'count': len(events), 'query': query})
+    events = await calendar_service.search_events(community_id, query_params.q, filters)
+    return success_response({'events': events, 'count': len(events), 'query': query_params.q})
 
 
 @calendar_bp.route('/<int:community_id>/upcoming', methods=['GET'])
 @async_endpoint
-async def upcoming_events(community_id):
-    """Get upcoming approved events."""
-    limit = int(request.args.get('limit', 10))
-    entity_id = request.args.get('entity_id')
-
-    events = await calendar_service.get_upcoming_events(community_id, limit, entity_id)
+@validate_query(UpcomingEventsParams)
+async def upcoming_events(query_params: UpcomingEventsParams, community_id):
+    """Get upcoming approved events with validated parameters."""
+    events = await calendar_service.get_upcoming_events(
+        community_id, query_params.limit, query_params.entity_id
+    )
     return success_response({'events': events, 'count': len(events)})
 
 
 @calendar_bp.route('/<int:community_id>/trending', methods=['GET'])
 @async_endpoint
-async def trending_events(community_id):
-    """Get trending events (placeholder for Phase 8)."""
+@validate_query(UpcomingEventsParams)
+async def trending_events(query_params: UpcomingEventsParams, community_id):
+    """
+    Get trending events (placeholder for Phase 8).
+
+    CRITICAL FIX: Uses validated parameters to prevent int() conversion errors.
+    """
     # TODO: Implement trending algorithm in Phase 8
     # For now, return upcoming events as trending
-    limit = int(request.args.get('limit', 10))
-    events = await calendar_service.get_upcoming_events(community_id, limit)
+    events = await calendar_service.get_upcoming_events(community_id, query_params.limit)
     return success_response({'events': events, 'count': len(events)})
 
 
@@ -349,28 +401,32 @@ async def twitch_webhook():
 # CONFIGURATION ENDPOINTS
 # ============================================================================
 
-@calendar_bp.route('/<int:community_id>/config/permissions', methods=['GET', 'PUT'])
+@calendar_bp.route('/<int:community_id>/config/permissions', methods=['GET'])
 @async_endpoint
-async def permissions_config(community_id):
-    """Get or update permissions configuration."""
-    if request.method == 'GET':
-        permissions = await permission_service.get_permissions(community_id)
-        if permissions:
-            return success_response(permissions)
-        else:
-            return error_response("Permissions not found", status_code=404)
+async def get_permissions_config(community_id):
+    """Get permissions configuration."""
+    permissions = await permission_service.get_permissions(community_id)
+    if permissions:
+        return success_response(permissions)
     else:
-        # PUT - update permissions (admin only)
-        data = await request.get_json()
-        user_context = get_user_context()
+        return error_response("Permissions not found", status_code=404)
 
-        success = await permission_service.update_permissions(
-            community_id, data, user_context
-        )
-        if success:
-            return success_response({"message": "Permissions updated successfully"})
-        else:
-            return error_response("Failed to update permissions", status_code=400)
+
+@calendar_bp.route('/<int:community_id>/config/permissions', methods=['PUT'])
+@async_endpoint
+@validate_json(PermissionsConfigRequest)
+async def update_permissions_config(validated_data: PermissionsConfigRequest, community_id):
+    """Update permissions configuration with validated data (admin only)."""
+    user_context = get_user_context()
+    permissions_data = validated_data.dict(exclude_unset=True)
+
+    success = await permission_service.update_permissions(
+        community_id, permissions_data, user_context
+    )
+    if success:
+        return success_response({"message": "Permissions updated successfully"})
+    else:
+        return error_response("Failed to update permissions", status_code=400)
 
 
 @calendar_bp.route('/<int:community_id>/config/reminders', methods=['GET', 'PUT'])
@@ -391,64 +447,67 @@ async def reminders_config(community_id):
         return success_response({"message": "Reminder config updated (stub)"})
 
 
-@calendar_bp.route('/<int:community_id>/categories', methods=['GET', 'POST'])
+@calendar_bp.route('/<int:community_id>/categories', methods=['GET'])
 @async_endpoint
-async def categories(community_id):
-    """List or create event categories."""
-    if request.method == 'GET':
-        # Query categories from database
-        query = """
-            SELECT id, name, description, color, icon, display_order, is_active
-            FROM calendar_categories
-            WHERE community_id = $1 AND is_active = TRUE
-            ORDER BY display_order ASC
-        """
-        rows = await dal.execute(query, [community_id])
+async def list_categories(community_id):
+    """List event categories."""
+    # Query categories from database
+    query = """
+        SELECT id, name, description, color, icon, display_order, is_active
+        FROM calendar_categories
+        WHERE community_id = $1 AND is_active = TRUE
+        ORDER BY display_order ASC
+    """
+    rows = await dal.execute(query, [community_id])
 
-        category_list = []
-        for row in rows:
-            category_list.append({
-                'id': row['id'],
-                'name': row['name'],
-                'description': row['description'],
-                'color': row['color'],
-                'icon': row['icon'],
-                'display_order': row['display_order']
-            })
+    category_list = []
+    for row in rows:
+        category_list.append({
+            'id': row['id'],
+            'name': row['name'],
+            'description': row['description'],
+            'color': row['color'],
+            'icon': row['icon'],
+            'display_order': row['display_order']
+        })
 
-        return success_response({'categories': category_list, 'count': len(category_list)})
+    return success_response({'categories': category_list, 'count': len(category_list)})
+
+
+@calendar_bp.route('/<int:community_id>/categories', methods=['POST'])
+@async_endpoint
+@validate_json(CategoryCreateRequest)
+async def create_category(validated_data: CategoryCreateRequest, community_id):
+    """Create new event category with validated data (admin only)."""
+    user_context = get_user_context()
+
+    # Check admin permission
+    if user_context.get('role') not in ['admin', 'super_admin']:
+        return error_response("Admin permission required", status_code=403)
+
+    query = """
+        INSERT INTO calendar_categories (
+            community_id, name, description, color, icon, display_order
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, name
+    """
+    result = await dal.execute(query, [
+        community_id,
+        validated_data.name,
+        validated_data.description,
+        validated_data.color,
+        validated_data.icon,
+        validated_data.display_order
+    ])
+
+    if result:
+        return success_response(
+            {'id': result[0]['id'], 'name': result[0]['name']},
+            status_code=201
+        )
     else:
-        # POST - create new category (admin only)
-        data = await request.get_json()
-        user_context = get_user_context()
-
-        # Check admin permission
-        if user_context.get('role') not in ['admin', 'super_admin']:
-            return error_response("Admin permission required", status_code=403)
-
-        query = """
-            INSERT INTO calendar_categories (
-                community_id, name, description, color, icon, display_order
-            )
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING id, name
-        """
-        result = await dal.execute(query, [
-            community_id,
-            data.get('name'),
-            data.get('description'),
-            data.get('color'),
-            data.get('icon'),
-            data.get('display_order', 100)
-        ])
-
-        if result:
-            return success_response(
-                {'id': result[0]['id'], 'name': result[0]['name']},
-                status_code=201
-            )
-        else:
-            return error_response("Failed to create category", status_code=400)
+        return error_response("Failed to create category", status_code=400)
 
 
 # ============================================================================
@@ -470,18 +529,14 @@ async def get_context(entity_id):
 
 @context_bp.route('/<entity_id>/switch', methods=['POST'])
 @async_endpoint
-async def switch_context(entity_id):
-    """Switch active community context."""
-    data = await request.get_json()
-    user_id = data.get('user_id', 'anonymous')
-    community_name = data.get('community_name')
-
-    if not community_name:
-        return error_response("community_name required", status_code=400)
-
-    success = await context_service.switch_context(user_id, entity_id, community_name)
+@validate_json(ContextSwitchRequest)
+async def switch_context(validated_data: ContextSwitchRequest, entity_id):
+    """Switch active community context with validated data."""
+    success = await context_service.switch_context(
+        validated_data.user_id, entity_id, validated_data.community_name
+    )
     if success:
-        return success_response({"message": f"Switched to community: {community_name}"})
+        return success_response({"message": f"Switched to community: {validated_data.community_name}"})
     else:
         return error_response("Failed to switch context", status_code=400)
 

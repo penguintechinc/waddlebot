@@ -6,6 +6,7 @@ import * as publicController from '../controllers/publicController.js';
 import * as profileController from '../controllers/profileController.js';
 import * as communityProfileController from '../controllers/communityProfileController.js';
 import { optionalAuth } from '../middleware/auth.js';
+import { validators, validateRequest } from '../middleware/validation.js';
 
 const router = Router();
 
@@ -13,12 +14,20 @@ const router = Router();
 router.get('/stats', publicController.getStats);
 
 // Communities
-router.get('/communities', publicController.getCommunities);
+router.get('/communities',
+  validators.pagination(),
+  validateRequest,
+  publicController.getCommunities
+);
 router.get('/communities/:id', publicController.getCommunity);
 router.get('/communities/:id/profile', optionalAuth, communityProfileController.getCommunityProfile);
 
 // Live streams
-router.get('/live', publicController.getLiveStreams);
+router.get('/live',
+  validators.pagination(),
+  validateRequest,
+  publicController.getLiveStreams
+);
 router.get('/live/:entityId', publicController.getStreamDetails);
 
 // Signup settings (for login page to determine if signup is available)

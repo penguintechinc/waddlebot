@@ -14,6 +14,7 @@ networks:
 volumes:
   postgres-data:
   redis-data:
+  rabbitmq-data:
   minio-data:
   ollama-data:
   qdrant-data:
@@ -761,6 +762,38 @@ services:
     # Port removed - access via Kong at api.waddlebot.io
     # ports:
     #   - "8070:8070"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8070/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  workflow-core:
+    build:
+      context: .
+      dockerfile: core/workflow_core_module/Dockerfile
+    container_name: waddlebot-workflow-core
+    environment:
+      MODULE_NAME: workflow-core
+      MODULE_PORT: 8070
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-waddlebot_redis}
+      ROUTER_API_URL: http://router:8000
+      LICENSE_SERVER_URL: ${LICENSE_SERVER_URL:-https://license.penguintech.io}
+      RELEASE_MODE: ${RELEASE_MODE:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      router:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8070/health')"]
       interval: 30s

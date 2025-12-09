@@ -8,6 +8,7 @@ import * as chatController from '../controllers/chatController.js';
 import * as activityController from '../controllers/activityController.js';
 import * as profileController from '../controllers/profileController.js';
 import { requireAuth, requireMember } from '../middleware/auth.js';
+import { validators, validateRequest } from '../middleware/validation.js';
 
 const router = Router();
 
@@ -29,7 +30,13 @@ router.delete('/server-link-requests/:requestId', communityController.cancelServ
 router.post('/:id/join', communityController.joinCommunity);
 
 // Server linking (user adds their platform server to community)
-router.post('/:id/servers', communityController.addServerToCommunity);
+router.post('/:id/servers',
+  validators.text('platform', { min: 2, max: 50 }),
+  validators.text('server_id', { min: 1, max: 255 }),
+  validators.text('server_name', { min: 1, max: 255 }),
+  validateRequest,
+  communityController.addServerToCommunity
+);
 router.get('/:id/servers', requireMember, communityController.getCommunityServers);
 
 // Community detail (requires membership)
@@ -56,7 +63,14 @@ router.get('/:communityId/streams/featured', requireMember, streamController.get
 router.get('/:communityId/streams/:entityId', requireMember, streamController.getStreamDetails);
 
 // Profile management
-router.put('/:id/profile', requireMember, communityController.updateProfile);
+router.put('/:id/profile',
+  requireMember,
+  validators.text('display_name', { min: 2, max: 255 }),
+  validators.text('bio', { min: 0, max: 1000 }),
+  validators.url('avatar_url'),
+  validateRequest,
+  communityController.updateProfile
+);
 router.post('/:id/leave', requireMember, communityController.leaveCommunity);
 
 // Member profiles (requires membership)

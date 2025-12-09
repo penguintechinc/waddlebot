@@ -458,3 +458,52 @@ export const kongApi = {
   createKongSNI: (data) => api.post('/api/v1/superadmin/kong/snis', data),
   deleteKongSNI: (id) => api.delete(`/api/v1/superadmin/kong/snis/${id}`),
 };
+
+// Workflow API
+export const workflowApi = {
+  // Workflow management
+  listWorkflows: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/workflows`, { params }),
+  getWorkflow: (communityId, workflowId) =>
+    api.get(`/api/v1/admin/${communityId}/workflows/${workflowId}`),
+  createWorkflow: (communityId, data) =>
+    api.post(`/api/v1/admin/${communityId}/workflows`, data),
+  updateWorkflow: (communityId, workflowId, data) =>
+    api.put(`/api/v1/admin/${communityId}/workflows/${workflowId}`, data),
+  deleteWorkflow: (communityId, workflowId) =>
+    api.delete(`/api/v1/admin/${communityId}/workflows/${workflowId}`),
+
+  // Workflow publishing
+  publishWorkflow: (communityId, workflowId) =>
+    api.post(`/api/v1/admin/${communityId}/workflows/${workflowId}/publish`),
+  unpublishWorkflow: (communityId, workflowId) =>
+    api.post(`/api/v1/admin/${communityId}/workflows/${workflowId}/unpublish`),
+
+  // Workflow validation
+  validateWorkflow: (communityId, workflowId) =>
+    api.post(`/api/v1/admin/${communityId}/workflows/${workflowId}/validate`),
+
+  // Workflow execution
+  executeWorkflow: (communityId, workflowId, data) =>
+    api.post(`/api/v1/admin/${communityId}/workflows/${workflowId}/execute`, data),
+  testWorkflow: (communityId, workflowId, data) =>
+    api.post(`/api/v1/admin/${communityId}/workflows/${workflowId}/test`, data),
+
+  // Execution history
+  getExecutions: (communityId, workflowId, params) =>
+    api.get(`/api/v1/admin/${communityId}/workflows/${workflowId}/executions`, { params }),
+  getExecution: (communityId, workflowId, executionId) =>
+    api.get(`/api/v1/admin/${communityId}/workflows/${workflowId}/executions/${executionId}`),
+  cancelExecution: (communityId, workflowId, executionId) =>
+    api.post(`/api/v1/admin/${communityId}/workflows/${workflowId}/executions/${executionId}/cancel`),
+
+  // Webhooks for workflow triggers
+  listWebhooks: (communityId, workflowId) =>
+    api.get(`/api/v1/admin/${communityId}/workflows/${workflowId}/webhooks`),
+  createWebhook: (communityId, workflowId, data) =>
+    api.post(`/api/v1/admin/${communityId}/workflows/${workflowId}/webhooks`, data),
+  deleteWebhook: (communityId, workflowId, webhookId) =>
+    api.delete(`/api/v1/admin/${communityId}/workflows/${workflowId}/webhooks/${webhookId}`),
+  regenerateWebhookSecret: (communityId, workflowId, webhookId) =>
+    api.post(`/api/v1/admin/${communityId}/workflows/${workflowId}/webhooks/${webhookId}/regenerate`),
+};

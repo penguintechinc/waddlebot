@@ -578,6 +578,239 @@ browser_source_access_log (
 )
 ```
 
+## Workflow Core Module Database Schema
+
+### Workflows Table
+Core workflow definitions and metadata:
+
+```sql
+workflow_definitions (
+    workflow_id UUID PRIMARY KEY,
+    community_id INTEGER NOT NULL,
+    entity_id INTEGER NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    status VARCHAR(50) DEFAULT 'draft',        -- 'draft', 'published', 'archived'
+    trigger_type VARCHAR(50) NOT NULL,         -- 'command', 'event', 'webhook', 'schedule'
+    trigger_config JSONB NOT NULL,             -- Trigger-specific configuration
+    nodes JSONB NOT NULL,                      -- Node definitions (key -> node config)
+    connections JSONB NOT NULL,                -- Array of connections between nodes
+    global_variables JSONB DEFAULT '{}',       -- Workflow-level variables
+    settings JSONB DEFAULT '{}',               -- Workflow settings (timeouts, retries)
+    created_by INTEGER NOT NULL,
+    updated_by INTEGER NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+
+    FOREIGN KEY (community_id) REFERENCES communities(id),
+    FOREIGN KEY (entity_id) REFERENCES entities(entity_id),
+    INDEX idx_workflow_community (community_id),
+    INDEX idx_workflow_entity (entity_id),
+    INDEX idx_workflow_status (status)
+)
+```
+
+### Workflow Executions Table
+Execution records for workflow runs:
+
+```sql
+workflow_executions (
+    execution_id UUID PRIMARY KEY,
+    workflow_id UUID NOT NULL,
+    community_id INTEGER NOT NULL,
+    entity_id INTEGER NOT NULL,
+    trigger_type VARCHAR(50) NOT NULL,        -- How execution was triggered
+    trigger_data JSONB,                        -- Data from trigger (webhook payload, command args, etc.)
+    status VARCHAR(50) DEFAULT 'pending',     -- 'pending', 'running', 'success', 'failed', 'cancelled'
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    duration_ms INTEGER,                       -- Execution duration in milliseconds
+    error_message TEXT,                        -- Error details if failed
+    output_variables JSONB DEFAULT '{}',       -- Final output from workflow
+    retry_count INTEGER DEFAULT 0,
+    is_test_run BOOLEAN DEFAULT false,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+
+    FOREIGN KEY (workflow_id) REFERENCES workflow_definitions(workflow_id),
+    FOREIGN KEY (community_id) REFERENCES communities(id),
+    FOREIGN KEY (entity_id) REFERENCES entities(entity_id),
+    INDEX idx_execution_workflow (workflow_id),
+    INDEX idx_execution_community (community_id),
+    INDEX idx_execution_status (status),
+    INDEX idx_execution_created (created_at)
+)
+```
+
+### Workflow Node Executions Table
+Node-level execution tracking for each node in a workflow:
+
+```sql
+workflow_node_executions (
+    node_execution_id UUID PRIMARY KEY,
+    execution_id UUID NOT NULL,
+    workflow_id UUID NOT NULL,
+    node_id VARCHAR(255) NOT NULL,             -- Node identifier within workflow
+    node_type VARCHAR(50) NOT NULL,            -- e.g., 'trigger_command', 'action_module', 'condition_if'
+    status VARCHAR(50) DEFAULT 'pending',     -- 'pending', 'running', 'success', 'failed', 'skipped'
+    input_variables JSONB DEFAULT '{}',        -- Variables passed to node
+    output_variables JSONB DEFAULT '{}',       -- Variables produced by node
+    output_port VARCHAR(50),                   -- Which output port was taken (for conditionals)
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    duration_ms INTEGER,
+    error_message TEXT,
+    result_data JSONB,                         -- Node-specific result data
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+
+    FOREIGN KEY (execution_id) REFERENCES workflow_executions(execution_id),
+    FOREIGN KEY (workflow_id) REFERENCES workflow_definitions(workflow_id),
+    INDEX idx_node_execution (execution_id),
+    INDEX idx_node_execution_workflow (workflow_id),
+    INDEX idx_node_execution_node (node_id)
+)
+```
+
+### Workflow Schedules Table
+Scheduled execution configurations:
+
+```sql
+workflow_schedules (
+    schedule_id UUID PRIMARY KEY,
+    workflow_id UUID NOT NULL,
+    community_id INTEGER NOT NULL,
+    entity_id INTEGER NOT NULL,
+    schedule_type VARCHAR(50) NOT NULL,        -- 'cron', 'interval', 'one_time'
+    cron_expression VARCHAR(255),              -- Cron format (e.g., "0 12 * * *")
+    interval_seconds INTEGER,                  -- For interval-based schedules
+    timezone VARCHAR(50) DEFAULT 'UTC',
+    next_execution_at TIMESTAMP,
+    last_execution_at TIMESTAMP,
+    execution_count INTEGER DEFAULT 0,
+    max_executions INTEGER,                    -- NULL = unlimited
+    is_active BOOLEAN DEFAULT true,
+    context_data JSONB DEFAULT '{}',           -- Data passed to workflow on execution
+    created_by INTEGER NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+
+    FOREIGN KEY (workflow_id) REFERENCES workflow_definitions(workflow_id),
+    FOREIGN KEY (community_id) REFERENCES communities(id),
+    FOREIGN KEY (entity_id) REFERENCES entities(entity_id),
+    INDEX idx_schedule_workflow (workflow_id),
+    INDEX idx_schedule_active (is_active),
+    INDEX idx_schedule_next_exec (next_execution_at)
+)
+```
+
+### Workflow Permissions Table
+Entity and community-based access control:
+
+```sql
+workflow_permissions (
+    permission_id UUID PRIMARY KEY,
+    workflow_id UUID NOT NULL,
+    entity_id INTEGER NOT NULL,
+    community_id INTEGER NOT NULL,
+    user_id INTEGER,                           -- NULL for community-level permissions
+    permission_type VARCHAR(50) NOT NULL,     -- 'can_view', 'can_edit', 'can_execute', 'can_delete'
+    granted_by INTEGER NOT NULL,
+    granted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+
+    FOREIGN KEY (workflow_id) REFERENCES workflow_definitions(workflow_id),
+    FOREIGN KEY (entity_id) REFERENCES entities(entity_id),
+    FOREIGN KEY (community_id) REFERENCES communities(id),
+    UNIQUE KEY unique_permission (workflow_id, entity_id, permission_type),
+    INDEX idx_permission_workflow (workflow_id),
+    INDEX idx_permission_entity (entity_id)
+)
+```
+
+### Workflow Webhooks Table
+Webhook configurations for triggering workflows:
+
+```sql
+workflow_webhooks (
+    webhook_id UUID PRIMARY KEY,
+    workflow_id UUID NOT NULL,
+    token VARCHAR(255) UNIQUE NOT NULL,        -- Public token (32-char hex)
+    secret VARCHAR(255) NOT NULL,              -- Private secret (32-char hex)
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    url TEXT NOT NULL,                         -- Full public URL for webhook
+    enabled BOOLEAN DEFAULT true,
+    require_signature BOOLEAN DEFAULT true,    -- Require HMAC-SHA256 signature
+    ip_allowlist TEXT[] DEFAULT '{}',          -- Array of allowed CIDR/IPs
+    rate_limit_max INTEGER DEFAULT 60,         -- Max requests per window
+    rate_limit_window INTEGER DEFAULT 60,      -- Rate limit window in seconds
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    last_triggered_at TIMESTAMP,
+    last_execution_id UUID,
+    trigger_count INTEGER DEFAULT 0,
+
+    FOREIGN KEY (workflow_id) REFERENCES workflow_definitions(workflow_id),
+    UNIQUE KEY unique_token (token),
+    INDEX idx_webhook_workflow (workflow_id),
+    INDEX idx_webhook_token (token)
+)
+```
+
+### Workflow Audit Log Table
+Comprehensive audit trail for all operations:
+
+```sql
+workflow_audit_log (
+    audit_id UUID PRIMARY KEY,
+    workflow_id UUID,
+    community_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    action VARCHAR(100) NOT NULL,              -- 'create', 'update', 'publish', 'execute', 'delete'
+    resource_type VARCHAR(50) NOT NULL,        -- 'workflow', 'schedule', 'webhook', 'execution'
+    resource_id VARCHAR(255),
+    old_values JSONB,                          -- Previous values for updates
+    new_values JSONB,                          -- New values for updates
+    result VARCHAR(50) DEFAULT 'success',      -- 'success', 'failure'
+    error_message TEXT,
+    details JSONB DEFAULT '{}',                -- Additional context
+    ip_address INET,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+
+    FOREIGN KEY (workflow_id) REFERENCES workflow_definitions(workflow_id),
+    FOREIGN KEY (community_id) REFERENCES communities(id),
+    INDEX idx_audit_workflow (workflow_id),
+    INDEX idx_audit_community (community_id),
+    INDEX idx_audit_user (user_id),
+    INDEX idx_audit_action (action),
+    INDEX idx_audit_created (created_at)
+)
+```
+
+### Workflow Templates Table
+Reusable workflow templates:
+
+```sql
+workflow_templates (
+    template_id UUID PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    category VARCHAR(100),                     -- e.g., 'notifications', 'moderation', 'gamification'
+    template_workflow JSONB NOT NULL,          -- Complete workflow definition
+    preview_image_url TEXT,
+    download_count INTEGER DEFAULT 0,
+    rating DECIMAL(3,2),                       -- Average user rating (0-5)
+    tags TEXT[],                               -- Array of searchable tags
+    is_public BOOLEAN DEFAULT true,
+    created_by INTEGER NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+
+    UNIQUE KEY unique_template_name (name),
+    INDEX idx_template_category (category),
+    INDEX idx_template_public (is_public)
+)
+```
+
 ## Database Optimization Strategies
 
 ### Indexing

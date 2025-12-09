@@ -6,6 +6,7 @@ import multer from 'multer';
 import * as identityController from '../controllers/identityController.js';
 import * as profileController from '../controllers/profileController.js';
 import { requireAuth } from '../middleware/auth.js';
+import { validators, validateRequest } from '../middleware/validation.js';
 
 const router = Router();
 
@@ -20,7 +21,14 @@ router.use(requireAuth);
 
 // Profile routes
 router.get('/profile', profileController.getMyProfile);
-router.put('/profile', profileController.updateMyProfile);
+router.put('/profile',
+  validators.text('display_name', { min: 2, max: 255 }),
+  validators.text('bio', { min: 0, max: 1000 }),
+  validators.text('location', { min: 0, max: 255 }),
+  validators.url('website'),
+  validateRequest,
+  profileController.updateMyProfile
+);
 router.post('/profile/avatar', upload.single('avatar'), profileController.uploadAvatar);
 router.delete('/profile/avatar', profileController.deleteAvatar);
 router.get('/linked-platforms', profileController.getMyLinkedPlatforms);
@@ -28,7 +36,12 @@ router.get('/linked-platforms', profileController.getMyLinkedPlatforms);
 // Identity linking routes
 router.get('/identities', identityController.getLinkedIdentities);
 router.get('/identities/primary', identityController.getPrimaryIdentity);
-router.put('/identities/primary', identityController.setPrimaryIdentity);
+router.put('/identities/primary',
+  validators.text('platform', { min: 2, max: 50 }),
+  validators.text('platform_user_id', { min: 1, max: 255 }),
+  validateRequest,
+  identityController.setPrimaryIdentity
+);
 router.post('/identities/link/:platform', identityController.startIdentityLink);
 router.get('/identities/link/:platform/callback', identityController.identityLinkCallback);
 router.delete('/identities/:platform', identityController.unlinkIdentity);

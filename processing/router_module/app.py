@@ -46,7 +46,8 @@ async def startup():
     app.config['dal'] = dal
 
     cache_manager = CacheManager()
-    rate_limiter = RateLimiter()
+    rate_limiter = RateLimiter(redis_url=Config.REDIS_URL)
+    await rate_limiter.connect()  # Connect to Redis on startup
     session_manager = SessionManager()
     command_processor = CommandProcessor(dal, cache_manager, rate_limiter, session_manager)
 

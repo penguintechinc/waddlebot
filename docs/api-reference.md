@@ -28,6 +28,7 @@ The following backend services are accessible through the Hub Module:
 | **browser-source** | Browser source management for OBS | `http://browser-source:8027` | 8027 |
 | **reputation** | Reputation and activity tracking | `http://reputation:8028` | 8028 |
 | **community** | Community management service | `http://community:8029` | 8029 |
+| **workflow-core** | Visual workflow automation engine (premium) | `http://workflow-core:8070` | 8070 |
 
 ## Hub Routes
 
@@ -47,6 +48,7 @@ The Hub Module routes requests to backend services based on URL path:
 | `/browser/*` | Browser Source API | Yes |
 | `/reputation/*` | Reputation API | Yes |
 | `/community/*` | Community API | Yes |
+| `/workflows/*` | Workflow Core API | Yes |
 | `/health` | Health checks | No |
 
 ## Authentication & Authorization
@@ -939,6 +941,555 @@ Forward events to router for legacy systems.
 
 #### `POST /api/gateway/activate`
 Activate gateway for legacy authentication.
+
+## Workflow API Endpoints
+
+The Workflow API provides comprehensive REST endpoints for managing visual workflow automation. Workflows are premium features requiring valid license keys.
+
+**Base URL**: `/api/v1/workflows` (accessible through Hub Module routing to port 8070)
+
+**Authentication**: All endpoints require `X-API-Key` header or valid JWT token
+
+**License Validation**: Returns HTTP 402 Payment Required if license validation fails
+
+### Workflow Management
+
+#### `POST /api/v1/workflows`
+Create a new workflow with license validation.
+
+**Request Body:**
+```json
+{
+  "name": "My Workflow",
+  "description": "Workflow description",
+  "community_id": 1,
+  "entity_id": 100,
+  "trigger_type": "command",
+  "trigger_config": {
+    "command_pattern": "!hello",
+    "platforms": ["twitch", "discord"],
+    "cooldown_seconds": 5
+  },
+  "nodes": {
+    "node1": {
+      "node_id": "node1",
+      "type": "trigger_command",
+      "label": "Command Trigger",
+      "config": {}
+    },
+    "node2": {
+      "node_id": "node2",
+      "type": "action_chat_message",
+      "label": "Send Message",
+      "config": {
+        "message_template": "Hello {user_name}!",
+        "destination": "chat"
+      }
+    }
+  },
+  "connections": [
+    {
+      "connection_id": "conn1",
+      "from_node_id": "node1",
+      "from_port_name": "output",
+      "to_node_id": "node2",
+      "to_port_name": "input"
+    }
+  ],
+  "global_variables": {},
+  "license_key": "PENG-XXXX-XXXX-XXXX-XXXX-ABCD"
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "success": true,
+  "data": {
+    "workflow_id": "550e8400-e29b-41d4-a716-446655440001",
+    "name": "My Workflow",
+    "status": "draft",
+    "community_id": 1,
+    "created_at": "2025-12-09T12:00:00Z"
+  },
+  "message": "Workflow created successfully"
+}
+```
+
+**Status Codes:**
+- `201 Created`: Workflow created successfully
+- `400 Bad Request`: Invalid input data
+- `401 Unauthorized`: Missing or invalid authentication
+- `402 Payment Required`: License validation failed
+- `500 Internal Server Error`: Server error
+
+#### `GET /api/v1/workflows`
+List workflows accessible to the user with pagination and filtering.
+
+**Query Parameters:**
+- `entity_id` (required): Entity ID
+- `community_id` (optional): Community ID
+- `status` (optional): Filter by status (`draft`, `published`, `archived`)
+- `search` (optional): Search in name/description
+- `page` (optional): Page number (default: 1)
+- `per_page` (optional): Items per page (default: 20, max: 100)
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "workflow_id": "550e8400-e29b-41d4-a716-446655440001",
+      "name": "My Workflow",
+      "description": "Workflow description",
+      "status": "draft",
+      "trigger_type": "command",
+      "created_at": "2025-12-09T12:00:00Z",
+      "updated_at": "2025-12-09T12:00:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "per_page": 20,
+    "total_pages": 5,
+    "total_items": 100
+  }
+}
+```
+
+#### `GET /api/v1/workflows/:id`
+Get a specific workflow definition.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "workflow_id": "550e8400-e29b-41d4-a716-446655440001",
+    "name": "My Workflow",
+    "nodes": {},
+    "connections": [],
+    "status": "draft",
+    "trigger_type": "command",
+    "trigger_config": {},
+    "global_variables": {}
+  }
+}
+```
+
+#### `PUT /api/v1/workflows/:id`
+Update an existing workflow.
+
+**Request Body:**
+```json
+{
+  "name": "Updated Workflow",
+  "description": "New description",
+  "nodes": {},
+  "connections": [],
+  "global_variables": {}
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "workflow_id": "550e8400-e29b-41d4-a716-446655440001",
+    "updated_at": "2025-12-09T12:01:00Z"
+  }
+}
+```
+
+#### `DELETE /api/v1/workflows/:id`
+Archive (soft delete) a workflow.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Workflow archived successfully"
+}
+```
+
+### Workflow Publishing
+
+#### `POST /api/v1/workflows/:id/publish`
+Publish a workflow to make it active.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "workflow_id": "550e8400-e29b-41d4-a716-446655440001",
+    "status": "published",
+    "published_at": "2025-12-09T12:02:00Z"
+  }
+}
+```
+
+#### `POST /api/v1/workflows/:id/draft`
+Return a published workflow to draft status.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "workflow_id": "550e8400-e29b-41d4-a716-446655440001",
+    "status": "draft"
+  }
+}
+```
+
+### Workflow Execution
+
+#### `POST /api/v1/workflows/:id/execute`
+Execute a workflow immediately.
+
+**Request Body:**
+```json
+{
+  "trigger_type": "manual",
+  "trigger_data": {
+    "user_id": 123,
+    "user_name": "streamer",
+    "custom_data": {}
+  }
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "execution_id": "550e8400-e29b-41d4-a716-446655440000",
+    "workflow_id": "550e8400-e29b-41d4-a716-446655440001",
+    "status": "running"
+  }
+}
+```
+
+#### `GET /api/v1/workflows/executions/:execId`
+Get detailed execution information including node-by-node results.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "execution_id": "550e8400-e29b-41d4-a716-446655440000",
+    "workflow_id": "550e8400-e29b-41d4-a716-446655440001",
+    "status": "success",
+    "started_at": "2025-12-09T12:00:00Z",
+    "completed_at": "2025-12-09T12:00:05Z",
+    "duration_ms": 5000,
+    "node_executions": [
+      {
+        "node_execution_id": "node-exec-1",
+        "node_id": "node1",
+        "node_type": "trigger_command",
+        "status": "success",
+        "output_variables": {}
+      }
+    ],
+    "output_variables": {}
+  }
+}
+```
+
+#### `POST /api/v1/workflows/executions/:execId/cancel`
+Cancel a running workflow execution.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Execution cancelled successfully"
+}
+```
+
+#### `GET /api/v1/workflows/:id/executions`
+List paginated executions for a specific workflow.
+
+**Query Parameters:**
+- `status` (optional): Filter by status (`pending`, `running`, `success`, `failed`, `cancelled`)
+- `page` (optional): Page number (default: 1)
+- `per_page` (optional): Items per page (default: 20, max: 100)
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "execution_id": "550e8400-e29b-41d4-a716-446655440000",
+      "status": "success",
+      "duration_ms": 5000,
+      "created_at": "2025-12-09T12:00:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "per_page": 20,
+    "total_items": 150
+  }
+}
+```
+
+### Workflow Validation
+
+#### `POST /api/v1/workflows/:id/validate`
+Validate workflow structure and configuration.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "is_valid": true,
+    "errors": [],
+    "warnings": []
+  }
+}
+```
+
+#### `POST /api/v1/workflows/validate`
+Validate a workflow without saving it.
+
+**Request Body:**
+```json
+{
+  "nodes": {},
+  "connections": [],
+  "trigger_config": {}
+}
+```
+
+### Scheduled Execution
+
+#### `POST /api/v1/schedules`
+Create a schedule for automated workflow execution.
+
+**Request Body:**
+```json
+{
+  "workflow_id": "550e8400-e29b-41d4-a716-446655440001",
+  "schedule_type": "cron",
+  "cron_expression": "0 12 * * *",
+  "timezone": "UTC",
+  "context_data": {}
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "success": true,
+  "data": {
+    "schedule_id": "550e8400-e29b-41d4-a716-446655440002",
+    "next_execution_at": "2025-12-10T12:00:00Z"
+  }
+}
+```
+
+**Schedule Types:**
+- `cron`: Cron expression (e.g., "0 12 * * *" for daily at noon)
+- `interval`: Repeat every N seconds
+- `one_time`: Execute at specific datetime
+
+#### `PUT /api/v1/schedules/:id`
+Update an existing schedule.
+
+**Request Body:**
+```json
+{
+  "cron_expression": "0 9 * * *",
+  "timezone": "America/New_York"
+}
+```
+
+#### `DELETE /api/v1/schedules/:id`
+Remove a schedule.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Schedule deleted successfully"
+}
+```
+
+#### `GET /api/v1/schedules/workflow/:id`
+List all schedules for a workflow.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "schedule_id": "550e8400-e29b-41d4-a716-446655440002",
+      "schedule_type": "cron",
+      "next_execution_at": "2025-12-10T12:00:00Z",
+      "is_active": true
+    }
+  ]
+}
+```
+
+### Webhook Triggers
+
+#### `POST /api/v1/workflows/:id/webhooks`
+Create a webhook for triggering a workflow via HTTP.
+
+**Request Body:**
+```json
+{
+  "name": "My Webhook",
+  "description": "Optional description",
+  "require_signature": true,
+  "ip_allowlist": ["192.168.1.0/24"],
+  "rate_limit_max": 60,
+  "rate_limit_window": 60
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "success": true,
+  "data": {
+    "webhook_id": "550e8400-e29b-41d4-a716-446655440003",
+    "token": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
+    "secret": "b1c2d3e4f5g6h7i8j9k0l1m2n3o4p5q6",
+    "url": "https://api.example.com/api/v1/workflows/webhooks/a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+  }
+}
+```
+
+**Note**: The secret is only returned on creation and cannot be retrieved later.
+
+#### `GET /api/v1/workflows/:id/webhooks`
+List webhooks for a workflow.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "webhook_id": "550e8400-e29b-41d4-a716-446655440003",
+      "token": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
+      "name": "My Webhook",
+      "enabled": true,
+      "trigger_count": 42
+    }
+  ]
+}
+```
+
+#### `DELETE /api/v1/workflows/:id/webhooks/:id`
+Delete a webhook.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Webhook deleted successfully"
+}
+```
+
+#### `POST /api/v1/workflows/webhooks/:token`
+Trigger a workflow via webhook (no authentication required, signature-based).
+
+**Request Body** (any JSON):
+```json
+{
+  "event": "user.created",
+  "user_id": 12345,
+  "custom_data": {}
+}
+```
+
+**Headers**:
+- `X-Webhook-Signature: sha256=<hmac-sha256-hex>` (if require_signature=true)
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "execution_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
+}
+```
+
+**Error Responses:**
+- `404 Webhook Not Found`: Token doesn't exist
+- `403 Webhook Disabled`: Webhook is disabled
+- `403 IP Not Allowed`: IP not in allowlist
+- `403 Signature Invalid`: Signature verification failed
+- `429 Rate Limit Exceeded`: Too many requests
+
+### Workflow Templates
+
+#### `GET /api/v1/templates`
+List available workflow templates.
+
+**Query Parameters:**
+- `category` (optional): Filter by category
+- `search` (optional): Search by name/description
+- `page` (optional): Page number (default: 1)
+- `per_page` (optional): Items per page (default: 20)
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "template_id": "550e8400-e29b-41d4-a716-446655440004",
+      "name": "Welcome Message",
+      "category": "notifications",
+      "description": "Send welcome message to new followers",
+      "download_count": 1234
+    }
+  ]
+}
+```
+
+#### `GET /api/v1/templates/:id`
+Get a specific template.
+
+#### `POST /api/v1/templates/instantiate`
+Create a workflow from a template.
+
+**Request Body:**
+```json
+{
+  "template_id": "550e8400-e29b-41d4-a716-446655440004",
+  "name": "My Welcome Message",
+  "community_id": 1,
+  "entity_id": 100
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "success": true,
+  "data": {
+    "workflow_id": "550e8400-e29b-41d4-a716-446655440001",
+    "name": "My Welcome Message",
+    "status": "draft"
+  }
+}
+```
 
 ## Error Responses
 

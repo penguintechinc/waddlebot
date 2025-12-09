@@ -135,6 +135,86 @@ export const validators = {
     if (max !== undefined) validator = validator.isInt({ max });
     return validator.withMessage(`${fieldName} must be an integer${min !== undefined ? ` >= ${min}` : ''}${max !== undefined ? ` <= ${max}` : ''}`);
   },
+
+  // Date range validation - validates start_date and end_date with cross-field comparison
+  dateRange: () => [
+    body('start_date')
+      .optional()
+      .isISO8601()
+      .toDate()
+      .withMessage('start_date must be a valid ISO 8601 date'),
+    body('end_date')
+      .optional()
+      .isISO8601()
+      .toDate()
+      .custom((endDate, { req }) => {
+        if (req.body.start_date && endDate) {
+          const startDate = new Date(req.body.start_date);
+          if (endDate <= startDate) {
+            throw new Error('end_date must be after start_date');
+          }
+        }
+        return true;
+      })
+      .withMessage('end_date must be after start_date'),
+  ],
+
+  // UUID validation - validates UUID v4 format
+  uuid: (field = 'id') =>
+    body(field)
+      .isUUID()
+      .withMessage(`${field} must be a valid UUID`),
+
+  // Array of integers validation - ensures array contains only integer values
+  arrayOfIntegers: (field) =>
+    body(field)
+      .isArray()
+      .withMessage(`${field} must be an array`)
+      .custom((arr) => arr.every(Number.isInteger))
+      .withMessage(`${field} must contain only integers`),
+
+  // Positive integer validation - validates integer greater than 0
+  positiveInteger: (field) =>
+    body(field)
+      .isInt({ gt: 0 })
+      .withMessage(`${field} must be a positive integer`),
+
+  // Array of strings validation - ensures array contains only string values with optional length constraints
+  arrayOfStrings: (field, minLength = null, maxLength = null) => {
+    let validator = body(field)
+      .isArray()
+      .withMessage(`${field} must be an array`);
+
+    if (minLength !== null) {
+      validator = validator.isLength({ min: minLength });
+    }
+    if (maxLength !== null) {
+      validator = validator.isLength({ max: maxLength });
+    }
+
+    return validator
+      .custom((arr) => arr.every(item => typeof item === 'string'))
+      .withMessage(`${field} must contain only strings`);
+  },
+
+  // Hex color validation - validates hex color format (#RGB or #RRGGBB)
+  hexColor: (field) =>
+    body(field)
+      .matches(/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/)
+      .withMessage(`${field} must be a valid hex color (e.g., #FF5733)`),
+
+  // JSON string validation - validates that string is valid JSON
+  jsonString: (field) =>
+    body(field)
+      .custom((value) => {
+        try {
+          JSON.parse(value);
+          return true;
+        } catch (e) {
+          return false;
+        }
+      })
+      .withMessage(`${field} must be valid JSON string`),
 };
 
 /**

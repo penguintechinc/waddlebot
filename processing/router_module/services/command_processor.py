@@ -1,22 +1,26 @@
 """Command Processor - Async command routing and execution"""
 import asyncio
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+import json
 
 import aiohttp
 
 from config import Config
+from services.command_registry import CommandRegistry, CommandInfo
 
 logger = logging.getLogger(__name__)
 
 
 class CommandProcessor:
-    def __init__(self, dal, cache_manager, rate_limiter, session_manager):
+    def __init__(self, dal, cache_manager, rate_limiter, session_manager, command_registry: CommandRegistry):
         self.dal = dal
         self.cache = cache_manager
         self.rate_limiter = rate_limiter
         self.session_manager = session_manager
+        self.command_registry = command_registry
         self._http_session = None
+        self._response_cache: Dict[str, Any] = {}  # session_id -> response
 
     async def _get_http_session(self):
         """Get or create HTTP session for activity tracking"""
@@ -70,8 +74,8 @@ class CommandProcessor:
             if message.startswith('!') or message.startswith('#'):
                 command = message.split()[0] if message else ''
 
-                # Check rate limit
-                if not await self.rate_limiter.check_rate_limit(f"{user_id}:{command}", limit=60):
+                # Check rate limit (60 requests per 60 seconds)
+                if not await self.rate_limiter.check_rate_limit(f"{user_id}:{command}", limit=60, window=60):
                     return {"success": False, "error": "Rate limit exceeded"}
 
                 # Track command usage for reputation (small penalty)
@@ -80,6 +84,10 @@ class CommandProcessor:
 
                 # Execute command
                 result = await self.execute_command(command, entity_id, user_id, message, session_id)
+
+                # Check for workflows triggered by this command
+                await self._check_and_trigger_workflows(command, entity_id, user_id, message, session_id, event_data)
+
                 return result
 
             return {"success": True, "session_id": session_id, "processed": False}
@@ -108,8 +116,8 @@ class CommandProcessor:
         args_str = ' '.join(str(v) for v in options.values()) if options else ''
         message = f"{command} {args_str}".strip()
 
-        # Check rate limit
-        if not await self.rate_limiter.check_rate_limit(f"{user_id}:{command}", limit=60):
+        # Check rate limit (60 requests per 60 seconds)
+        if not await self.rate_limiter.check_rate_limit(f"{user_id}:{command}", limit=60, window=60):
             return {"success": False, "error": "Rate limit exceeded"}
 
         # Track slash command usage for reputation (small penalty)
@@ -306,24 +314,289 @@ class CommandProcessor:
         session_id: str,
     ) -> Dict[str, Any]:
         """Execute command asynchronously"""
-        # This would contain full command execution logic
-        # For now, returning basic structure
-        return {
-            "success": True,
-            "session_id": session_id,
-            "command": command,
-            "executed": True
-        }
+        try:
+            # Get community ID for entity
+            community_id = await self._get_community_for_entity(entity_id)
+            if not community_id:
+                return {
+                    "success": False,
+                    "error": "Community not found for this channel",
+                    "session_id": session_id
+                }
+
+            # Look up command in registry
+            cmd_info = await self.command_registry.get_command(command, community_id)
+            if not cmd_info:
+                # Command not found
+                return {
+                    "success": False,
+                    "error": f"Unknown command: {command}",
+                    "session_id": session_id,
+                    "help_url": f"/commands"
+                }
+
+            # Check if command is enabled
+            if not cmd_info.is_enabled:
+                return {
+                    "success": False,
+                    "error": f"Command {command} is currently disabled",
+                    "session_id": session_id
+                }
+
+            # Check cooldown
+            if cmd_info.cooldown_seconds > 0:
+                cooldown_key = f"cooldown:{user_id}:{command}"
+                if not await self.rate_limiter.check_rate_limit(
+                    cooldown_key,
+                    limit=1,
+                    window=cmd_info.cooldown_seconds
+                ):
+                    return {
+                        "success": False,
+                        "error": f"Command on cooldown. Wait {cmd_info.cooldown_seconds} seconds.",
+                        "session_id": session_id
+                    }
+
+            # Parse command arguments
+            parts = message.split(maxsplit=1)
+            args = parts[1] if len(parts) > 1 else ""
+
+            # Build payload for module
+            payload = {
+                "command": command,
+                "args": args,
+                "user_id": user_id,
+                "entity_id": entity_id,
+                "community_id": community_id,
+                "session_id": session_id,
+                "message": message,
+            }
+
+            # Call module HTTP endpoint with retry logic
+            module_response = await self._call_module_with_retry(
+                cmd_info.module_url,
+                payload,
+                max_retries=3
+            )
+
+            if module_response:
+                # Store response for retrieval
+                await self.handle_module_response({
+                    "session_id": session_id,
+                    "response": module_response
+                })
+
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "command": command,
+                    "module": cmd_info.module_name,
+                    "response": module_response
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Module did not respond",
+                    "session_id": session_id
+                }
+
+        except Exception as e:
+            logger.error(f"Error executing command {command}: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "session_id": session_id
+            }
+
+    async def _call_module_with_retry(
+        self,
+        module_url: str,
+        payload: Dict[str, Any],
+        max_retries: int = 3
+    ) -> Optional[Dict[str, Any]]:
+        """Call module with exponential backoff retry"""
+        session = await self._get_http_session()
+
+        for attempt in range(max_retries):
+            try:
+                timeout = aiohttp.ClientTimeout(total=Config.ROUTER_REQUEST_TIMEOUT)
+                headers = {}
+                if Config.SERVICE_API_KEY:
+                    headers['X-Service-Key'] = Config.SERVICE_API_KEY
+
+                async with session.post(
+                    f"{module_url}/api/v1/execute",
+                    json=payload,
+                    headers=headers,
+                    timeout=timeout
+                ) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    elif response.status == 429:
+                        # Rate limited, wait and retry
+                        wait_time = 2 ** attempt
+                        logger.warning(f"Module rate limited, waiting {wait_time}s")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"Module returned status {response.status}")
+                        return None
+
+            except asyncio.TimeoutError:
+                logger.warning(f"Module timeout (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                return None
+            except Exception as e:
+                logger.error(f"Module call failed: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                return None
+
+        return None
 
     async def handle_module_response(self, response_data: Dict[str, Any]):
         """Handle response from interaction module"""
-        # Store and route module response
-        pass
+        try:
+            session_id = response_data.get('session_id')
+            response = response_data.get('response', {})
 
-    async def list_commands(self) -> List[Dict[str, Any]]:
+            if not session_id:
+                logger.warning("No session_id in module response")
+                return
+
+            # Cache response for retrieval (1 hour TTL)
+            cache_key = f"response:{session_id}"
+            await self.cache.set(
+                cache_key,
+                json.dumps(response),
+                ttl=3600
+            )
+
+            # Also store in memory for immediate access
+            self._response_cache[session_id] = response
+
+            logger.info(f"Stored module response for session {session_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to handle module response: {e}")
+
+    async def get_response(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve stored response by session ID"""
+        # Check memory cache first
+        if session_id in self._response_cache:
+            return self._response_cache[session_id]
+
+        # Check Redis cache
+        cache_key = f"response:{session_id}"
+        cached = await self.cache.get(cache_key)
+        if cached:
+            try:
+                return json.loads(cached)
+            except json.JSONDecodeError:
+                logger.error(f"Invalid JSON in cached response for {session_id}")
+
+        return None
+
+    async def list_commands(
+        self,
+        community_id: Optional[int] = None,
+        category: Optional[str] = None,
+        enabled_only: bool = True
+    ) -> List[Dict[str, Any]]:
         """List available commands"""
-        # Query commands from database
-        return []
+        try:
+            return await self.command_registry.list_commands(
+                community_id=community_id,
+                category=category,
+                enabled_only=enabled_only
+            )
+        except Exception as e:
+            logger.error(f"Failed to list commands: {e}")
+            return []
+
+    async def _check_and_trigger_workflows(self, command: str, entity_id: str, user_id: str, message: str, session_id: str, event_data: Dict[str, Any]):
+        """Check and trigger workflows for this command/event"""
+        try:
+            if not Config.WORKFLOW_CORE_URL:
+                return
+
+            # Query workflows for this trigger
+            workflows = await self._get_workflows_for_trigger(entity_id, command, event_data)
+
+            if not workflows:
+                return
+
+            # Trigger workflows in parallel (fire-and-forget)
+            for workflow in workflows:
+                asyncio.create_task(
+                    self._trigger_workflow(workflow, event_data, session_id)
+                )
+        except Exception as e:
+            logger.warning(f"Failed to check workflows: {e}")
+
+    async def _get_workflows_for_trigger(self, entity_id: str, command: str, event_data: Dict[str, Any]) -> List[Dict]:
+        """Get active workflows for this trigger"""
+        try:
+            message_type = event_data.get('message_type', 'chatMessage')
+
+            # Query workflows table for matching triggers
+            query = """
+                SELECT workflow_id, trigger_config
+                FROM workflows
+                WHERE entity_id = %s
+                AND is_active = true
+                AND status = 'published'
+                AND (
+                    (trigger_type = 'command' AND trigger_config->>'command' = %s)
+                    OR (trigger_type = 'event' AND trigger_config->>'event_type' = %s)
+                )
+            """
+            result = self.dal.executesql(query, [entity_id, command, message_type])
+
+            workflows = []
+            for row in result:
+                workflows.append({
+                    'workflow_id': row[0],
+                    'trigger_config': row[1]
+                })
+
+            return workflows
+        except Exception as e:
+            logger.error(f"Failed to query workflows: {e}")
+            return []
+
+    async def _trigger_workflow(self, workflow: Dict, event_data: Dict[str, Any], session_id: str):
+        """Trigger workflow execution"""
+        try:
+            if not Config.WORKFLOW_CORE_URL:
+                return
+
+            session = await self._get_http_session()
+            payload = {
+                'trigger_source': event_data.get('message_type', 'command'),
+                'trigger_data': event_data,
+                'session_id': session_id,
+                'entity_id': event_data.get('entity_id'),
+                'user_id': event_data.get('user_id'),
+                'platform': event_data.get('platform', 'unknown')
+            }
+
+            headers = {}
+            if Config.SERVICE_API_KEY:
+                headers['X-Service-Key'] = Config.SERVICE_API_KEY
+
+            await session.post(
+                f"{Config.WORKFLOW_CORE_URL}/api/v1/workflows/{workflow['workflow_id']}/execute",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=2)
+            )
+            logger.info(f"Triggered workflow {workflow['workflow_id']} for session {session_id}")
+        except Exception as e:
+            logger.warning(f"Failed to trigger workflow: {e}")
 
     async def get_metrics(self) -> Dict[str, Any]:
         """Get performance metrics"""

@@ -138,6 +138,130 @@ All modules communicate through the Router Module, which handles command routing
 
 ---
 
+### Workflow Core Module (`core/workflow_core_module/`)
+
+**Purpose**: Visual workflow automation engine with node-based builder, schedule service, and webhook triggers
+
+**Key Features**:
+- **Visual Workflow Builder**: Node-based visual interface for non-technical automation
+- **22 Node Types**: Triggers (command, event, webhook, schedule), conditions (if, switch, filter), actions (module, webhook, chat, browser source, delay), data manipulation, loops, and flow control
+- **Multiple Trigger Types**: Command-based, event-based, scheduled (cron/interval/one-time), and webhook triggers
+- **Execution Engine**: Real-time workflow execution with node-level execution tracking and result capture
+- **Schedule Service**: APScheduler-based cron, interval, and one-time scheduling with grace period handling
+- **Webhook Integration**: HMAC-SHA256 signature verification, IP allowlist, and rate limiting per webhook
+- **License Validation**: Premium feature requiring valid license key (HTTP 402 Payment Required on failure)
+- **Permission System**: Entity and community-based access control with audit logging
+- **Workflow Templates**: Shareable workflow templates with one-click instantiation
+- **Execution Monitoring**: Real-time execution traces, node-level results, and retry support
+
+**Technical Details**:
+- **Port**: 8070
+- **Framework**: Quart (async Flask) on Python 3.13
+- **Database**: AsyncDAL with PostgreSQL (8 tables)
+- **Services**:
+  - **LicenseService**: Validates workflows against license tier (free: 1 workflow, pro: unlimited)
+  - **PermissionService**: Entity-based permission checks for read/write/execute
+  - **WorkflowValidationService**: Validates workflow structure, node connections, and configuration
+  - **WorkflowService**: CRUD operations and workflow orchestration
+  - **WorkflowEngine**: Executes workflows with node-by-node execution and error handling
+  - **ScheduleService**: Manages scheduled executions with APScheduler backend
+
+**Node Categories**:
+
+1. **Trigger Nodes** (Entry points):
+   - `trigger_command`: Execute on chat command (e.g., `!hello`)
+   - `trigger_event`: Execute on platform events (follow, subscribe, raid, etc.)
+   - `trigger_webhook`: Execute when webhook receives POST request
+   - `trigger_schedule`: Execute on cron schedule, interval, or specific time
+
+2. **Condition Nodes** (Control flow):
+   - `condition_if`: Traditional if/else branching with AND logic
+   - `condition_switch`: Route to one of multiple outputs based on variable value
+   - `condition_filter`: Filter array items based on condition
+
+3. **Action Nodes** (Execute operations):
+   - `action_module`: Call WaddleBot action modules (AI, shoutout, alias, etc.)
+   - `action_webhook`: Make HTTP requests to external services with retry support
+   - `action_chat_message`: Send message to chat platform (Twitch, Discord, Slack)
+   - `action_browser_source`: Update OBS browser source with HTML/text content
+   - `action_delay`: Pause workflow execution (static or dynamic delay)
+
+4. **Data Nodes** (Manipulate variables):
+   - `data_transform`: Transform data using jq, JavaScript, or Python expressions
+   - `data_variable_set`: Set workflow variables (local/workflow/global scope)
+   - `data_variable_get`: Retrieve variable from context with default values
+   - `data_array_push`: Append items to array variable
+   - `data_object_merge`: Merge objects and create composite data structures
+
+5. **Loop Nodes** (Iteration):
+   - `loop_foreach`: Iterate over array items with configurable concurrency
+   - `loop_while`: Continue looping while condition is true
+
+6. **Flow Control**:
+   - `flow_parallel`: Execute multiple nodes in parallel
+   - `flow_sequence`: Execute nodes sequentially (default)
+   - `flow_noop`: No-operation node for testing and debugging
+
+**Database Tables**:
+- `workflow_definitions`: Core workflow metadata and configuration
+- `workflow_executions`: Execution records with status and timestamps
+- `workflow_node_executions`: Node-level execution details with inputs/outputs
+- `workflow_schedules`: Scheduled execution configurations
+- `workflow_permissions`: Entity and community-based access control
+- `workflow_webhooks`: Webhook configurations with tokens and secrets
+- `workflow_audit_log`: Comprehensive audit trail of all operations
+- `workflow_templates`: Reusable workflow templates
+
+**API Endpoints** (`/api/v1`):
+- **Workflow CRUD**: `POST/GET/PUT/DELETE /workflows`, `GET /workflows/:id`
+- **Execution**: `POST /workflows/:id/execute`, `GET /workflows/executions/:execId`, `GET /workflows/:id/executions`
+- **Publishing**: `POST /workflows/:id/publish`, `POST /workflows/:id/draft`
+- **Validation**: `POST /workflows/:id/validate`, `POST /workflows/validate`
+- **Templates**: `GET /templates`, `POST /templates/instantiate`, `GET /templates/:id`
+- **Schedules**: `POST /schedules`, `PUT /schedules/:id`, `DELETE /schedules/:id`, `GET /schedules/workflow/:id`
+- **Webhooks**: `POST /workflows/:id/webhooks`, `GET /workflows/:id/webhooks`, `DELETE /workflows/:id/webhooks/:id`, `POST /workflows/webhooks/:token`
+
+**Schedule Service**:
+- **Cron Scheduling**: Full cron expression support (e.g., "0 12 * * *" for daily at noon)
+- **Interval Scheduling**: Repeat every N seconds with optional max execution count
+- **One-Time Scheduling**: Execute at specific datetime
+- **Grace Period**: Automatically triggers missed executions within configurable window (default: 15 minutes)
+- **Concurrent Execution**: APScheduler with configurable max instances and coalescing
+
+**Webhook Features**:
+- **HMAC-SHA256 Signature Verification**: Secure token + payload signing with secrets
+- **IP Allowlist**: Support for CIDR ranges and individual IPs
+- **Rate Limiting**: Sliding window rate limiting per webhook (default: 60 req/min)
+- **Secure Token Generation**: 32-character hex tokens and secrets
+- **Trigger Stats**: Track trigger count and last triggered timestamp
+
+**Integration**:
+- **Router Integration**: Routes action module calls through router-service with version control
+- **License Server**: Validates license keys via PenguinTech License Server
+- **Identity Core**: User context and permission verification
+- **Permission Service**: Community and entity-based access control
+- **Audit Logging**: AAA logging for all operations with community/user/action context
+
+**Response Format**:
+```json
+{
+  "success": true,
+  "data": {},
+  "message": "Operation successful",
+  "timestamp": "2025-12-09T12:00:00Z"
+}
+```
+
+**Error Handling**:
+- `400 Bad Request`: Invalid input data
+- `401 Unauthorized`: Missing/invalid authentication
+- `402 Payment Required`: License validation failed
+- `403 Forbidden`: Permission denied
+- `404 Not Found`: Resource not found
+- `500 Internal Server Error`: Server error
+
+---
+
 ## Trigger Modules (Receivers)
 
 ### Twitch Module (`trigger/receiver/twitch_module/`)
