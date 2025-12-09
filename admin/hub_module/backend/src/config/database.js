@@ -14,15 +14,61 @@ const pool = new Pool({
   max: config.database.poolSize,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
+  // Query timeout: 30 seconds (prevents runaway queries)
+  statement_timeout: 30000,
+  // Idle transaction timeout: 5 minutes
+  query_timeout: 30000,
 });
 
+// Pool metrics tracking
+let poolMetrics = {
+  totalConnections: 0,
+  idleConnections: 0,
+  activeConnections: 0,
+  waitingClients: 0,
+  totalQueries: 0,
+  slowQueries: 0,
+  erroredQueries: 0,
+};
+
+// Update pool metrics periodically
+setInterval(() => {
+  poolMetrics.totalConnections = pool.totalCount;
+  poolMetrics.idleConnections = pool.idleCount;
+  poolMetrics.activeConnections = pool.totalCount - pool.idleCount;
+  poolMetrics.waitingClients = pool.waitingCount;
+
+  // Log if pool is under pressure
+  if (poolMetrics.waitingClients > 0) {
+    logger.warn('Database pool under pressure', poolMetrics);
+  }
+}, 60000); // Every 60 seconds
+
 // Connection event handlers
-pool.on('connect', () => {
+pool.on('connect', (client) => {
   logger.debug('New database connection established');
+
+  // Set session-level query timeout
+  client.query('SET statement_timeout = 30000').catch(err => {
+    logger.error('Failed to set statement timeout', { error: err.message });
+  });
+});
+
+pool.on('acquire', () => {
+  logger.debug('Client acquired from pool', {
+    total: pool.totalCount,
+    idle: pool.idleCount,
+    waiting: pool.waitingCount,
+  });
+});
+
+pool.on('remove', () => {
+  logger.debug('Client removed from pool');
 });
 
 pool.on('error', (err) => {
-  logger.error('Unexpected database error', { error: err.message });
+  logger.error('Unexpected database pool error', { error: err.message, stack: err.stack });
+  poolMetrics.erroredQueries++;
 });
 
 /**
@@ -33,19 +79,38 @@ pool.on('error', (err) => {
  */
 export async function query(text, params = []) {
   const start = Date.now();
+  poolMetrics.totalQueries++;
+
   try {
     const result = await pool.query(text, params);
     const duration = Date.now() - start;
-    logger.debug('Query executed', {
-      query: text.substring(0, 100),
-      duration: `${duration}ms`,
-      rows: result.rowCount
-    });
+
+    // Log slow queries (>1 second)
+    if (duration > 1000) {
+      poolMetrics.slowQueries++;
+      logger.warn('Slow query detected', {
+        query: text.substring(0, 200),
+        duration: `${duration}ms`,
+        rows: result.rowCount,
+        params: params.length > 0 ? `${params.length} params` : 'no params',
+      });
+    } else if (duration > 100) {
+      // Log moderately slow queries at debug level
+      logger.debug('Query executed', {
+        query: text.substring(0, 100),
+        duration: `${duration}ms`,
+        rows: result.rowCount
+      });
+    }
+
     return result;
   } catch (error) {
+    poolMetrics.erroredQueries++;
     logger.error('Query error', {
-      query: text.substring(0, 100),
-      error: error.message
+      query: text.substring(0, 200),
+      error: error.message,
+      code: error.code,
+      params: params.length > 0 ? `${params.length} params` : 'no params',
     });
     throw error;
   }
@@ -102,12 +167,27 @@ export async function checkConnection() {
 }
 
 /**
+ * Get current pool metrics
+ * @returns {Object} Pool metrics
+ */
+export function getPoolMetrics() {
+  return {
+    ...poolMetrics,
+    totalConnections: pool.totalCount,
+    idleConnections: pool.idleCount,
+    activeConnections: pool.totalCount - pool.idleCount,
+    waitingClients: pool.waitingCount,
+  };
+}
+
+/**
  * Close all pool connections
  */
 export async function closePool() {
+  logger.info('Closing database pool', poolMetrics);
   await pool.end();
   logger.info('Database pool closed');
 }
 
 export { pool };
-export default { query, getClient, transaction, checkConnection, closePool, pool };
+export default { query, getClient, transaction, checkConnection, closePool, getPoolMetrics, pool };

@@ -328,6 +328,34 @@ async def verify_api_key_async(api_key: str, dal) -> Optional[Dict[str, Any]]:
     }
 
 
+def verify_service_key(provided_key: str, expected_key: Optional[str]) -> bool:
+    """
+    Securely verify service API key using constant-time comparison.
+
+    SECURITY: This function rejects requests if no key is configured to prevent
+    accidental deployment without proper authentication.
+
+    Args:
+        provided_key: The key provided in the request header
+        expected_key: The expected service API key from configuration
+
+    Returns:
+        True if keys match, False otherwise
+    """
+    if not expected_key:
+        logger.error("SERVICE_API_KEY not configured - rejecting request",
+                    extra={'event_type': 'AUTH', 'action': 'verify_service_key', 'result': 'FAILURE'})
+        return False
+
+    if not provided_key:
+        logger.warning("No service key provided in request",
+                      extra={'event_type': 'AUTH', 'action': 'verify_service_key', 'result': 'FAILURE'})
+        return False
+
+    # Use constant-time comparison to prevent timing attacks
+    return secrets.compare_digest(provided_key, expected_key)
+
+
 def setup_default_roles(dal):
     """
     Create default roles if they don't exist.

@@ -7,6 +7,7 @@ import { createServer } from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -15,6 +16,8 @@ import { config } from './config/index.js';
 import { checkConnection, closePool, query } from './config/database.js';
 import { logger } from './utils/logger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { sanitizeBody } from './middleware/validation.js';
+import { setCsrfToken, verifyCsrfToken } from './middleware/csrf.js';
 import routes from './routes/index.js';
 import { setupWebSocket } from './websocket/index.js';
 
@@ -309,6 +312,70 @@ async function initializeDatabase() {
       ON overlay_access_log(community_id, accessed_at DESC)
     `);
 
+    // Create analytics_bot_scores table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS analytics_bot_scores (
+        id SERIAL PRIMARY KEY,
+        community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+        score INTEGER NOT NULL CHECK (score >= 0 AND score <= 100),
+        grade VARCHAR(1) NOT NULL CHECK (grade IN ('A', 'B', 'C', 'D', 'F')),
+        bad_actor_score INTEGER DEFAULT 0,
+        reputation_score INTEGER DEFAULT 0,
+        security_score INTEGER DEFAULT 0,
+        ai_behavioral_score INTEGER DEFAULT 0,
+        suspected_bot_count INTEGER DEFAULT 0,
+        high_confidence_bot_count INTEGER DEFAULT 0,
+        total_users_analyzed INTEGER DEFAULT 0,
+        community_size_category VARCHAR(20) DEFAULT 'small',
+        calculation_metadata JSONB DEFAULT '{}',
+        calculated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(community_id)
+      )
+    `);
+
+    // Create index for bot scores
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_analytics_bot_scores_community
+      ON analytics_bot_scores(community_id)
+    `);
+
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_analytics_bot_scores_grade
+      ON analytics_bot_scores(grade)
+    `);
+
+    // Create analytics_suspected_bots table for detailed bot analysis
+    await query(`
+      CREATE TABLE IF NOT EXISTS analytics_suspected_bots (
+        id SERIAL PRIMARY KEY,
+        community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+        platform VARCHAR(50) NOT NULL,
+        platform_user_id VARCHAR(255) NOT NULL,
+        username VARCHAR(255),
+        confidence_score INTEGER NOT NULL CHECK (confidence_score >= 0 AND confidence_score <= 100),
+        detection_reasons JSONB DEFAULT '[]',
+        ai_analysis TEXT,
+        behavioral_flags JSONB DEFAULT '[]',
+        first_detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_activity_at TIMESTAMP,
+        is_confirmed_bot BOOLEAN DEFAULT false,
+        is_false_positive BOOLEAN DEFAULT false,
+        reviewed_by INTEGER REFERENCES hub_users(id),
+        reviewed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(community_id, platform, platform_user_id)
+      )
+    `);
+
+    // Create index for suspected bots
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_analytics_suspected_bots_community
+      ON analytics_suspected_bots(community_id, confidence_score DESC)
+    `);
+
     // Check if default admin exists in hub_users (unified auth system)
     const adminCheck = await query(
       'SELECT id FROM hub_users WHERE email = $1',
@@ -367,7 +434,25 @@ app.set('trust proxy', 1);
 
 // Security middleware
 app.use(helmet({
-  contentSecurityPolicy: false, // Disable for development, configure properly in production
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"], // unsafe-inline for React dev
+      styleSrc: ["'self'", "'unsafe-inline'"], // unsafe-inline for Tailwind/inline styles
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", "ws:", "wss:"], // WebSocket support
+      fontSrc: ["'self'", "data:"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"],
+    },
+  },
+  crossOriginEmbedderPolicy: false, // Allow embedding for OBS browser source
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true,
+  },
 }));
 
 // CORS
@@ -389,6 +474,18 @@ app.use('/api/', limiter);
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Cookie parsing (required for CSRF tokens)
+app.use(cookieParser());
+
+// XSS protection - sanitize all string inputs
+app.use(sanitizeBody);
+
+// CSRF protection for state-changing requests
+// Set CSRF token for all requests
+app.use(setCsrfToken);
+// Verify CSRF token on POST/PUT/PATCH/DELETE
+app.use(verifyCsrfToken);
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -414,6 +511,24 @@ app.get('/health', async (req, res) => {
     status,
     timestamp: new Date().toISOString(),
     database: dbHealthy ? 'connected' : 'disconnected',
+  });
+});
+
+// Metrics endpoint (for internal monitoring)
+app.get('/metrics', async (req, res) => {
+  const { getPoolMetrics } = await import('./config/database.js');
+  const poolMetrics = getPoolMetrics();
+
+  res.json({
+    module: 'hub_module',
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    database: {
+      pool: poolMetrics,
+      health: await checkConnection(),
+    },
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
   });
 });
 

@@ -420,11 +420,11 @@ fi
 print_header "Community API Tests (Authenticated)"
 
 # Test: Get my communities
-print_test "GET /api/v1/community/my"
-if response=$(api_call GET /api/v1/community/my "" 200 true); then
+print_test "GET /api/v1/communities/my"
+if response=$(api_call GET /api/v1/communities/my "" 200 true); then
     # Try to get a community ID from user's communities
     if [ -z "$COMMUNITY_ID" ]; then
-        COMMUNITY_ID=$(echo "$response" | jq -r '(.data[0].id // .[0].id // empty)' 2>/dev/null || echo "")
+        COMMUNITY_ID=$(echo "$response" | jq -r '(.communities[0].id // .data[0].id // .[0].id // empty)' 2>/dev/null || echo "")
     fi
     print_pass "Get my communities successful"
 else
@@ -742,6 +742,131 @@ if [ -n "$COMMUNITY_ID" ]; then
         fi
     else
         print_skip "PUT /api/v1/admin/:communityId/members/:userId/reputation (no member ID)"
+    fi
+
+    ############################################################################
+    # Bot Score API Tests
+    ############################################################################
+    print_header "Bot Score API Tests"
+
+    # Test: Get bot score
+    print_test "GET /api/v1/admin/$COMMUNITY_ID/bot-score"
+    if response=$(api_call GET "/api/v1/admin/$COMMUNITY_ID/bot-score" "" 200 true 2>/dev/null); then
+        if echo "$response" | jq -e '.botScore' > /dev/null 2>&1 || \
+           echo "$response" | jq -e '.success' > /dev/null 2>&1; then
+            print_pass "Get bot score successful"
+        else
+            print_fail "Get bot score returned unexpected response"
+        fi
+    else
+        print_skip "Get bot score skipped (requires admin role)"
+    fi
+
+    # Test: Get suspected bots
+    print_test "GET /api/v1/admin/$COMMUNITY_ID/suspected-bots"
+    if response=$(api_call GET "/api/v1/admin/$COMMUNITY_ID/suspected-bots?limit=10&minConfidence=50" "" 200 true 2>/dev/null); then
+        if echo "$response" | jq -e '.suspectedBots' > /dev/null 2>&1 || \
+           echo "$response" | jq -e '.success' > /dev/null 2>&1; then
+            print_pass "Get suspected bots successful"
+        else
+            print_fail "Get suspected bots returned unexpected response"
+        fi
+    else
+        print_skip "Get suspected bots skipped (requires admin role)"
+    fi
+
+    ############################################################################
+    # Announcement API Tests
+    ############################################################################
+    print_header "Announcement API Tests"
+
+    # Test: Get announcements
+    print_test "GET /api/v1/admin/$COMMUNITY_ID/announcements"
+    if response=$(api_call GET "/api/v1/admin/$COMMUNITY_ID/announcements" "" 200 true 2>/dev/null); then
+        if echo "$response" | jq -e '.data' > /dev/null 2>&1 || \
+           echo "$response" | jq -e '.success' > /dev/null 2>&1; then
+            print_pass "Get announcements successful"
+        else
+            print_fail "Get announcements returned unexpected response"
+        fi
+    else
+        print_skip "Get announcements skipped (requires admin role)"
+    fi
+
+    # Test: Create announcement
+    print_test "POST /api/v1/admin/$COMMUNITY_ID/announcements"
+    announcement_data='{"title": "Test Announcement", "content": "This is a test announcement from API tests", "announcementType": "general", "status": "draft"}'
+    TEST_ANNOUNCEMENT_ID=""
+    if response=$(api_call POST "/api/v1/admin/$COMMUNITY_ID/announcements" "$announcement_data" 201 true 2>/dev/null); then
+        TEST_ANNOUNCEMENT_ID=$(echo "$response" | jq -r '(.data.id // .id // empty)' 2>/dev/null || echo "")
+        if [ -n "$TEST_ANNOUNCEMENT_ID" ]; then
+            print_pass "Create announcement successful (ID: $TEST_ANNOUNCEMENT_ID)"
+        else
+            print_pass "Create announcement successful"
+        fi
+    else
+        print_skip "Create announcement skipped (requires admin role)"
+    fi
+
+    # Test: Update announcement (if we created one)
+    if [ -n "$TEST_ANNOUNCEMENT_ID" ]; then
+        print_test "PUT /api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID"
+        update_data='{"title": "Updated Test Announcement", "content": "Updated content"}'
+        if api_call PUT "/api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID" "$update_data" 200 true > /dev/null 2>&1; then
+            print_pass "Update announcement successful"
+        else
+            print_skip "Update announcement skipped"
+        fi
+
+        # Test: Pin announcement
+        print_test "PUT /api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID/pin"
+        if api_call PUT "/api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID/pin" "" 200 true > /dev/null 2>&1; then
+            print_pass "Pin announcement successful"
+        else
+            print_skip "Pin announcement skipped"
+        fi
+
+        # Test: Unpin announcement
+        print_test "PUT /api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID/unpin"
+        if api_call PUT "/api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID/unpin" "" 200 true > /dev/null 2>&1; then
+            print_pass "Unpin announcement successful"
+        else
+            print_skip "Unpin announcement skipped"
+        fi
+
+        # Test: Publish announcement
+        print_test "POST /api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID/publish"
+        if api_call POST "/api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID/publish" "" 200 true > /dev/null 2>&1; then
+            print_pass "Publish announcement successful"
+        else
+            print_skip "Publish announcement skipped"
+        fi
+
+        # Test: Get broadcast status
+        print_test "GET /api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID/broadcast-status"
+        if api_call GET "/api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID/broadcast-status" "" 200 true > /dev/null 2>&1; then
+            print_pass "Get broadcast status successful"
+        else
+            print_skip "Get broadcast status skipped"
+        fi
+
+        # Test: Archive announcement
+        print_test "POST /api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID/archive"
+        if api_call POST "/api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID/archive" "" 200 true > /dev/null 2>&1; then
+            print_pass "Archive announcement successful"
+        else
+            print_skip "Archive announcement skipped"
+        fi
+
+        # Test: Delete announcement (cleanup)
+        print_test "DELETE /api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID"
+        if api_call DELETE "/api/v1/admin/$COMMUNITY_ID/announcements/$TEST_ANNOUNCEMENT_ID" "" 200 true > /dev/null 2>&1; then
+            print_pass "Delete announcement successful"
+        else
+            print_skip "Delete announcement skipped"
+        fi
+    else
+        print_skip "Announcement CRUD tests (no announcement ID)"
     fi
 else
     print_skip "Admin API tests (no community available)"

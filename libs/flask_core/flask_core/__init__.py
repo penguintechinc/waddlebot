@@ -16,7 +16,7 @@ __version__ = "2.0.0"
 __author__ = "WaddleBot Team"
 
 from .database import AsyncDAL, init_database
-from .auth import setup_auth, OAuthProvider, create_jwt_token, verify_jwt_token
+from .auth import setup_auth, OAuthProvider, create_jwt_token, verify_jwt_token, verify_service_key
 from .datamodels import (
     CommandRequest,
     CommandResult,
@@ -45,6 +45,7 @@ __all__ = [
     "OAuthProvider",
     "create_jwt_token",
     "verify_jwt_token",
+    "verify_service_key",
     # Datamodels
     "CommandRequest",
     "CommandResult",

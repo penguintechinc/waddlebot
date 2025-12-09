@@ -64,10 +64,13 @@ mem0_services = {}  # community_id -> Mem0Service
 
 def _verify_service_key():
     """Verify X-Service-Key header for internal endpoints."""
+    import secrets
     if not Config.SERVICE_API_KEY:
-        return True  # No key configured, allow all
+        logger.error("SERVICE_API_KEY not configured - rejecting request", action="security")
+        return False  # No key configured, reject all requests for security
     key = request.headers.get('X-Service-Key', '')
-    return key == Config.SERVICE_API_KEY
+    # Use constant-time comparison to prevent timing attacks
+    return secrets.compare_digest(key, Config.SERVICE_API_KEY)
 
 
 def _get_mem0_service(community_id: int) -> Mem0Service:

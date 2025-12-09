@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { adminApi } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
+import BotScoreBadge from '../../components/BotScoreBadge';
+import { ShieldCheckIcon, ExclamationTriangleIcon, UserGroupIcon, ClockIcon } from '@heroicons/react/24/outline';
 
 const CONFIDENCE_COLORS = {
   low: 'text-emerald-400',
@@ -35,11 +37,31 @@ function AdminBotDetection() {
     notes: '',
   });
   const [submitting, setSubmitting] = useState(false);
+  const [botScore, setBotScore] = useState(null);
+  const [botScoreLoading, setBotScoreLoading] = useState(true);
   const isPremium = user?.isPremium || false;
 
   useEffect(() => {
     fetchDetections();
   }, [communityId, page, filters]);
+
+  useEffect(() => {
+    fetchBotScore();
+  }, [communityId]);
+
+  async function fetchBotScore() {
+    setBotScoreLoading(true);
+    try {
+      const response = await adminApi.getBotScore(communityId);
+      if (response.data.success) {
+        setBotScore(response.data.botScore);
+      }
+    } catch (err) {
+      console.error('Failed to fetch bot score:', err);
+    } finally {
+      setBotScoreLoading(false);
+    }
+  }
 
   async function fetchDetections() {
     setLoading(true);
@@ -143,10 +165,84 @@ function AdminBotDetection() {
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-bold text-sky-100">Bot Detection</h1>
             <span className="badge badge-gold text-xs">Premium</span>
+            {botScore?.isCalculated && (
+              <BotScoreBadge
+                grade={botScore.grade}
+                score={botScore.score}
+                showScore={true}
+                size="lg"
+              />
+            )}
           </div>
           <p className="text-navy-400 mt-1">Review and moderate suspected bot accounts</p>
         </div>
       </div>
+
+      {/* Bot Score Overview */}
+      {botScore?.isCalculated && (
+        <div className="grid sm:grid-cols-4 gap-4 mb-6">
+          <div className="card p-4 border-l-4 border-l-emerald-400">
+            <div className="flex items-center gap-2 mb-2">
+              <ShieldCheckIcon className="w-5 h-5 text-emerald-400" />
+              <span className="text-xs text-navy-400 uppercase">Bad Actor Score</span>
+            </div>
+            <div className="text-2xl font-bold text-emerald-400">{botScore.factors?.badActor || 0}</div>
+            <div className="text-xs text-navy-500">Higher = fewer bad actors</div>
+          </div>
+          <div className="card p-4 border-l-4 border-l-sky-400">
+            <div className="flex items-center gap-2 mb-2">
+              <UserGroupIcon className="w-5 h-5 text-sky-400" />
+              <span className="text-xs text-navy-400 uppercase">Reputation Score</span>
+            </div>
+            <div className="text-2xl font-bold text-sky-400">{botScore.factors?.reputation || 0}</div>
+            <div className="text-xs text-navy-500">Community health</div>
+          </div>
+          <div className="card p-4 border-l-4 border-l-purple-400">
+            <div className="flex items-center gap-2 mb-2">
+              <ShieldCheckIcon className="w-5 h-5 text-purple-400" />
+              <span className="text-xs text-navy-400 uppercase">Security Score</span>
+            </div>
+            <div className="text-2xl font-bold text-purple-400">{botScore.factors?.security || 0}</div>
+            <div className="text-xs text-navy-500">Content violations</div>
+          </div>
+          <div className="card p-4 border-l-4 border-l-gold-400">
+            <div className="flex items-center gap-2 mb-2">
+              <ExclamationTriangleIcon className="w-5 h-5 text-gold-400" />
+              <span className="text-xs text-navy-400 uppercase">AI Behavioral</span>
+            </div>
+            <div className="text-2xl font-bold text-gold-400">{botScore.factors?.aiBehavioral || 0}</div>
+            <div className="text-xs text-navy-500">Pattern analysis</div>
+          </div>
+        </div>
+      )}
+
+      {/* Bot Score Summary */}
+      {botScore?.isCalculated && botScore.stats && (
+        <div className="card p-4 mb-6">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center gap-6">
+              <div>
+                <span className="text-sm text-navy-400">Suspected Bots:</span>
+                <span className="ml-2 font-bold text-red-400">{botScore.stats.suspectedBotCount || 0}</span>
+              </div>
+              <div>
+                <span className="text-sm text-navy-400">High Confidence:</span>
+                <span className="ml-2 font-bold text-orange-400">{botScore.stats.highConfidenceBotCount || 0}</span>
+              </div>
+              <div>
+                <span className="text-sm text-navy-400">Users Analyzed:</span>
+                <span className="ml-2 font-bold text-sky-400">{botScore.stats.totalUsersAnalyzed || 0}</span>
+              </div>
+            </div>
+            {botScore.calculatedAt && (
+              <div className="flex items-center gap-2 text-xs text-navy-500">
+                <ClockIcon className="w-4 h-4" />
+                <span>Last calculated: {new Date(botScore.calculatedAt).toLocaleString()}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="card p-4 mb-6">

@@ -38,6 +38,7 @@ dal = None
 analytics_service = None
 metrics_service = None
 polling_service = None
+bot_score_service = None
 
 
 @app.before_serving
@@ -57,11 +58,13 @@ async def startup():
         from services.analytics_service import AnalyticsService
         from services.metrics_service import MetricsService
         from services.polling_service import PollingService
+        from services.bot_score_service import BotScoreService
 
         # Initialize services
         analytics_service = AnalyticsService(dal, logger)
         metrics_service = MetricsService(dal, logger)
         polling_service = PollingService(dal, logger)
+        bot_score_service = BotScoreService(dal, logger)
 
         logger.system("Analytics core module started", result="SUCCESS")
 
@@ -231,6 +234,84 @@ async def trigger_aggregation():
         return jsonify(success_response(result))
     except Exception as e:
         logger.error(f"Failed to trigger aggregation: {e}")
+        return jsonify(error_response(str(e), 500))
+
+
+# ============================================================================
+# BOT SCORE ENDPOINTS
+# ============================================================================
+
+@api_bp.route('/<int:community_id>/bot-score', methods=['GET'])
+async def get_bot_score(community_id: int):
+    """
+    Get bot detection score for community.
+
+    Returns cached score or calculates if stale/missing.
+    """
+    try:
+        score = await bot_score_service.get_score(community_id)
+        return jsonify(success_response(score))
+    except Exception as e:
+        logger.error(f"Failed to get bot score: {e}", community_id=community_id)
+        return jsonify(error_response(str(e), 500))
+
+
+@api_bp.route('/<int:community_id>/bot-score/calculate', methods=['POST'])
+async def calculate_bot_score(community_id: int):
+    """
+    Force recalculation of bot score for community.
+    """
+    try:
+        score = await bot_score_service.calculate_score(community_id)
+        return jsonify(success_response(score))
+    except Exception as e:
+        logger.error(f"Failed to calculate bot score: {e}", community_id=community_id)
+        return jsonify(error_response(str(e), 500))
+
+
+@api_bp.route('/<int:community_id>/suspected-bots', methods=['GET'])
+async def get_suspected_bots(community_id: int):
+    """
+    Get list of suspected bots for community (Premium feature).
+
+    Query params:
+    - limit: max results (default 50)
+    - min_confidence: minimum confidence score (default 50)
+    """
+    try:
+        limit = int(request.args.get('limit', '50'))
+        min_confidence = int(request.args.get('min_confidence', '50'))
+
+        bots = await bot_score_service.get_suspected_bots(
+            community_id, limit=limit, min_confidence=min_confidence
+        )
+        return jsonify(success_response({'suspected_bots': bots}))
+    except Exception as e:
+        logger.error(f"Failed to get suspected bots: {e}", community_id=community_id)
+        return jsonify(error_response(str(e), 500))
+
+
+@api_bp.route('/<int:community_id>/suspected-bots/<int:bot_id>/review', methods=['PUT'])
+async def review_suspected_bot(community_id: int, bot_id: int):
+    """
+    Mark a suspected bot as reviewed (false positive or confirmed).
+
+    Body:
+    - is_false_positive: bool
+    """
+    try:
+        data = await request.get_json()
+        is_false_positive = data.get('is_false_positive', False)
+
+        # Get reviewer ID from request context (set by auth middleware)
+        reviewer_id = request.headers.get('X-User-ID')
+
+        result = await bot_score_service.mark_bot_reviewed(
+            community_id, bot_id, is_false_positive, reviewer_id
+        )
+        return jsonify(success_response(result))
+    except Exception as e:
+        logger.error(f"Failed to review suspected bot: {e}", community_id=community_id)
         return jsonify(error_response(str(e), 500))
 
 

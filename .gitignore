@@ -164,7 +164,7 @@ cython_debug/
 #.idea/
 
 
-.PLAN
+.PLAN*
 .TODO
 .REQUIREMENTS
 
@@ -177,3 +177,4 @@ config/kong/ssl/*.pem
 # Node.js
 node_modules/
 package-lock.json
+

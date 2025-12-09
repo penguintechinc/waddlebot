@@ -6,6 +6,16 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// Validate critical secrets in production
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.includes('dev-secret') || process.env.JWT_SECRET.includes('change-in-production')) {
+    throw new Error('FATAL: JWT_SECRET must be set to a strong secret in production. Do not use default values.');
+  }
+  if (!process.env.SERVICE_API_KEY || process.env.SERVICE_API_KEY.includes('dev-service') || process.env.SERVICE_API_KEY.includes('change-in-production')) {
+    throw new Error('FATAL: SERVICE_API_KEY must be set to a strong key in production. Do not use default values.');
+  }
+}
+
 export const config = {
   // Server
   env: process.env.NODE_ENV || 'development',
@@ -20,7 +30,7 @@ export const config = {
 
   // JWT
   jwt: {
-    secret: process.env.JWT_SECRET || 'dev-secret-change-in-production',
+    secret: process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? null : 'dev-secret-ONLY-FOR-DEVELOPMENT'),
     expiresIn: parseInt(process.env.JWT_EXPIRES_IN || '3600', 10),
   },
 
@@ -68,7 +78,7 @@ export const config = {
   },
 
   // Internal Service API Key (for service-to-service communication)
-  serviceApiKey: process.env.SERVICE_API_KEY || 'dev-service-key-change-in-production',
+  serviceApiKey: process.env.SERVICE_API_KEY || (process.env.NODE_ENV === 'production' ? null : 'dev-service-key-ONLY-FOR-DEVELOPMENT'),
 
   // Logging
   logging: {

@@ -47,10 +47,13 @@ policy_enforcer = None
 
 def _verify_service_key():
     """Verify X-Service-Key header for internal endpoints."""
+    import secrets
     if not Config.SERVICE_API_KEY:
-        return True  # No key configured, allow all
+        logger.error("SERVICE_API_KEY not configured - rejecting request", action="security")
+        return False  # No key configured, reject all requests for security
     key = request.headers.get('X-Service-Key', '')
-    return key == Config.SERVICE_API_KEY
+    # Use constant-time comparison to prevent timing attacks
+    return secrets.compare_digest(key, Config.SERVICE_API_KEY)
 
 
 @app.before_serving

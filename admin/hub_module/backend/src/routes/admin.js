@@ -162,6 +162,11 @@ router.post('/:communityId/announcements/:announcementId/archive', requireCommun
 router.post('/:communityId/announcements/:announcementId/broadcast', requireCommunityAdmin, announcementController.broadcastAnnouncement);
 router.get('/:communityId/announcements/:announcementId/broadcast-status', requireCommunityAdmin, announcementController.getBroadcastStatus);
 
+// Bot Score (Community health grade A-F)
+router.get('/:communityId/bot-score', requireCommunityAdmin, adminController.getBotScore);
+router.get('/:communityId/suspected-bots', requireCommunityAdmin, adminController.getSuspectedBots);
+router.put('/:communityId/suspected-bots/:botId/review', requireCommunityAdmin, adminController.reviewSuspectedBot);
+
 // Analytics proxy routes
 router.get('/:communityId/analytics/*', requireCommunityAdmin, async (req, res) => {
   try {

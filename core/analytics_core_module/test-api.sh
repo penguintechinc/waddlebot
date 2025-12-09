@@ -111,6 +111,13 @@ main() {
         "Trigger aggregation"
     echo
 
+    # Test bot score API endpoints
+    print_info "Testing bot score API endpoints..."
+    api_call GET "/api/v1/analytics/$COMMUNITY_ID/bot-score" "" "Get bot score"
+    api_call POST "/api/v1/analytics/$COMMUNITY_ID/bot-score/calculate" "" "Calculate bot score"
+    api_call GET "/api/v1/analytics/$COMMUNITY_ID/suspected-bots?limit=10&min_confidence=50" "" "Get suspected bots"
+    echo
+
     echo "========================================="
     echo "All tests completed!"
     echo "========================================="

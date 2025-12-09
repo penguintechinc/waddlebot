@@ -3,6 +3,8 @@ import { useParams, Link } from 'react-router-dom';
 import { communityApi, streamApi, adminApi } from '../../services/api';
 import LiveStreamGrid from '../../components/streams/LiveStreamGrid';
 import LeaderboardCard from '../../components/leaderboard/LeaderboardCard';
+import BotScoreBadge from '../../components/BotScoreBadge';
+import BotScoreCard from '../../components/BotScoreCard';
 import { MegaphoneIcon, MapPinIcon } from '@heroicons/react/24/outline';
 
 function CommunityDashboard() {
@@ -14,6 +16,7 @@ function CommunityDashboard() {
   const [streamsError, setStreamsError] = useState(null);
   const [announcements, setAnnouncements] = useState([]);
   const [announcementsLoading, setAnnouncementsLoading] = useState(false);
+  const [botScore, setBotScore] = useState(null);
 
   useEffect(() => {
     async function fetchDashboard() {
@@ -51,6 +54,22 @@ function CommunityDashboard() {
       }
     }
     fetchAnnouncements();
+  }, [id]);
+
+  // Fetch bot score (for admins)
+  useEffect(() => {
+    async function fetchBotScore() {
+      try {
+        const response = await adminApi.getBotScore(id);
+        if (response.data.success && response.data.botScore?.isCalculated) {
+          setBotScore(response.data.botScore);
+        }
+      } catch (err) {
+        // Silently fail - user may not have admin access
+        console.debug('Bot score not available:', err.message);
+      }
+    }
+    fetchBotScore();
   }, [id]);
 
   const refreshStreams = async () => {
@@ -96,7 +115,17 @@ function CommunityDashboard() {
             )}
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-sky-100">{community.displayName}</h1>
+            <div className="flex items-center space-x-2">
+              <h1 className="text-2xl font-bold text-sky-100">{community.displayName}</h1>
+              {botScore && (
+                <BotScoreBadge
+                  grade={botScore.grade}
+                  score={botScore.score}
+                  showScore={true}
+                  size="md"
+                />
+              )}
+            </div>
             <p className="text-navy-400 capitalize">{membership.role.replace('community-', '').replace('-', ' ')}</p>
           </div>
         </div>
@@ -240,6 +269,14 @@ function CommunityDashboard() {
 
         {/* Sidebar */}
         <div className="space-y-6">
+          {/* Bot Score Card (admin only) */}
+          {['community-owner', 'community-admin'].includes(membership?.role) && (
+            <BotScoreCard
+              communityId={id}
+              isPremium={community.isPremium || false}
+            />
+          )}
+
           {/* Leaderboards */}
           <LeaderboardCard
             communityId={id}

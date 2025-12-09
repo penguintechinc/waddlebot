@@ -199,6 +199,12 @@ export const adminApi = {
     api.get(`/api/v1/admin/${communityId}/bot-detection`, { params }),
   getBotDetectionResults: (communityId, params) =>
     api.get(`/api/v1/admin/${communityId}/bot-detection`, { params }),
+  getBotScore: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/bot-score`),
+  getSuspectedBots: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/suspected-bots`, { params }),
+  reviewSuspectedBot: (communityId, botId, data) =>
+    api.put(`/api/v1/admin/${communityId}/suspected-bots/${botId}/review`, data),
   reviewBotDetection: (communityId, resultId, data) =>
     api.post(`/api/v1/admin/${communityId}/bot-detection/${resultId}/review`, data),
   markBotDetectionReviewed: (communityId, resultId) =>

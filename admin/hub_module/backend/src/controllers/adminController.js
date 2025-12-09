@@ -2454,3 +2454,163 @@ export async function getAIContext(req, res, next) {
     next(err);
   }
 }
+
+// ===== Bot Detection Score Endpoints =====
+
+/**
+ * Get bot detection score for community
+ * Returns cached score from analytics_bot_scores table
+ */
+export async function getBotScore(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+
+    const result = await query(
+      `SELECT score, grade, bad_actor_score, reputation_score, security_score,
+              ai_behavioral_score, suspected_bot_count, high_confidence_bot_count,
+              total_users_analyzed, community_size_category, calculation_metadata,
+              calculated_at
+       FROM analytics_bot_scores
+       WHERE community_id = $1`,
+      [communityId]
+    );
+
+    if (result.rows.length === 0) {
+      // Return default/uncalculated state
+      return res.json({
+        success: true,
+        botScore: {
+          score: null,
+          grade: null,
+          message: 'Bot score not yet calculated',
+          isCalculated: false,
+        },
+      });
+    }
+
+    const row = result.rows[0];
+    res.json({
+      success: true,
+      botScore: {
+        score: row.score,
+        grade: row.grade,
+        isCalculated: true,
+        factors: {
+          badActor: row.bad_actor_score,
+          reputation: row.reputation_score,
+          security: row.security_score,
+          aiBehavioral: row.ai_behavioral_score,
+        },
+        stats: {
+          suspectedBotCount: row.suspected_bot_count,
+          highConfidenceBotCount: row.high_confidence_bot_count,
+          totalUsersAnalyzed: row.total_users_analyzed,
+          communitySizeCategory: row.community_size_category,
+        },
+        metadata: row.calculation_metadata || {},
+        calculatedAt: row.calculated_at?.toISOString(),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Get suspected bots for community (Premium feature)
+ * Returns list of users flagged as potential bots with confidence scores
+ */
+export async function getSuspectedBots(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '50', 10)));
+    const minConfidence = Math.max(0, Math.min(100, parseInt(req.query.minConfidence || '50', 10)));
+
+    const result = await query(
+      `SELECT id, platform, platform_user_id, username, confidence_score,
+              detection_reasons, ai_analysis, behavioral_flags,
+              is_false_positive, reviewed_by, reviewed_at,
+              first_detected_at, last_detected_at
+       FROM analytics_suspected_bots
+       WHERE community_id = $1
+       AND confidence_score >= $2
+       AND (is_false_positive IS NULL OR is_false_positive = false)
+       ORDER BY confidence_score DESC
+       LIMIT $3`,
+      [communityId, minConfidence, limit]
+    );
+
+    const suspectedBots = result.rows.map(row => ({
+      id: row.id,
+      platform: row.platform,
+      platformUserId: row.platform_user_id,
+      username: row.username,
+      confidenceScore: row.confidence_score,
+      detectionReasons: row.detection_reasons || [],
+      aiAnalysis: row.ai_analysis,
+      behavioralFlags: row.behavioral_flags || [],
+      isFalsePositive: row.is_false_positive,
+      reviewedBy: row.reviewed_by,
+      reviewedAt: row.reviewed_at?.toISOString(),
+      firstDetectedAt: row.first_detected_at?.toISOString(),
+      lastDetectedAt: row.last_detected_at?.toISOString(),
+    }));
+
+    res.json({
+      success: true,
+      suspectedBots,
+      count: suspectedBots.length,
+      filters: { minConfidence, limit },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Review suspected bot (mark as false positive or confirmed)
+ */
+export async function reviewSuspectedBot(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+    const botId = parseInt(req.params.botId, 10);
+    const { isFalsePositive } = req.body;
+
+    if (typeof isFalsePositive !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        error: 'isFalsePositive must be a boolean',
+      });
+    }
+
+    const result = await query(
+      `UPDATE analytics_suspected_bots
+       SET is_false_positive = $1, reviewed_by = $2, reviewed_at = NOW()
+       WHERE id = $3 AND community_id = $4
+       RETURNING id, username`,
+      [isFalsePositive, req.user.id, botId, communityId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Suspected bot not found',
+      });
+    }
+
+    logger.audit('Suspected bot reviewed', {
+      adminId: req.user.id,
+      communityId,
+      botId,
+      username: result.rows[0].username,
+      isFalsePositive,
+    });
+
+    res.json({
+      success: true,
+      message: isFalsePositive ? 'Marked as false positive' : 'Confirmed as bot',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
