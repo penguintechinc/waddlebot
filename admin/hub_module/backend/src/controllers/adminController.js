@@ -2046,10 +2046,10 @@ export async function getAIResearcherConfig(req, res, next) {
     const communityId = parseInt(req.params.communityId, 10);
 
     const result = await query(
-      `SELECT is_enabled, stream_summary_enabled, stream_summary_interval_hours,
-              weekly_rollup_enabled, weekly_rollup_day, bot_detection_enabled,
-              bot_detection_sensitivity, context_window_days, max_context_tokens,
-              is_premium, created_at, updated_at
+      `SELECT is_enabled, ai_provider, ai_model, stream_summary_enabled,
+              stream_summary_interval_hours, weekly_rollup_enabled, weekly_rollup_day,
+              bot_detection_enabled, bot_detection_sensitivity, context_window_days,
+              max_context_tokens, is_premium, created_at, updated_at
        FROM ai_researcher_config
        WHERE community_id = $1`,
       [communityId]
@@ -2061,6 +2061,8 @@ export async function getAIResearcherConfig(req, res, next) {
         success: true,
         config: {
           isEnabled: false,
+          aiProvider: 'ollama',
+          aiModel: 'tinyllama',
           streamSummary: {
             enabled: false,
             intervalHours: 6,
@@ -2087,6 +2089,8 @@ export async function getAIResearcherConfig(req, res, next) {
       success: true,
       config: {
         isEnabled: row.is_enabled,
+        aiProvider: row.ai_provider || 'ollama',
+        aiModel: row.ai_model || 'tinyllama',
         streamSummary: {
           enabled: row.stream_summary_enabled,
           intervalHours: row.stream_summary_interval_hours,
@@ -2119,7 +2123,7 @@ export async function getAIResearcherConfig(req, res, next) {
 export async function updateAIResearcherConfig(req, res, next) {
   try {
     const communityId = parseInt(req.params.communityId, 10);
-    const { isEnabled, streamSummary, weeklyRollup, botDetection, context } = req.body;
+    const { isEnabled, aiProvider, aiModel, streamSummary, weeklyRollup, botDetection, context } = req.body;
 
     // Check if config exists and get premium status
     const existingResult = await query(

@@ -77,6 +77,27 @@ CREATE TABLE IF NOT EXISTS coordination (
 CREATE INDEX IF NOT EXISTS idx_coordination_entity ON coordination(entity_id);
 CREATE INDEX IF NOT EXISTS idx_coordination_live ON coordination(is_live);
 
+-- AI insights table
+CREATE TABLE IF NOT EXISTS ai_insights (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    insight_type VARCHAR(100) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    summary TEXT,
+    metadata JSONB DEFAULT '{}',
+    data JSONB DEFAULT '{}',
+    confidence_score DECIMAL(3,2) CHECK (confidence_score >= 0 AND confidence_score <= 1),
+    priority VARCHAR(20) DEFAULT 'normal',
+    status VARCHAR(50) DEFAULT 'active',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_insights_community ON ai_insights(community_id);
+CREATE INDEX IF NOT EXISTS idx_ai_insights_type ON ai_insights(insight_type);
+CREATE INDEX IF NOT EXISTS idx_ai_insights_status ON ai_insights(status);
+CREATE INDEX IF NOT EXISTS idx_ai_insights_created ON ai_insights(created_at DESC);
+
 -- Add missing column to suspected_bots table if it exists
 DO $$
 BEGIN
@@ -103,3 +124,4 @@ COMMENT ON TABLE module_installations IS 'Tracks installed modules per community
 COMMENT ON TABLE browser_source_tokens IS 'Authentication tokens for OBS browser sources';
 COMMENT ON TABLE community_domains IS 'Custom domains for communities';
 COMMENT ON TABLE coordination IS 'Real-time stream coordination and status';
+COMMENT ON TABLE ai_insights IS 'AI-generated insights and recommendations for communities';
