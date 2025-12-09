@@ -5,7 +5,7 @@ quart==0.19.4
 hypercorn==0.16.0
 
 # HTTP Client (async)
-aiohttp==3.9.1
+aiohttp==3.12.14
 
 # Database
 pydal==20231121.1
