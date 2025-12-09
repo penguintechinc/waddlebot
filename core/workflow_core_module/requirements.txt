@@ -11,7 +11,7 @@ aiohttp==3.9.1
 pydal==20231121.1
 
 # Workflow Execution
-RestrictedPython==7.0
+RestrictedPython==8.1
 croniter==2.0.1
 APScheduler==3.10.4
 
