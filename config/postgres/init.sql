@@ -1197,6 +1197,401 @@ INSERT INTO loyalty_gear_items (category_id, name, display_name, item_type, rari
 ON CONFLICT DO NOTHING;
 
 -- ============================================================
+-- CALENDAR & EVENTS MODULE TABLES
+-- ============================================================
+-- Complete event management system with RSVP, recurring events,
+-- platform sync (Discord, Twitch, YouTube), and multi-community context
+
+-- Multi-community context tracking (entities can belong to multiple communities)
+CREATE TABLE IF NOT EXISTS entity_community_context (
+    id SERIAL PRIMARY KEY,
+    entity_id VARCHAR(255) NOT NULL,  -- discord:guild_id or slack:workspace_id
+    platform VARCHAR(50) NOT NULL,
+    default_community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    available_communities JSONB NOT NULL DEFAULT '[]'::jsonb,  -- Array of community IDs
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(entity_id, platform)
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_context_entity ON entity_community_context(entity_id, platform);
+CREATE INDEX IF NOT EXISTS idx_entity_context_community ON entity_community_context(default_community_id);
+
+-- Core events table with all event details, recurring patterns, platform sync IDs
+CREATE TABLE IF NOT EXISTS calendar_events (
+    id SERIAL PRIMARY KEY,
+    event_uuid UUID UNIQUE NOT NULL DEFAULT uuid_generate_v4(),
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    entity_id VARCHAR(255) NOT NULL,  -- discord:guild_id, slack:workspace_id, etc.
+    platform VARCHAR(50) NOT NULL,  -- discord, slack, twitch, youtube
+
+    -- Event details
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    event_date TIMESTAMPTZ NOT NULL,
+    end_date TIMESTAMPTZ,
+    timezone VARCHAR(50) DEFAULT 'UTC',
+    location VARCHAR(255),  -- Physical or virtual location
+    cover_image_url TEXT,
+
+    -- RSVP settings
+    max_attendees INTEGER,  -- NULL = unlimited
+    rsvp_enabled BOOLEAN DEFAULT TRUE,
+    rsvp_deadline TIMESTAMPTZ,
+    waitlist_enabled BOOLEAN DEFAULT TRUE,
+
+    -- Recurring event settings
+    is_recurring BOOLEAN DEFAULT FALSE,
+    recurring_pattern VARCHAR(20),  -- 'daily', 'weekly', 'monthly'
+    recurring_days JSONB,  -- For weekly: [0,1,2,3,4,5,6] (Sun-Sat), monthly: [1,15,30]
+    recurring_end_date TIMESTAMPTZ,
+    parent_event_id INTEGER REFERENCES calendar_events(id) ON DELETE CASCADE,  -- NULL for parent, set for instances
+
+    -- Approval workflow
+    status VARCHAR(20) DEFAULT 'pending',  -- 'pending', 'approved', 'rejected', 'cancelled'
+    approved_by INTEGER REFERENCES hub_users(id),
+    approved_at TIMESTAMPTZ,
+    rejection_reason TEXT,
+
+    -- Event creator
+    created_by_user_id INTEGER REFERENCES hub_users(id),
+    created_by_platform_user_id VARCHAR(100),
+    created_by_username VARCHAR(100),
+
+    -- Platform sync IDs
+    discord_event_id VARCHAR(100),
+    twitch_segment_id VARCHAR(100),
+    youtube_broadcast_id VARCHAR(100),
+    sync_status VARCHAR(20) DEFAULT 'not_synced',  -- 'not_synced', 'synced', 'sync_failed', 'conflict'
+    last_sync_at TIMESTAMPTZ,
+    sync_error TEXT,
+
+    -- Categorization
+    category_id INTEGER REFERENCES calendar_categories(id),
+    tags JSONB DEFAULT '[]'::jsonb,  -- Array of tags
+
+    -- Engagement metrics
+    view_count INTEGER DEFAULT 0,
+    attending_count INTEGER DEFAULT 0,
+    interested_count INTEGER DEFAULT 0,
+    declined_count INTEGER DEFAULT 0,
+
+    -- Event series (for themed recurring events by same host)
+    series_id INTEGER REFERENCES calendar_event_series(id),
+
+    -- Timestamps
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+
+    CONSTRAINT valid_event_dates CHECK (end_date IS NULL OR end_date > event_date),
+    CONSTRAINT valid_recurring CHECK (
+        (is_recurring = FALSE) OR
+        (is_recurring = TRUE AND recurring_pattern IS NOT NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_calendar_events_community ON calendar_events(community_id, event_date DESC);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_entity ON calendar_events(entity_id, platform);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_date ON calendar_events(event_date) WHERE status = 'approved';
+CREATE INDEX IF NOT EXISTS idx_calendar_events_status ON calendar_events(status);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_recurring ON calendar_events(is_recurring, parent_event_id);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_sync ON calendar_events(discord_event_id, twitch_segment_id, youtube_broadcast_id);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_series ON calendar_events(series_id);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_creator ON calendar_events(created_by_user_id);
+
+-- Full-text search on title and description
+CREATE INDEX IF NOT EXISTS idx_calendar_events_search ON calendar_events USING gin(to_tsvector('english', title || ' ' || COALESCE(description, '')));
+
+-- Trigger to update updated_at
+CREATE TRIGGER update_calendar_events_updated_at BEFORE UPDATE ON calendar_events
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- User RSVPs with status, waitlist, guest count
+CREATE TABLE IF NOT EXISTS calendar_rsvps (
+    id SERIAL PRIMARY KEY,
+    event_id INTEGER REFERENCES calendar_events(id) ON DELETE CASCADE,
+
+    -- User identification
+    hub_user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE,
+    platform VARCHAR(50) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    username VARCHAR(100) NOT NULL,
+
+    -- RSVP details
+    rsvp_status VARCHAR(20) NOT NULL,  -- 'yes', 'no', 'maybe'
+    guest_count INTEGER DEFAULT 0,  -- Additional guests (+1, +2, etc.)
+    is_waitlisted BOOLEAN DEFAULT FALSE,
+    waitlist_position INTEGER,
+
+    -- Reminder tracking
+    reminder_15min_sent BOOLEAN DEFAULT FALSE,
+    reminder_1hour_sent BOOLEAN DEFAULT FALSE,
+    reminder_24hour_sent BOOLEAN DEFAULT FALSE,
+    reminder_1week_sent BOOLEAN DEFAULT FALSE,
+
+    -- Notes from user
+    user_note TEXT,
+
+    -- Timestamps
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE(event_id, platform, platform_user_id),
+    CONSTRAINT valid_rsvp_status CHECK (rsvp_status IN ('yes', 'no', 'maybe')),
+    CONSTRAINT valid_guest_count CHECK (guest_count >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_calendar_rsvps_event ON calendar_rsvps(event_id, rsvp_status);
+CREATE INDEX IF NOT EXISTS idx_calendar_rsvps_user ON calendar_rsvps(hub_user_id);
+CREATE INDEX IF NOT EXISTS idx_calendar_rsvps_waitlist ON calendar_rsvps(event_id, is_waitlisted, waitlist_position) WHERE is_waitlisted = TRUE;
+CREATE INDEX IF NOT EXISTS idx_calendar_rsvps_reminders ON calendar_rsvps(event_id) WHERE rsvp_status = 'yes' AND (
+    reminder_15min_sent = FALSE OR
+    reminder_1hour_sent = FALSE OR
+    reminder_24hour_sent = FALSE OR
+    reminder_1week_sent = FALSE
+);
+
+-- Trigger to update updated_at
+CREATE TRIGGER update_calendar_rsvps_updated_at BEFORE UPDATE ON calendar_rsvps
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Event categories
+CREATE TABLE IF NOT EXISTS calendar_categories (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    color VARCHAR(7),  -- Hex color code #RRGGBB
+    icon VARCHAR(100),  -- Emoji or icon name
+    display_order INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(community_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_calendar_categories_community ON calendar_categories(community_id, display_order);
+
+-- Insert default categories
+INSERT INTO calendar_categories (community_id, name, description, color, icon, display_order)
+SELECT
+    c.id,
+    cat.name,
+    cat.description,
+    cat.color,
+    cat.icon,
+    cat.display_order
+FROM communities c
+CROSS JOIN (VALUES
+    ('Gaming', 'Gaming sessions and tournaments', '#9B59B6', '🎮', 1),
+    ('Social', 'Hangouts and community gatherings', '#3498DB', '👥', 2),
+    ('Educational', 'Workshops and learning sessions', '#2ECC71', '📚', 3),
+    ('Tournament', 'Competitive gaming events', '#E74C3C', '🏆', 4),
+    ('Watch Party', 'Group viewing events', '#F39C12', '📺', 5),
+    ('Community Meeting', 'Planning and discussion meetings', '#1ABC9C', '💬', 6),
+    ('Special Event', 'Unique one-time events', '#E67E22', '⭐', 7)
+) AS cat(name, description, color, icon, display_order)
+WHERE c.is_active = TRUE
+ON CONFLICT (community_id, name) DO NOTHING;
+
+-- Trigger to update updated_at
+CREATE TRIGGER update_calendar_categories_updated_at BEFORE UPDATE ON calendar_categories
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Community-specific reminder configuration
+CREATE TABLE IF NOT EXISTS calendar_reminder_config (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE UNIQUE,
+
+    -- Allowed reminder times
+    allow_15min BOOLEAN DEFAULT TRUE,
+    allow_1hour BOOLEAN DEFAULT TRUE,
+    allow_24hour BOOLEAN DEFAULT TRUE,
+    allow_1week BOOLEAN DEFAULT TRUE,
+
+    -- Default reminder times (auto-enabled for new events)
+    default_15min BOOLEAN DEFAULT FALSE,
+    default_1hour BOOLEAN DEFAULT TRUE,
+    default_24hour BOOLEAN DEFAULT TRUE,
+    default_1week BOOLEAN DEFAULT FALSE,
+
+    -- Notification channels
+    notify_chat BOOLEAN DEFAULT TRUE,  -- Send to platform chat
+    notify_dm BOOLEAN DEFAULT FALSE,  -- Send DM to attendees
+    notify_email BOOLEAN DEFAULT FALSE,  -- Send email (if available)
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_calendar_reminder_config_community ON calendar_reminder_config(community_id);
+
+-- Insert default reminder config for all communities
+INSERT INTO calendar_reminder_config (community_id)
+SELECT id FROM communities WHERE is_active = TRUE
+ON CONFLICT (community_id) DO NOTHING;
+
+-- Trigger to update updated_at
+CREATE TRIGGER update_calendar_reminder_config_updated_at BEFORE UPDATE ON calendar_reminder_config
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- RBAC permissions configuration per community
+CREATE TABLE IF NOT EXISTS calendar_permissions (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE UNIQUE,
+
+    -- Who can create events
+    create_permission VARCHAR(20) DEFAULT 'admin_mod',  -- 'admin_only', 'admin_mod', 'admin_mod_vip', 'all_members'
+
+    -- Edit permissions
+    edit_own_events BOOLEAN DEFAULT TRUE,  -- Can edit their own events
+    edit_all_events VARCHAR(20) DEFAULT 'admin_only',  -- 'admin_only', 'admin_mod', 'none'
+
+    -- Delete permissions
+    delete_own_events BOOLEAN DEFAULT TRUE,  -- Can delete their own events
+    delete_all_events VARCHAR(20) DEFAULT 'admin_only',  -- 'admin_only', 'admin_mod', 'none'
+
+    -- Approval workflow
+    require_approval BOOLEAN DEFAULT TRUE,
+    auto_approve_admins BOOLEAN DEFAULT TRUE,
+    auto_approve_mods BOOLEAN DEFAULT FALSE,  -- Mods ALSO need approval by default
+    auto_approve_vips BOOLEAN DEFAULT FALSE,
+    auto_approve_all BOOLEAN DEFAULT FALSE,
+
+    -- Custom approval rules (JSONB for flexibility)
+    approval_rules JSONB DEFAULT '{}'::jsonb,
+
+    -- Who can RSVP
+    rsvp_permission VARCHAR(20) DEFAULT 'all_members',  -- 'admin_mod', 'all_members', 'subscribers_only'
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+
+    CONSTRAINT valid_create_permission CHECK (create_permission IN ('admin_only', 'admin_mod', 'admin_mod_vip', 'all_members')),
+    CONSTRAINT valid_edit_all CHECK (edit_all_events IN ('admin_only', 'admin_mod', 'none')),
+    CONSTRAINT valid_delete_all CHECK (delete_all_events IN ('admin_only', 'admin_mod', 'none')),
+    CONSTRAINT valid_rsvp_permission CHECK (rsvp_permission IN ('admin_mod', 'all_members', 'subscribers_only'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_calendar_permissions_community ON calendar_permissions(community_id);
+
+-- Insert default permissions for all communities
+INSERT INTO calendar_permissions (community_id)
+SELECT id FROM communities WHERE is_active = TRUE
+ON CONFLICT (community_id) DO NOTHING;
+
+-- Trigger to update updated_at
+CREATE TRIGGER update_calendar_permissions_updated_at BEFORE UPDATE ON calendar_permissions
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Platform sync configuration and status
+CREATE TABLE IF NOT EXISTS calendar_sync_state (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    entity_id VARCHAR(255) NOT NULL,  -- discord:guild_id, slack:workspace_id, etc.
+    platform VARCHAR(50) NOT NULL,  -- 'discord', 'twitch', 'youtube'
+
+    -- Sync configuration
+    sync_enabled BOOLEAN DEFAULT FALSE,
+    sync_direction VARCHAR(20) DEFAULT 'both',  -- 'push_only', 'import_new_only', 'both'
+    auto_sync_new_events BOOLEAN DEFAULT TRUE,
+    auto_sync_updates BOOLEAN DEFAULT TRUE,
+    sync_rsvps BOOLEAN DEFAULT TRUE,  -- Sync RSVP data from platform
+
+    -- Platform credentials/tokens (encrypted in production)
+    platform_credentials JSONB DEFAULT '{}'::jsonb,
+
+    -- Sync status
+    last_sync_at TIMESTAMPTZ,
+    last_sync_status VARCHAR(20),  -- 'success', 'failed', 'partial'
+    last_sync_error TEXT,
+    events_synced_count INTEGER DEFAULT 0,
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE(community_id, entity_id, platform),
+    CONSTRAINT valid_sync_direction CHECK (sync_direction IN ('push_only', 'import_new_only', 'both'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_calendar_sync_state_community ON calendar_sync_state(community_id, platform);
+CREATE INDEX IF NOT EXISTS idx_calendar_sync_state_entity ON calendar_sync_state(entity_id, platform);
+CREATE INDEX IF NOT EXISTS idx_calendar_sync_state_enabled ON calendar_sync_state(sync_enabled) WHERE sync_enabled = TRUE;
+
+-- Trigger to update updated_at
+CREATE TRIGGER update_calendar_sync_state_updated_at BEFORE UPDATE ON calendar_sync_state
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Activity audit log for all event actions (AAA logging)
+CREATE TABLE IF NOT EXISTS calendar_activity_log (
+    id SERIAL PRIMARY KEY,
+    event_id INTEGER REFERENCES calendar_events(id) ON DELETE CASCADE,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+
+    -- Activity details
+    activity_type VARCHAR(50) NOT NULL,  -- 'created', 'updated', 'deleted', 'approved', 'rejected', 'rsvp', 'cancelled', 'synced'
+
+    -- User who performed action
+    user_id INTEGER REFERENCES hub_users(id),
+    username VARCHAR(100),
+    platform VARCHAR(50),
+    platform_user_id VARCHAR(100),
+
+    -- Action details
+    details JSONB DEFAULT '{}'::jsonb,  -- Flexible details storage
+    changes JSONB DEFAULT '{}'::jsonb,  -- Before/after values for updates
+
+    -- IP and user agent (for security audit)
+    ip_address INET,
+    user_agent TEXT,
+
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_calendar_activity_log_event ON calendar_activity_log(event_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_calendar_activity_log_community ON calendar_activity_log(community_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_calendar_activity_log_user ON calendar_activity_log(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_calendar_activity_log_type ON calendar_activity_log(activity_type, created_at DESC);
+
+-- Event series (for recurring themed events by same host)
+CREATE TABLE IF NOT EXISTS calendar_event_series (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    series_name VARCHAR(255) NOT NULL,
+    description TEXT,
+
+    -- Host information
+    host_user_id INTEGER REFERENCES hub_users(id),
+    host_platform_user_id VARCHAR(100),
+    host_username VARCHAR(100),
+
+    -- Series metadata
+    category_id INTEGER REFERENCES calendar_categories(id),
+    tags JSONB DEFAULT '[]'::jsonb,
+    cover_image_url TEXT,
+
+    -- Stats
+    total_events INTEGER DEFAULT 0,
+    total_attendees INTEGER DEFAULT 0,
+    average_rating DECIMAL(3,2),
+
+    -- Series status
+    is_active BOOLEAN DEFAULT TRUE,
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE(community_id, series_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_calendar_event_series_community ON calendar_event_series(community_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_calendar_event_series_host ON calendar_event_series(host_user_id);
+
+-- Trigger to update updated_at
+CREATE TRIGGER update_calendar_event_series_updated_at BEFORE UPDATE ON calendar_event_series
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
 -- KONG API GATEWAY DATABASE SETUP
 -- ============================================================
 -- Create separate database for Kong Gateway
@@ -1232,6 +1627,454 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO kong;
 -- Switch back to waddlebot database (default)
 \c waddlebot
 
+-- ============================================================================
+-- ANALYTICS CORE MODULE TABLES
+-- ============================================================================
+
+-- Analytics configuration per community
+CREATE TABLE IF NOT EXISTS analytics_config (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE UNIQUE,
+    is_premium BOOLEAN DEFAULT FALSE,
+
+    -- Feature toggles
+    basic_stats_enabled BOOLEAN DEFAULT TRUE,
+    community_health_enabled BOOLEAN DEFAULT FALSE,  -- Premium
+    bad_actor_detection_enabled BOOLEAN DEFAULT FALSE,  -- Premium
+    user_journey_enabled BOOLEAN DEFAULT FALSE,  -- Premium
+
+    -- Data retention (days)
+    raw_data_retention_days INTEGER DEFAULT 30,
+    aggregated_data_retention_days INTEGER DEFAULT 365,
+
+    -- Polling interval for real-time updates (seconds)
+    polling_interval_seconds INTEGER DEFAULT 30,
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_config_community ON analytics_config(community_id);
+
+COMMENT ON TABLE analytics_config IS 'Per-community analytics configuration';
+COMMENT ON COLUMN analytics_config.is_premium IS 'Premium tier enables advanced analytics features';
+
+-- Time-series metrics storage (configurable periods)
+CREATE TABLE IF NOT EXISTS analytics_metrics_timeseries (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    metric_type VARCHAR(50) NOT NULL,  -- 'messages', 'viewers', 'engagement', 'growth'
+    metric_subtype VARCHAR(50),  -- Platform or subcategory
+    timestamp_bucket TIMESTAMPTZ NOT NULL,  -- Rounded to interval
+    bucket_size VARCHAR(20) NOT NULL,  -- '1h', '1d', '1w', '1m'
+    value NUMERIC(15,4) NOT NULL,
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(community_id, metric_type, metric_subtype, timestamp_bucket, bucket_size)
+);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_timeseries_lookup ON analytics_metrics_timeseries(community_id, metric_type, timestamp_bucket DESC);
+CREATE INDEX IF NOT EXISTS idx_analytics_timeseries_bucket ON analytics_metrics_timeseries(community_id, bucket_size, timestamp_bucket DESC);
+
+COMMENT ON TABLE analytics_metrics_timeseries IS 'Time-series metrics with configurable bucket sizes';
+
+-- Activity heatmaps (hourly activity by day of week)
+CREATE TABLE IF NOT EXISTS analytics_activity_heatmaps (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    day_of_week INTEGER NOT NULL CHECK (day_of_week >= 0 AND day_of_week <= 6),  -- 0=Sunday
+    hour_of_day INTEGER NOT NULL CHECK (hour_of_day >= 0 AND hour_of_day <= 23),
+    metric_type VARCHAR(50) NOT NULL,  -- 'messages', 'viewers', 'engagement'
+    avg_value NUMERIC(15,4) DEFAULT 0,
+    sample_count INTEGER DEFAULT 0,
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(community_id, day_of_week, hour_of_day, metric_type, period_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_heatmaps_community ON analytics_activity_heatmaps(community_id, metric_type);
+
+COMMENT ON TABLE analytics_activity_heatmaps IS 'Activity heatmaps showing hourly patterns by day of week';
+
+-- Community health snapshots (Premium)
+CREATE TABLE IF NOT EXISTS analytics_community_health (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    snapshot_date DATE NOT NULL,
+
+    -- Member metrics
+    total_members INTEGER DEFAULT 0,
+    active_members_7d INTEGER DEFAULT 0,
+    active_members_30d INTEGER DEFAULT 0,
+    new_members_7d INTEGER DEFAULT 0,
+    churned_members_7d INTEGER DEFAULT 0,
+
+    -- Engagement metrics
+    engagement_score DECIMAL(5,2),  -- 0-100
+    avg_messages_per_active_user DECIMAL(10,2),
+    avg_watch_time_per_active_user INTEGER,  -- seconds
+
+    -- Growth metrics
+    member_growth_rate DECIMAL(8,4),  -- Percentage
+    engagement_trend DECIMAL(8,4),  -- Percentage change
+
+    -- Health indicators
+    health_grade VARCHAR(2),  -- A+, A, B+, B, C+, C, D, F
+    health_factors JSONB DEFAULT '{}',  -- Breakdown of factors
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(community_id, snapshot_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_health_community ON analytics_community_health(community_id, snapshot_date DESC);
+
+COMMENT ON TABLE analytics_community_health IS 'Premium: Daily community health snapshots with scoring';
+
+-- User journey/retention cohorts (Premium)
+CREATE TABLE IF NOT EXISTS analytics_retention_cohorts (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    cohort_date DATE NOT NULL,  -- Week/month user joined
+    cohort_type VARCHAR(20) NOT NULL,  -- 'weekly', 'monthly'
+    days_since_join INTEGER NOT NULL,
+    retained_count INTEGER DEFAULT 0,
+    original_count INTEGER DEFAULT 0,
+    retention_rate DECIMAL(5,4),  -- 0-1
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(community_id, cohort_date, cohort_type, days_since_join)
+);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_cohorts_community ON analytics_retention_cohorts(community_id, cohort_type, cohort_date DESC);
+
+COMMENT ON TABLE analytics_retention_cohorts IS 'Premium: Retention cohort analysis by join date';
+
+-- Engagement funnels (Premium)
+CREATE TABLE IF NOT EXISTS analytics_engagement_funnels (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    funnel_name VARCHAR(100) NOT NULL,  -- 'new_user_activation', 'subscriber_journey'
+    step_number INTEGER NOT NULL,
+    step_name VARCHAR(100) NOT NULL,
+    step_description TEXT,
+    users_at_step INTEGER DEFAULT 0,
+    conversion_rate DECIMAL(5,4),  -- From previous step
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(community_id, funnel_name, step_number, period_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_funnels_community ON analytics_engagement_funnels(community_id, funnel_name);
+
+COMMENT ON TABLE analytics_engagement_funnels IS 'Premium: Engagement funnel tracking';
+
+-- Bad actor detection results (Premium)
+CREATE TABLE IF NOT EXISTS analytics_bad_actor_alerts (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    alert_type VARCHAR(50) NOT NULL,  -- 'spam_pattern', 'suspicious_behavior', 'coordinated_attack'
+    severity VARCHAR(20) NOT NULL,  -- 'low', 'medium', 'high', 'critical'
+
+    -- User information
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    platform_username VARCHAR(100),
+    hub_user_id INTEGER REFERENCES hub_users(id),
+
+    -- Alert details
+    confidence_score DECIMAL(5,2) NOT NULL,  -- 0-100
+    detection_signals JSONB NOT NULL,  -- Detailed signals
+    sample_evidence JSONB,  -- Sample messages/actions
+
+    -- Status tracking
+    status VARCHAR(20) DEFAULT 'pending',  -- 'pending', 'reviewed', 'actioned', 'dismissed'
+    reviewed_by INTEGER REFERENCES hub_users(id),
+    reviewed_at TIMESTAMPTZ,
+    action_taken VARCHAR(50),
+    review_notes TEXT,
+
+    detected_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_bad_actor_community ON analytics_bad_actor_alerts(community_id, status, detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analytics_bad_actor_user ON analytics_bad_actor_alerts(platform, platform_user_id);
+
+COMMENT ON TABLE analytics_bad_actor_alerts IS 'Premium: Bad actor detection alerts with behavioral analysis';
+
+-- ============================================================================
+-- SECURITY CORE MODULE TABLES
+-- ============================================================================
+
+-- Security configuration per community
+CREATE TABLE IF NOT EXISTS security_config (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE UNIQUE,
+
+    -- Spam detection settings
+    spam_detection_enabled BOOLEAN DEFAULT TRUE,
+    spam_message_threshold INTEGER DEFAULT 5,  -- Messages per interval
+    spam_interval_seconds INTEGER DEFAULT 10,
+    spam_duplicate_threshold INTEGER DEFAULT 3,  -- Duplicate messages
+    spam_action VARCHAR(20) DEFAULT 'warn',  -- 'warn', 'timeout', 'mute', 'ban'
+
+    -- Rate limiting
+    rate_limit_enabled BOOLEAN DEFAULT TRUE,
+    rate_limit_messages_per_minute INTEGER DEFAULT 30,
+    rate_limit_commands_per_minute INTEGER DEFAULT 10,
+
+    -- Content filtering
+    content_filter_enabled BOOLEAN DEFAULT TRUE,
+    blocked_words TEXT[] DEFAULT '{}',
+    blocked_patterns TEXT[] DEFAULT '{}',  -- Regex patterns
+    filter_action VARCHAR(20) DEFAULT 'delete',  -- 'delete', 'warn', 'timeout'
+
+    -- Warning system
+    warning_enabled BOOLEAN DEFAULT TRUE,
+    warning_threshold_timeout INTEGER DEFAULT 3,  -- Warnings before timeout
+    warning_threshold_ban INTEGER DEFAULT 5,
+    warning_decay_days INTEGER DEFAULT 30,  -- Days before warning expires
+
+    -- Auto-timeout settings
+    auto_timeout_first_minutes INTEGER DEFAULT 5,
+    auto_timeout_second_minutes INTEGER DEFAULT 60,
+    auto_timeout_third_minutes INTEGER DEFAULT 1440,  -- 24 hours
+
+    -- Integration with reputation
+    reputation_impact_enabled BOOLEAN DEFAULT TRUE,
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_config_community ON security_config(community_id);
+
+COMMENT ON TABLE security_config IS 'Per-community security and moderation configuration';
+
+-- User warnings
+CREATE TABLE IF NOT EXISTS security_warnings (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id),
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    platform_username VARCHAR(100),
+
+    warning_type VARCHAR(50) NOT NULL,  -- 'spam', 'content_filter', 'manual', 'rate_limit'
+    warning_reason TEXT,
+    auto_generated BOOLEAN DEFAULT TRUE,
+    issued_by INTEGER REFERENCES hub_users(id),  -- NULL if auto
+
+    -- Context
+    trigger_message TEXT,
+    trigger_metadata JSONB DEFAULT '{}',
+
+    -- Status
+    is_active BOOLEAN DEFAULT TRUE,
+    expires_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ,
+    revoked_by INTEGER REFERENCES hub_users(id),
+    revoke_reason TEXT,
+
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_warnings_community ON security_warnings(community_id, is_active, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_warnings_user ON security_warnings(platform, platform_user_id, is_active);
+
+COMMENT ON TABLE security_warnings IS 'User warning tracking with expiration';
+
+-- User rate limit state (Redis primary, DB fallback)
+CREATE TABLE IF NOT EXISTS security_rate_limit_state (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    rate_type VARCHAR(20) NOT NULL,  -- 'message', 'command'
+    window_start TIMESTAMPTZ NOT NULL,
+    count INTEGER DEFAULT 1,
+    UNIQUE(community_id, platform, platform_user_id, rate_type, window_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_rate_limit_lookup ON security_rate_limit_state(community_id, platform, platform_user_id, rate_type);
+
+COMMENT ON TABLE security_rate_limit_state IS 'Rate limit tracking (Redis primary, DB fallback)';
+
+-- Content filter matches (audit log)
+CREATE TABLE IF NOT EXISTS security_filter_matches (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    platform_username VARCHAR(100),
+
+    filter_type VARCHAR(30) NOT NULL,  -- 'blocked_word', 'regex_pattern', 'spam_duplicate'
+    matched_pattern TEXT,
+    original_message TEXT,
+    action_taken VARCHAR(20) NOT NULL,
+
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_filter_matches_community ON security_filter_matches(community_id, created_at DESC);
+
+COMMENT ON TABLE security_filter_matches IS 'Audit log of content filter matches';
+
+-- Cross-platform moderation coordination
+CREATE TABLE IF NOT EXISTS security_moderation_actions (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+
+    -- Target user
+    hub_user_id INTEGER REFERENCES hub_users(id),
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+    platform_username VARCHAR(100),
+
+    -- Action details
+    action_type VARCHAR(30) NOT NULL,  -- 'warn', 'timeout', 'kick', 'ban', 'unban'
+    action_reason TEXT,
+    duration_seconds INTEGER,  -- For timeouts
+
+    -- Source
+    source_platform VARCHAR(20),  -- Platform where action originated
+    moderator_id INTEGER REFERENCES hub_users(id),
+    auto_generated BOOLEAN DEFAULT FALSE,
+
+    -- Cross-platform sync
+    sync_to_platforms TEXT[] DEFAULT '{}',  -- Platforms to sync action to
+    sync_status JSONB DEFAULT '{}',  -- Per-platform sync status
+
+    -- Reputation impact
+    reputation_change DECIMAL(6,2),
+
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_mod_actions_community ON security_moderation_actions(community_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_mod_actions_user ON security_moderation_actions(platform, platform_user_id);
+
+COMMENT ON TABLE security_moderation_actions IS 'Cross-platform moderation action coordination';
+
+-- ============================================================================
+-- AI RESEARCHER ENHANCEMENT TABLES
+-- ============================================================================
+
+-- Enhanced community insights (for AI-generated community health reports)
+CREATE TABLE IF NOT EXISTS ai_community_insights (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    insight_period VARCHAR(20) NOT NULL,  -- 'weekly', 'monthly'
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+
+    -- Trending topics
+    trending_topics JSONB DEFAULT '[]',  -- [{topic, mentions, sentiment, trend}]
+
+    -- Sentiment analysis
+    overall_sentiment DECIMAL(4,3),  -- -1 to 1
+    sentiment_breakdown JSONB DEFAULT '{}',  -- {positive, negative, neutral percentages}
+    sentiment_trend DECIMAL(4,3),  -- Change from previous period
+
+    -- Community behavior
+    peak_activity_hours JSONB DEFAULT '[]',
+    most_active_users JSONB DEFAULT '[]',
+    emerging_topics JSONB DEFAULT '[]',
+
+    -- AI-generated narrative
+    summary_text TEXT,
+    summary_html TEXT,
+    key_highlights JSONB DEFAULT '[]',
+    recommendations JSONB DEFAULT '[]',
+
+    -- Anomalies detected
+    anomalies JSONB DEFAULT '[]',  -- Unusual patterns
+
+    -- Generation metadata
+    ai_model VARCHAR(100),
+    tokens_used INTEGER DEFAULT 0,
+    generation_time_ms INTEGER DEFAULT 0,
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(community_id, insight_period, period_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_community_insights ON ai_community_insights(community_id, insight_period, period_start DESC);
+
+COMMENT ON TABLE ai_community_insights IS 'AI-generated community insights and health reports';
+
+-- User behavior profiles (for anomaly detection)
+CREATE TABLE IF NOT EXISTS ai_user_behavior_profiles (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+    hub_user_id INTEGER REFERENCES hub_users(id),
+    platform VARCHAR(20) NOT NULL,
+    platform_user_id VARCHAR(100) NOT NULL,
+
+    -- Activity patterns
+    avg_messages_per_day DECIMAL(10,2),
+    avg_watch_time_per_session INTEGER,  -- seconds
+    typical_active_hours JSONB DEFAULT '[]',
+    typical_active_days JSONB DEFAULT '[]',
+
+    -- Content patterns
+    avg_message_length DECIMAL(10,2),
+    emote_usage_rate DECIMAL(5,4),
+    command_usage_rate DECIMAL(5,4),
+    topic_interests JSONB DEFAULT '[]',
+
+    -- Social patterns
+    interaction_style VARCHAR(50),  -- 'lurker', 'casual', 'active', 'leader'
+    response_rate DECIMAL(5,4),
+    avg_response_time_seconds INTEGER,
+
+    -- Baseline for anomaly detection
+    baseline_computed_at TIMESTAMPTZ,
+    baseline_data JSONB DEFAULT '{}',
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(community_id, platform, platform_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_user_profiles_community ON ai_user_behavior_profiles(community_id);
+
+COMMENT ON TABLE ai_user_behavior_profiles IS 'User behavior profiles for anomaly detection';
+
+-- Anomaly detection results
+CREATE TABLE IF NOT EXISTS ai_anomaly_detections (
+    id SERIAL PRIMARY KEY,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+
+    anomaly_type VARCHAR(50) NOT NULL,  -- 'activity_spike', 'sentiment_shift', 'unusual_user', 'topic_surge'
+    severity VARCHAR(20) NOT NULL,  -- 'info', 'warning', 'alert', 'critical'
+
+    -- Anomaly details
+    description TEXT NOT NULL,
+    affected_metrics JSONB DEFAULT '[]',
+    baseline_values JSONB DEFAULT '{}',
+    observed_values JSONB DEFAULT '{}',
+    deviation_score DECIMAL(8,4),
+
+    -- Related entities
+    related_users JSONB DEFAULT '[]',
+    related_topics JSONB DEFAULT '[]',
+
+    -- Status
+    status VARCHAR(20) DEFAULT 'new',  -- 'new', 'acknowledged', 'resolved', 'false_positive'
+    acknowledged_by INTEGER REFERENCES hub_users(id),
+    acknowledged_at TIMESTAMPTZ,
+    resolution_notes TEXT,
+
+    detected_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_anomalies_community ON ai_anomaly_detections(community_id, status, detected_at DESC);
+
+COMMENT ON TABLE ai_anomaly_detections IS 'Anomaly detection results with severity tracking';
+
 -- Development notice
 DO $$
 BEGIN
@@ -1244,5 +2087,9 @@ BEGIN
     RAISE NOTICE 'AI Researcher module tables created with pgvector support';
     RAISE NOTICE 'Overlay module tables created';
     RAISE NOTICE 'Loyalty module tables created with gear system and minigames';
+    RAISE NOTICE 'Calendar module tables created with RSVP, recurring events, and platform sync';
+    RAISE NOTICE 'Analytics module tables created (basic + premium features)';
+    RAISE NOTICE 'Security module tables created (spam, warnings, moderation)';
+    RAISE NOTICE 'AI enhancement tables created (insights, anomalies, behavior profiles)';
 END
 $$;

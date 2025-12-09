@@ -816,6 +816,61 @@ services:
       retries: 3
     restart: unless-stopped
 
+  analytics-core:
+    build:
+      context: .
+      dockerfile: core/analytics_core_module/Dockerfile
+    container_name: waddlebot-analytics
+    environment:
+      MODULE_NAME: analytics-core
+      MODULE_PORT: 8040
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8040/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  security-core:
+    build:
+      context: .
+      dockerfile: core/security_core_module/Dockerfile
+    container_name: waddlebot-security
+    environment:
+      MODULE_NAME: security-core
+      MODULE_PORT: 8041
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD:-waddlebot_secret}@postgres:5432/waddlebot
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      REPUTATION_API_URL: http://reputation:8021
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8041/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
   # =============================================================================
   # PUSHING ACTION MODULES (Platform Integration)
   # =============================================================================

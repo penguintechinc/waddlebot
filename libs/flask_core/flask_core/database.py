@@ -229,6 +229,70 @@ class AsyncDAL:
 
         return await loop.run_in_executor(self.executor, _execute)
 
+    async def execute(self, sql: str, params: Optional[List] = None):
+        """
+        Execute raw SQL with parameter binding using adapter directly.
+
+        Converts $N placeholders to %s for psycopg2 compatibility.
+
+        Args:
+            sql: SQL query string with $1, $2, $3... placeholders
+            params: Optional query parameters as list
+
+        Returns:
+            Query results as list of Row objects (dict-like)
+        """
+        loop = asyncio.get_event_loop()
+
+        def _execute():
+            try:
+                # Convert $N placeholders to %s for psycopg2
+                if params:
+                    converted_sql = sql
+                    for i in range(len(params), 0, -1):
+                        converted_sql = converted_sql.replace(f'${i}', '%s')
+
+                    # Convert special types for psycopg2
+                    from uuid import UUID
+                    import json as json_module
+                    converted_params = []
+                    for param in params:
+                        if isinstance(param, UUID):
+                            converted_params.append(str(param))
+                        elif isinstance(param, (dict, list)):
+                            # Convert dicts/lists to JSON strings for JSONB columns
+                            converted_params.append(json_module.dumps(param))
+                        else:
+                            converted_params.append(param)
+                    params_tuple = tuple(converted_params)
+                else:
+                    converted_sql = sql
+                    params_tuple = None
+
+                # Execute using adapter directly
+                self.dal._adapter.execute(converted_sql, params_tuple)
+
+                # Fetch results
+                try:
+                    result = self.dal._adapter.cursor.fetchall()
+                except Exception:
+                    # No results to fetch (e.g., INSERT/UPDATE without RETURNING)
+                    result = []
+
+                # Convert to list of dicts for consistency
+                if result and self.dal._adapter.cursor.description:
+                    columns = [desc[0] for desc in self.dal._adapter.cursor.description]
+                    return [dict(zip(columns, row)) for row in result]
+                else:
+                    return []
+
+            except Exception as e:
+                logger.error(f"Execute error: {e}")
+                self.dal.rollback()
+                raise
+
+        return await loop.run_in_executor(self.executor, _execute)
+
     @asynccontextmanager
     async def transaction_async(self):
         """

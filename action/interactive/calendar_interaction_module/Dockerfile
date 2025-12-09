@@ -11,8 +11,8 @@ COPY libs/flask_core /app/libs/flask_core
 RUN cd /app/libs/flask_core && pip install --no-cache-dir .
 
 # Copy module files
-COPY calendar_interaction_module_flask/requirements.txt /app/
-COPY calendar_interaction_module_flask /app/
+COPY action/interactive/calendar_interaction_module/requirements.txt /app/
+COPY action/interactive/calendar_interaction_module /app/
 
 # Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt

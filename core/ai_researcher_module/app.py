@@ -31,6 +31,10 @@ from services.research_service import ResearchService  # noqa: E402
 from services.summary_service import SummaryService  # noqa: E402
 from services.bot_detection import BotDetectionService  # noqa: E402
 from services.mem0_service import Mem0Service  # noqa: E402
+from services.insights_service import InsightsService  # noqa: E402
+from services.anomaly_detector import AnomalyDetector  # noqa: E402
+from services.behavior_profiler import BehaviorProfiler  # noqa: E402
+from services.sentiment_analyzer import SentimentAnalyzer  # noqa: E402
 
 app = Quart(__name__)
 app = cors(app, allow_origin="*")
@@ -761,6 +765,344 @@ async def update_researcher_config(community_id: int):
     except Exception as e:
         logger.error(f"Failed to update researcher config: {e}")
         return error_response(f"Failed to update config: {str(e)}", 500)
+
+
+# =============================================================================
+# Community Insights Endpoints
+# =============================================================================
+
+@researcher_bp.route('/<int:community_id>/insights', methods=['GET'])
+@async_endpoint
+async def get_insights(community_id: int):
+    """
+    Get previously generated insights for a community.
+
+    Query params:
+    - limit: Number of insights to return (default: 20)
+    - type: Filter by insight type
+    - days: How many days back to look (default: 90)
+    """
+    limit = request.args.get('limit', 20, type=int)
+    insight_type = request.args.get('type', None)
+    days = request.args.get('days', 90, type=int)
+
+    try:
+        period_start = datetime.utcnow() - timedelta(days=days)
+
+        if insight_type:
+            query = """
+                SELECT id, insight_type, content, metadata,
+                       period_start, period_end, created_at
+                FROM ai_community_insights
+                WHERE community_id = $1
+                  AND insight_type = $2
+                  AND created_at >= $3
+                ORDER BY created_at DESC
+                LIMIT $4
+            """
+            rows = await dal.execute(query, [community_id, insight_type, period_start, limit])
+        else:
+            query = """
+                SELECT id, insight_type, content, metadata,
+                       period_start, period_end, created_at
+                FROM ai_community_insights
+                WHERE community_id = $1
+                  AND created_at >= $2
+                ORDER BY created_at DESC
+                LIMIT $3
+            """
+            rows = await dal.execute(query, [community_id, period_start, limit])
+
+        insights = []
+        for row in (rows or []):
+            insights.append({
+                'id': row['id'],
+                'type': row['insight_type'],
+                'content': row['content'],
+                'metadata': row['metadata'] or {},
+                'period_start': str(row['period_start']) if row['period_start'] else None,
+                'period_end': str(row['period_end']) if row['period_end'] else None,
+                'created_at': str(row['created_at'])
+            })
+
+        return success_response({
+            "success": True,
+            "community_id": community_id,
+            "insights": insights,
+            "count": len(insights)
+        })
+    except Exception as e:
+        logger.error(f"Failed to get insights: {e}")
+        return error_response(f"Failed to retrieve insights: {str(e)}", 500)
+
+
+@researcher_bp.route('/<int:community_id>/insights/generate', methods=['POST'])
+@async_endpoint
+async def generate_insights(community_id: int):
+    """
+    Generate new AI-powered community insights.
+
+    Expected payload:
+    {
+        "timeframe": str (optional, default: '7d'),
+        "insight_types": list (optional, default: ['activity', 'trending', 'sentiment'])
+    }
+    """
+    data = await request.get_json()
+    timeframe = data.get('timeframe', '7d')
+    insight_types = data.get('insight_types', ['activity', 'trending', 'sentiment'])
+
+    try:
+        # Create insights service
+        insights_service = InsightsService(
+            ai_provider=ai_provider,
+            dal=dal,
+            mem0_service=_get_mem0_service(community_id)
+        )
+
+        result = await insights_service.generate_community_insights(
+            community_id=community_id,
+            timeframe=timeframe,
+            insight_types=insight_types
+        )
+
+        if not result.success:
+            return error_response(result.error or "Failed to generate insights", 400)
+
+        return success_response({
+            "success": True,
+            "insight_id": result.insight_id,
+            "content": result.content,
+            "insight_type": result.insight_type,
+            "tokens_used": result.tokens_used,
+            "processing_time_ms": result.processing_time_ms
+        })
+    except Exception as e:
+        logger.error(f"Insight generation error: {e}")
+        return error_response(f"Failed to generate insights: {str(e)}", 500)
+
+
+# =============================================================================
+# Anomaly Detection Endpoints
+# =============================================================================
+
+@researcher_bp.route('/<int:community_id>/anomalies', methods=['GET'])
+@async_endpoint
+async def get_anomalies(community_id: int):
+    """
+    Get detected anomalies for a community.
+
+    Query params:
+    - hours: How many hours back to look (default: 24)
+    - acknowledged: Filter by acknowledged status (default: false)
+    - limit: Number of results (default: 50)
+    """
+    hours = request.args.get('hours', 24, type=int)
+    acknowledged = request.args.get('acknowledged', 'false').lower() == 'true'
+    limit = request.args.get('limit', 50, type=int)
+
+    try:
+        anomaly_detector = AnomalyDetector(dal)
+        anomalies = await anomaly_detector.get_recent_anomalies(
+            community_id=community_id,
+            hours=hours,
+            acknowledged=acknowledged
+        )
+
+        return success_response({
+            "success": True,
+            "community_id": community_id,
+            "anomalies": anomalies[:limit],
+            "count": len(anomalies[:limit])
+        })
+    except Exception as e:
+        logger.error(f"Failed to get anomalies: {e}")
+        return error_response(f"Failed to retrieve anomalies: {str(e)}", 500)
+
+
+@researcher_bp.route('/<int:community_id>/anomalies/<int:anomaly_id>/acknowledge', methods=['POST'])
+@async_endpoint
+async def acknowledge_anomaly(community_id: int, anomaly_id: int):
+    """
+    Mark an anomaly as acknowledged.
+
+    Expected payload:
+    {
+        "admin_id": int,
+        "notes": str (optional)
+    }
+    """
+    data = await request.get_json()
+    admin_id = data.get('admin_id')
+    notes = data.get('notes')
+
+    if not admin_id:
+        return error_response("admin_id is required", 400)
+
+    try:
+        anomaly_detector = AnomalyDetector(dal)
+        success = await anomaly_detector.acknowledge_anomaly(
+            community_id=community_id,
+            anomaly_id=anomaly_id,
+            admin_id=admin_id,
+            notes=notes
+        )
+
+        if not success:
+            return error_response("Failed to acknowledge anomaly", 400)
+
+        logger.audit(
+            action="anomaly_acknowledged",
+            user=str(admin_id),
+            community=str(community_id),
+            result="SUCCESS"
+        )
+
+        return success_response({
+            "success": True,
+            "message": "Anomaly acknowledged"
+        })
+    except Exception as e:
+        logger.error(f"Anomaly acknowledgment error: {e}")
+        return error_response(f"Failed to acknowledge anomaly: {str(e)}", 500)
+
+
+# =============================================================================
+# Sentiment Analysis Endpoints
+# =============================================================================
+
+@researcher_bp.route('/<int:community_id>/sentiment', methods=['GET'])
+@async_endpoint
+async def get_sentiment(community_id: int):
+    """
+    Get sentiment analysis for a community.
+
+    Query params:
+    - timeframe: Analysis period ('1d', '7d', '30d', '90d', default: '7d')
+    """
+    timeframe = request.args.get('timeframe', '7d')
+
+    try:
+        sentiment_analyzer = SentimentAnalyzer(dal, ai_provider)
+        result = await sentiment_analyzer.analyze_sentiment(
+            community_id=community_id,
+            timeframe=timeframe
+        )
+
+        if not result.success:
+            return error_response(result.error or "Failed to analyze sentiment", 400)
+
+        return success_response({
+            "success": True,
+            "community_id": community_id,
+            "overall_sentiment": result.overall_sentiment,
+            "sentiment_score": result.sentiment_score,
+            "message_count": result.message_count,
+            "sentiment_distribution": result.sentiment_distribution,
+            "trends": result.trends,
+            "processing_time_ms": result.processing_time_ms
+        })
+    except Exception as e:
+        logger.error(f"Sentiment analysis error: {e}")
+        return error_response(f"Failed to analyze sentiment: {str(e)}", 500)
+
+
+# =============================================================================
+# User Behavior Profile Endpoints
+# =============================================================================
+
+@researcher_bp.route('/<int:community_id>/user/<platform>/<user_id>/profile', methods=['GET'])
+@async_endpoint
+async def get_user_profile(community_id: int, platform: str, user_id: str):
+    """
+    Get behavior profile for a specific user.
+
+    URL params:
+    - community_id: Community identifier
+    - platform: Platform name (twitch, discord, etc.)
+    - user_id: User ID on the platform
+
+    Query params:
+    - days: Historical data period (default: 90)
+    """
+    days = request.args.get('days', 90, type=int)
+
+    try:
+        behavior_profiler = BehaviorProfiler(dal)
+
+        # Try to get stored profile first
+        stored_profile = await behavior_profiler.get_user_profile(
+            community_id=community_id,
+            platform=platform,
+            platform_user_id=user_id
+        )
+
+        if stored_profile:
+            return success_response({
+                "success": True,
+                "profile_id": stored_profile['id'],
+                "data": stored_profile['data'],
+                "created_at": stored_profile['created_at'],
+                "updated_at": stored_profile['updated_at']
+            })
+
+        # If not found, generate new profile
+        profile = await behavior_profiler.profile_user_behavior(
+            community_id=community_id,
+            platform=platform,
+            platform_user_id=user_id,
+            days=days
+        )
+
+        if not profile.success:
+            return error_response(profile.error or "Failed to profile user", 400)
+
+        return success_response({
+            "success": True,
+            "profile_id": profile.profile_id,
+            "user_id": profile.user_id,
+            "activity_level": profile.activity_level,
+            "communication_style": profile.communication_style,
+            "preferred_hours": profile.preferred_hours,
+            "average_message_length": profile.average_message_length,
+            "total_messages": profile.total_messages,
+            "community_role": profile.community_role,
+            "processing_time_ms": profile.processing_time_ms
+        })
+    except Exception as e:
+        logger.error(f"User profile error: {e}")
+        return error_response(f"Failed to retrieve user profile: {str(e)}", 500)
+
+
+@researcher_bp.route('/<int:community_id>/users/profiles', methods=['GET'])
+@async_endpoint
+async def get_community_profiles(community_id: int):
+    """
+    Get behavior profiles for all users in a community.
+
+    Query params:
+    - role: Filter by community role (optional)
+    - limit: Number of profiles (default: 100)
+    """
+    role = request.args.get('role', None)
+    limit = request.args.get('limit', 100, type=int)
+
+    try:
+        behavior_profiler = BehaviorProfiler(dal)
+        profiles = await behavior_profiler.get_community_profiles(
+            community_id=community_id,
+            role=role
+        )
+
+        return success_response({
+            "success": True,
+            "community_id": community_id,
+            "profiles": profiles[:limit],
+            "count": len(profiles[:limit])
+        })
+    except Exception as e:
+        logger.error(f"Community profiles error: {e}")
+        return error_response(f"Failed to retrieve profiles: {str(e)}", 500)
 
 
 @admin_bp.route('/<int:community_id>/bot-detection')
