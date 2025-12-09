@@ -1,0 +1,27 @@
+name: Build labels-core
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'core/labels_core_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-labels-core.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'core/labels_core_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build labels-core Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'core/labels_core_module'
+      module_name: 'labels-core'
+      module_port: '8051'
+    secrets: inherit

@@ -1,0 +1,27 @@
+name: Build twitch
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'trigger/receiver/twitch_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-twitch.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'trigger/receiver/twitch_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build twitch Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'trigger/receiver/twitch_module'
+      module_name: 'twitch'
+      module_port: '8010'
+    secrets: inherit

@@ -1,0 +1,27 @@
+name: Build memories-interaction
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'action/interactive/memories_interaction_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-memories-interaction.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'action/interactive/memories_interaction_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build memories-interaction Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'action/interactive/memories_interaction_module'
+      module_name: 'memories-interaction'
+      module_port: '8014'
+    secrets: inherit

@@ -99,6 +99,15 @@ jobs:
             --target ${{ github.sha }}
 
           echo "✅ Created pre-release v$VERSION"
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Release Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** v$VERSION" >> $GITHUB_STEP_SUMMARY
+          echo "**Type:** Pre-release" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Container builds will be triggered automatically with tags:" >> $GITHUB_STEP_SUMMARY
+          echo "- \`v$VERSION\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`latest\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Skip release (version is default or release exists)
         if: steps.check_version.outputs.should_release != 'true' || steps.check_release.outputs.exists == 'true'

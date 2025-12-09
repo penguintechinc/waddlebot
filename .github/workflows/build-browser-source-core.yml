@@ -1,0 +1,27 @@
+name: Build browser-source-core
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'core/browser_source_core_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-browser-source-core.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'core/browser_source_core_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build browser-source-core Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'core/browser_source_core_module'
+      module_name: 'browser-source-core'
+      module_port: '8052'
+    secrets: inherit

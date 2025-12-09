@@ -1,0 +1,27 @@
+name: Build discord
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'trigger/receiver/discord_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-discord.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'trigger/receiver/discord_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build discord Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'trigger/receiver/discord_module'
+      module_name: 'discord'
+      module_port: '8011'
+    secrets: inherit

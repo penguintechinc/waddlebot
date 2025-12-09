@@ -1,0 +1,27 @@
+name: Build workflow-core
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'core/workflow_core_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-workflow-core.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'core/workflow_core_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build workflow-core Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'core/workflow_core_module'
+      module_name: 'workflow-core'
+      module_port: '8070'
+    secrets: inherit

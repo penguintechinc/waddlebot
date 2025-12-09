@@ -1,0 +1,27 @@
+name: Build hub
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**' ]
+    paths:
+      - 'admin/hub_module/**'
+      - 'libs/flask_core/**'
+      - '.version'
+      - '.github/workflows/build-hub.yml'
+      - '.github/workflows/build-container.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'admin/hub_module/**'
+      - 'libs/flask_core/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build hub Container
+    uses: ./.github/workflows/build-container.yml
+    with:
+      module_path: 'admin/hub_module'
+      module_name: 'hub'
+      module_port: '8060'
+    secrets: inherit
