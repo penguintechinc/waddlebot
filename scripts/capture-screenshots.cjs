@@ -10,12 +10,16 @@ const pages = [
   { name: 'login', path: '/login' },
   { name: 'dashboard', path: '/dashboard' },
   { name: 'communities', path: '/communities' },
-  { name: 'community-dashboard', path: '/communities/1/dashboard' },
-  { name: 'servers', path: '/admin/1/servers' },
-  { name: 'routes', path: '/admin/1/routes' },
-  { name: 'modules', path: '/admin/1/modules' },
-  { name: 'users', path: '/admin/1/members' },
-  { name: 'settings', path: '/settings' },
+  { name: 'community-dashboard', path: '/dashboard/community/1' },
+  { name: 'admin-overview', path: '/admin/1' },
+  { name: 'admin-members', path: '/admin/1/members' },
+  { name: 'admin-announcements', path: '/admin/1/announcements' },
+  { name: 'admin-servers', path: '/admin/1/servers' },
+  { name: 'admin-modules', path: '/admin/1/modules' },
+  { name: 'admin-loyalty', path: '/admin/1/loyalty' },
+  { name: 'admin-overlays', path: '/admin/1/overlays' },
+  { name: 'superadmin-dashboard', path: '/superadmin' },
+  { name: 'superadmin-communities', path: '/superadmin/communities' },
 ];
 
 async function sleep(ms) {

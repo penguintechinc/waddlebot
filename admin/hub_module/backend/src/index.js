@@ -216,6 +216,62 @@ async function initializeDatabase() {
       )
     `);
 
+    // Create announcements table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS announcements (
+        id SERIAL PRIMARY KEY,
+        community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+        title VARCHAR(255) NOT NULL,
+        content TEXT NOT NULL,
+        announcement_type VARCHAR(50) DEFAULT 'general',
+        priority INTEGER DEFAULT 0,
+        status VARCHAR(50) DEFAULT 'published',
+        is_pinned BOOLEAN DEFAULT false,
+        broadcast_to_platforms BOOLEAN DEFAULT false,
+        broadcasted_platforms JSONB DEFAULT '[]',
+        created_by INTEGER REFERENCES hub_users(id),
+        created_by_name VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by INTEGER REFERENCES hub_users(id),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        published_at TIMESTAMP,
+        archived_at TIMESTAMP
+      )
+    `);
+
+    // Create index for announcements
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_announcements_community
+      ON announcements(community_id, created_at DESC)
+    `);
+
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_announcements_pinned
+      ON announcements(community_id, is_pinned, created_at DESC)
+    `);
+
+    // Create announcement_broadcasts table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS announcement_broadcasts (
+        id SERIAL PRIMARY KEY,
+        announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
+        community_server_id INTEGER,
+        platform VARCHAR(50) NOT NULL,
+        channel_id VARCHAR(255),
+        status VARCHAR(50) DEFAULT 'pending',
+        platform_message_id VARCHAR(255),
+        error_message TEXT,
+        broadcasted_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create index for announcement broadcasts
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_announcement_broadcasts_announcement
+      ON announcement_broadcasts(announcement_id)
+    `);
+
     // Check if default admin exists in hub_users (unified auth system)
     const adminCheck = await query(
       'SELECT id FROM hub_users WHERE email = $1',

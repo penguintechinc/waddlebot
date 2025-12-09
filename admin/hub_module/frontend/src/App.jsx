@@ -43,6 +43,9 @@ import AdminAIInsights from './pages/admin/AdminAIInsights';
 import AdminAIResearcherConfig from './pages/admin/AdminAIResearcherConfig';
 import AdminBotDetection from './pages/admin/AdminBotDetection';
 import AdminOverlays from './pages/admin/AdminOverlays';
+import AdminAnnouncements from './pages/admin/AdminAnnouncements';
+import AdminAnalytics from './pages/admin/AdminAnalytics';
+import AdminSecurity from './pages/admin/AdminSecurity';
 import LoyaltySettings from './pages/admin/LoyaltySettings';
 import LoyaltyLeaderboard from './pages/admin/LoyaltyLeaderboard';
 import LoyaltyGiveaways from './pages/admin/LoyaltyGiveaways';
@@ -149,6 +152,9 @@ function App() {
         <Route path="/admin/:communityId/ai-config" element={<AdminAIResearcherConfig />} />
         <Route path="/admin/:communityId/bot-detection" element={<AdminBotDetection />} />
         <Route path="/admin/:communityId/overlays" element={<AdminOverlays />} />
+        <Route path="/admin/:communityId/announcements" element={<AdminAnnouncements />} />
+        <Route path="/admin/:communityId/analytics" element={<AdminAnalytics />} />
+        <Route path="/admin/:communityId/security" element={<AdminSecurity />} />
         <Route path="/admin/:communityId/loyalty" element={<LoyaltySettings />} />
         <Route path="/admin/:communityId/loyalty/leaderboard" element={<LoyaltyLeaderboard />} />
         <Route path="/admin/:communityId/loyalty/giveaways" element={<LoyaltyGiveaways />} />

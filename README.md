@@ -68,6 +68,7 @@ helm install waddlebot ./helm/waddlebot -n waddlebot --create-namespace
 | **Shoutouts** | Highlight users across platforms |
 | **Inventory** | Item management system |
 | **Memories** | Community quotes and reminders |
+| **Announcements** | Broadcast to hub and all platforms |
 
 ### 🚀 Platform Support
 
@@ -95,19 +96,25 @@ Infrastructure (PostgreSQL, Redis, MinIO, Qdrant)
 
 ## Screenshots
 
-### Dashboard Overview
+### User Dashboard
 ![Dashboard](docs/screenshots/dashboard.png)
 
-### Community Management
+### Community Portal
 ![Communities](docs/screenshots/communities.png)
 ![Community Dashboard](docs/screenshots/community-dashboard.png)
 
-### Module Registry & Command Routing
-![Modules](docs/screenshots/modules.png)
-![Routes](docs/screenshots/routes.png)
+### Admin Panel
+![Admin Overview](docs/screenshots/admin-overview.png)
+![Admin Members](docs/screenshots/admin-members.png)
+![Admin Announcements](docs/screenshots/admin-announcements.png)
 
-### User Management
-![Users](docs/screenshots/users.png)
+### Loyalty & Engagement
+![Loyalty System](docs/screenshots/admin-loyalty.png)
+![OBS Overlays](docs/screenshots/admin-overlays.png)
+
+### Super Admin
+![Super Admin Dashboard](docs/screenshots/superadmin-dashboard.png)
+![Community Management](docs/screenshots/superadmin-communities.png)
 
 ## What's New in v0.2.0
 

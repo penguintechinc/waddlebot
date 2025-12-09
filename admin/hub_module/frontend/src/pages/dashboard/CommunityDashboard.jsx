@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { communityApi, streamApi } from '../../services/api';
+import { communityApi, streamApi, adminApi } from '../../services/api';
 import LiveStreamGrid from '../../components/streams/LiveStreamGrid';
 import LeaderboardCard from '../../components/leaderboard/LeaderboardCard';
+import { MegaphoneIcon, MapPinIcon } from '@heroicons/react/24/outline';
 
 function CommunityDashboard() {
   const { id } = useParams();
@@ -11,6 +12,8 @@ function CommunityDashboard() {
   const [streams, setStreams] = useState([]);
   const [streamsLoading, setStreamsLoading] = useState(false);
   const [streamsError, setStreamsError] = useState(null);
+  const [announcements, setAnnouncements] = useState([]);
+  const [announcementsLoading, setAnnouncementsLoading] = useState(false);
 
   useEffect(() => {
     async function fetchDashboard() {
@@ -29,6 +32,25 @@ function CommunityDashboard() {
       }
     }
     fetchDashboard();
+  }, [id]);
+
+  // Fetch announcements (pinned and recent published)
+  useEffect(() => {
+    async function fetchAnnouncements() {
+      setAnnouncementsLoading(true);
+      try {
+        const response = await adminApi.getAnnouncements(id, { status: 'published', limit: 5 });
+        if (response.data.success) {
+          setAnnouncements(response.data.data || []);
+        }
+      } catch (err) {
+        // Silently fail - user may not have access to announcements
+        console.error('Failed to fetch announcements:', err);
+      } finally {
+        setAnnouncementsLoading(false);
+      }
+    }
+    fetchAnnouncements();
   }, [id]);
 
   const refreshStreams = async () => {
@@ -94,6 +116,83 @@ function CommunityDashboard() {
             loading={streamsLoading}
             error={streamsError}
           />
+        </div>
+      )}
+
+      {/* Announcements Section */}
+      {announcements.length > 0 && (
+        <div className="mb-8">
+          <div className="card">
+            <div className="card-header flex items-center justify-between">
+              <h2 className="font-semibold text-sky-100 flex items-center space-x-2">
+                <MegaphoneIcon className="w-5 h-5 text-gold-400" />
+                <span>Announcements</span>
+              </h2>
+              {['community-owner', 'community-admin', 'moderator'].includes(membership?.role) && (
+                <Link
+                  to={`/admin/${id}/announcements`}
+                  className="text-sm text-sky-400 hover:text-sky-300"
+                >
+                  Manage
+                </Link>
+              )}
+            </div>
+            <div className="divide-y divide-navy-700">
+              {announcementsLoading ? (
+                <div className="p-4 flex justify-center">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gold-400"></div>
+                </div>
+              ) : (
+                announcements.slice(0, 3).map((announcement) => (
+                  <div
+                    key={announcement.id}
+                    className={`p-4 ${
+                      announcement.announcementType === 'important'
+                        ? 'bg-red-500/10 border-l-4 border-l-red-500'
+                        : announcement.announcementType === 'event'
+                        ? 'bg-purple-500/10 border-l-4 border-l-purple-500'
+                        : announcement.announcementType === 'update'
+                        ? 'bg-sky-500/10 border-l-4 border-l-sky-500'
+                        : ''
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-2">
+                          {announcement.isPinned && (
+                            <MapPinIcon className="w-4 h-4 text-gold-400" />
+                          )}
+                          <h3 className="font-medium text-sky-100">{announcement.title}</h3>
+                        </div>
+                        <p className="text-sm text-navy-300 mt-1 line-clamp-2">
+                          {announcement.content}
+                        </p>
+                        <div className="flex items-center space-x-2 mt-2 text-xs text-navy-500">
+                          <span>{announcement.createdByName || 'Admin'}</span>
+                          <span>·</span>
+                          <span>{new Date(announcement.createdAt).toLocaleDateString()}</span>
+                        </div>
+                      </div>
+                      <span
+                        className={`text-xs px-2 py-1 rounded ${
+                          announcement.announcementType === 'important'
+                            ? 'bg-red-500/20 text-red-400'
+                            : announcement.announcementType === 'event'
+                            ? 'bg-purple-500/20 text-purple-400'
+                            : announcement.announcementType === 'update'
+                            ? 'bg-sky-500/20 text-sky-400'
+                            : 'bg-navy-600 text-navy-300'
+                        }`}
+                      >
+                        {announcement.announcementType.charAt(0).toUpperCase() +
+                          announcement.announcementType.slice(1)}
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       )}
 

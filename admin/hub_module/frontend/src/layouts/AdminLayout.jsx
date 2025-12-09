@@ -19,6 +19,8 @@ import {
   SparklesIcon,
   WindowIcon,
   CurrencyDollarIcon,
+  MegaphoneIcon,
+  FireIcon,
 } from '@heroicons/react/24/outline';
 
 function AdminLayout() {
@@ -31,6 +33,9 @@ function AdminLayout() {
     ? [
         { to: `/admin/${communityId}`, icon: HomeIcon, label: 'Overview', exact: true },
         { to: `/admin/${communityId}/members`, icon: UserGroupIcon, label: 'Members' },
+        { to: `/admin/${communityId}/announcements`, icon: MegaphoneIcon, label: 'Announcements' },
+        { to: `/admin/${communityId}/analytics`, icon: ChartBarIcon, label: 'Analytics' },
+        { to: `/admin/${communityId}/security`, icon: FireIcon, label: 'Security' },
         { to: `/admin/${communityId}/servers`, icon: ServerStackIcon, label: 'Linked Servers' },
         { to: `/admin/${communityId}/mirror-groups`, icon: ArrowsRightLeftIcon, label: 'Chat Mirroring' },
         { to: `/admin/${communityId}/leaderboard`, icon: TrophyIcon, label: 'Leaderboards' },

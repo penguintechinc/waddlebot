@@ -258,6 +258,57 @@ export const adminApi = {
     api.delete(`/api/v1/admin/${communityId}/loyalty/gear/items/${itemId}`),
   getLoyaltyGearStats: (communityId) =>
     api.get(`/api/v1/admin/${communityId}/loyalty/gear/stats`),
+  // Announcements
+  getAnnouncements: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/announcements`, { params }),
+  getAnnouncement: (communityId, announcementId) =>
+    api.get(`/api/v1/admin/${communityId}/announcements/${announcementId}`),
+  createAnnouncement: (communityId, data) =>
+    api.post(`/api/v1/admin/${communityId}/announcements`, data),
+  updateAnnouncement: (communityId, announcementId, data) =>
+    api.put(`/api/v1/admin/${communityId}/announcements/${announcementId}`, data),
+  deleteAnnouncement: (communityId, announcementId) =>
+    api.delete(`/api/v1/admin/${communityId}/announcements/${announcementId}`),
+  publishAnnouncement: (communityId, announcementId) =>
+    api.post(`/api/v1/admin/${communityId}/announcements/${announcementId}/publish`),
+  pinAnnouncement: (communityId, announcementId) =>
+    api.put(`/api/v1/admin/${communityId}/announcements/${announcementId}/pin`),
+  unpinAnnouncement: (communityId, announcementId) =>
+    api.put(`/api/v1/admin/${communityId}/announcements/${announcementId}/unpin`),
+  archiveAnnouncement: (communityId, announcementId) =>
+    api.post(`/api/v1/admin/${communityId}/announcements/${announcementId}/archive`),
+  broadcastAnnouncement: (communityId, announcementId, platforms) =>
+    api.post(`/api/v1/admin/${communityId}/announcements/${announcementId}/broadcast`, { platforms }),
+  getBroadcastStatus: (communityId, announcementId) =>
+    api.get(`/api/v1/admin/${communityId}/announcements/${announcementId}/broadcast-status`),
+  // Analytics
+  getAnalyticsBasic: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/analytics/basic`),
+  getAnalyticsPoll: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/analytics/poll`),
+  getAnalyticsHealthScore: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/analytics/health-score`),
+  getAnalyticsBadActors: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/analytics/bad-actors`, { params }),
+  getAnalyticsRetention: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/analytics/retention`),
+  // Security
+  getSecurityConfig: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/security/config`),
+  updateSecurityConfig: (communityId, data) =>
+    api.put(`/api/v1/admin/${communityId}/security/config`, data),
+  getSecurityBlockedWords: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/security/blocked-words`, { params }),
+  addSecurityBlockedWord: (communityId, data) =>
+    api.post(`/api/v1/admin/${communityId}/security/blocked-words`, data),
+  updateSecurityBlockedWord: (communityId, wordId, data) =>
+    api.put(`/api/v1/admin/${communityId}/security/blocked-words/${wordId}`, data),
+  deleteSecurityBlockedWord: (communityId, wordId) =>
+    api.delete(`/api/v1/admin/${communityId}/security/blocked-words/${wordId}`),
+  getSecurityWarnings: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/security/warnings`, { params }),
+  getSecurityModerationLog: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/security/moderation-log`, { params }),
 };
 
 export const platformApi = {

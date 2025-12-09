@@ -8,6 +8,7 @@ import * as activityController from '../controllers/activityController.js';
 import * as communityProfileController from '../controllers/communityProfileController.js';
 import * as overlayController from '../controllers/overlayController.js';
 import * as loyaltyController from '../controllers/loyaltyController.js';
+import * as announcementController from '../controllers/announcementController.js';
 import { requireAuth, requireCommunityAdmin } from '../middleware/auth.js';
 
 const router = Router();
@@ -143,5 +144,141 @@ router.post('/:communityId/loyalty/gear/items', requireCommunityAdmin, loyaltyCo
 router.put('/:communityId/loyalty/gear/items/:itemId', requireCommunityAdmin, loyaltyController.updateGearItem);
 router.delete('/:communityId/loyalty/gear/items/:itemId', requireCommunityAdmin, loyaltyController.deleteGearItem);
 router.get('/:communityId/loyalty/gear/stats', requireCommunityAdmin, loyaltyController.getGearStats);
+
+// Announcements (admin & moderator access)
+router.get('/:communityId/announcements', requireCommunityAdmin, announcementController.getAnnouncements);
+router.get('/:communityId/announcements/:announcementId', requireCommunityAdmin, announcementController.getAnnouncement);
+router.post('/:communityId/announcements', requireCommunityAdmin, announcementController.createAnnouncement);
+router.put('/:communityId/announcements/:announcementId', requireCommunityAdmin, announcementController.updateAnnouncement);
+router.delete('/:communityId/announcements/:announcementId', requireCommunityAdmin, announcementController.deleteAnnouncement);
+
+// Announcement actions
+router.post('/:communityId/announcements/:announcementId/publish', requireCommunityAdmin, announcementController.publishAnnouncement);
+router.put('/:communityId/announcements/:announcementId/pin', requireCommunityAdmin, announcementController.pinAnnouncement);
+router.put('/:communityId/announcements/:announcementId/unpin', requireCommunityAdmin, announcementController.unpinAnnouncement);
+router.post('/:communityId/announcements/:announcementId/archive', requireCommunityAdmin, announcementController.archiveAnnouncement);
+
+// Broadcasting
+router.post('/:communityId/announcements/:announcementId/broadcast', requireCommunityAdmin, announcementController.broadcastAnnouncement);
+router.get('/:communityId/announcements/:announcementId/broadcast-status', requireCommunityAdmin, announcementController.getBroadcastStatus);
+
+// Analytics proxy routes
+router.get('/:communityId/analytics/*', requireCommunityAdmin, async (req, res) => {
+  try {
+    const httpClient = (await import('axios')).default;
+    const analyticsPath = req.params[0];
+    const response = await httpClient.get(
+      `http://analytics-core:8040/api/v1/analytics/${req.params.communityId}/${analyticsPath}`,
+      {
+        params: req.query,
+        headers: {
+          'X-API-Key': req.headers['x-api-key'],
+          'X-Community-ID': req.params.communityId,
+        },
+      }
+    );
+    res.json(response.data);
+  } catch (error) {
+    console.error('Analytics proxy error:', error.message);
+    res.status(error.response?.status || 500).json({
+      error: error.response?.data?.error || 'Failed to fetch analytics',
+    });
+  }
+});
+
+// Security proxy routes
+router.get('/:communityId/security/*', requireCommunityAdmin, async (req, res) => {
+  try {
+    const httpClient = (await import('axios')).default;
+    const securityPath = req.params[0];
+    const response = await httpClient.get(
+      `http://security-core:8041/api/v1/security/${req.params.communityId}/${securityPath}`,
+      {
+        params: req.query,
+        headers: {
+          'X-API-Key': req.headers['x-api-key'],
+          'X-Community-ID': req.params.communityId,
+        },
+      }
+    );
+    res.json(response.data);
+  } catch (error) {
+    console.error('Security proxy error:', error.message);
+    res.status(error.response?.status || 500).json({
+      error: error.response?.data?.error || 'Failed to fetch security data',
+    });
+  }
+});
+
+router.put('/:communityId/security/*', requireCommunityAdmin, async (req, res) => {
+  try {
+    const httpClient = (await import('axios')).default;
+    const securityPath = req.params[0];
+    const response = await httpClient.put(
+      `http://security-core:8041/api/v1/security/${req.params.communityId}/${securityPath}`,
+      req.body,
+      {
+        params: req.query,
+        headers: {
+          'X-API-Key': req.headers['x-api-key'],
+          'X-Community-ID': req.params.communityId,
+        },
+      }
+    );
+    res.json(response.data);
+  } catch (error) {
+    console.error('Security proxy error:', error.message);
+    res.status(error.response?.status || 500).json({
+      error: error.response?.data?.error || 'Failed to update security settings',
+    });
+  }
+});
+
+router.post('/:communityId/security/*', requireCommunityAdmin, async (req, res) => {
+  try {
+    const httpClient = (await import('axios')).default;
+    const securityPath = req.params[0];
+    const response = await httpClient.post(
+      `http://security-core:8041/api/v1/security/${req.params.communityId}/${securityPath}`,
+      req.body,
+      {
+        params: req.query,
+        headers: {
+          'X-API-Key': req.headers['x-api-key'],
+          'X-Community-ID': req.params.communityId,
+        },
+      }
+    );
+    res.json(response.data);
+  } catch (error) {
+    console.error('Security proxy error:', error.message);
+    res.status(error.response?.status || 500).json({
+      error: error.response?.data?.error || 'Failed to process security action',
+    });
+  }
+});
+
+router.delete('/:communityId/security/*', requireCommunityAdmin, async (req, res) => {
+  try {
+    const httpClient = (await import('axios')).default;
+    const securityPath = req.params[0];
+    const response = await httpClient.delete(
+      `http://security-core:8041/api/v1/security/${req.params.communityId}/${securityPath}`,
+      {
+        params: req.query,
+        headers: {
+          'X-API-Key': req.headers['x-api-key'],
+          'X-Community-ID': req.params.communityId,
+        },
+      }
+    );
+    res.json(response.data);
+  } catch (error) {
+    console.error('Security proxy error:', error.message);
+    res.status(error.response?.status || 500).json({
+      error: error.response?.data?.error || 'Failed to delete security item',
+    });
+  }
+});
 
 export default router;
