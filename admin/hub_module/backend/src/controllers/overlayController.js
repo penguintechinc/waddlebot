@@ -3,7 +3,7 @@
  * Manages community overlay tokens for unified browser sources
  */
 import crypto from 'crypto';
-import { pool } from '../db.js';
+import { pool } from '../config/database.js';
 
 /**
  * Generate a secure 64-character hex key

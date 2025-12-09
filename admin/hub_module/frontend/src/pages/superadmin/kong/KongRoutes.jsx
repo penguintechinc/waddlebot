@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { superAdminApi } from '../../../services/api';
+import { kongApi } from '../../../services/api';
 import { Plus, Edit2, Trash2 } from 'lucide-react';
 
 export default function KongRoutes() {
@@ -42,7 +42,7 @@ export default function KongRoutes() {
     try {
       setLoading(true);
       setError(null);
-      const response = await superAdminApi.getKongRoutes({ search, service_id: selectedService });
+      const response = await kongApi.getKongRoutes({ search, service_id: selectedService });
       setRoutes(response.data.data || []);
     } catch (err) {
       setError(err.response?.data?.error?.message || 'Failed to load routes');
@@ -53,7 +53,7 @@ export default function KongRoutes() {
 
   const loadServices = async () => {
     try {
-      const response = await superAdminApi.getKongServices();
+      const response = await kongApi.getKongServices();
       setServices(response.data.data || []);
     } catch (err) {
       console.error('Failed to load services:', err);
@@ -69,7 +69,7 @@ export default function KongRoutes() {
         methods: formData.methods,
         protocols: formData.protocols,
       };
-      await superAdminApi.createKongRoute(formData.service_id, submitData);
+      await kongApi.createKongRoute(formData.service_id, submitData);
       setSuccess('Route created successfully');
       setShowCreateModal(false);
       resetForm();
@@ -88,7 +88,7 @@ export default function KongRoutes() {
         methods: formData.methods,
         protocols: formData.protocols,
       };
-      await superAdminApi.updateKongRoute(editingRoute.id, submitData);
+      await kongApi.updateKongRoute(editingRoute.id, submitData);
       setSuccess('Route updated successfully');
       setShowEditModal(false);
       setEditingRoute(null);
@@ -103,7 +103,7 @@ export default function KongRoutes() {
     if (!confirm('Are you sure you want to delete this route?')) return;
 
     try {
-      await superAdminApi.deleteKongRoute(routeId);
+      await kongApi.deleteKongRoute(routeId);
       setSuccess('Route deleted successfully');
       loadRoutes();
     } catch (err) {

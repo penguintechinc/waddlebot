@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { superAdminApi } from '../../../services/api';
+import { kongApi } from '../../../services/api';
 import { Plus, Edit2, Trash2, Copy, AlertTriangle } from 'lucide-react';
 
 export default function KongCertificates() {
@@ -31,8 +31,8 @@ export default function KongCertificates() {
       setLoading(true);
       setError(null);
       const [certsRes, snisRes] = await Promise.all([
-        superAdminApi.getKongCertificates({ search }),
-        superAdminApi.getKongSNIs(),
+        kongApi.getKongCertificates({ search }),
+        kongApi.getKongSNIs(),
       ]);
       setCertificates(certsRes.data.data || []);
       setSNIs(snisRes.data.data || []);
@@ -56,7 +56,7 @@ export default function KongCertificates() {
         key: formData.key,
         tags: formData.tags ? formData.tags.split(',').map((t) => t.trim()) : undefined,
       };
-      await superAdminApi.createKongCertificate(submitData);
+      await kongApi.createKongCertificate(submitData);
       setSuccess('Certificate created successfully');
       setShowCreateModal(false);
       resetForm();
@@ -70,7 +70,7 @@ export default function KongCertificates() {
     if (!confirm('Are you sure you want to delete this certificate? Associated SNIs will be unaffected.')) return;
 
     try {
-      await superAdminApi.deleteKongCertificate(certId);
+      await kongApi.deleteKongCertificate(certId);
       setSuccess('Certificate deleted successfully');
       loadData();
     } catch (err) {
@@ -81,7 +81,7 @@ export default function KongCertificates() {
   const handleCreateSNI = async (e) => {
     e.preventDefault();
     try {
-      await superAdminApi.createKongSNI({
+      await kongApi.createKongSNI({
         name: sniFormData.name,
         certificate_id: sniFormData.certificate_id,
       });
@@ -98,7 +98,7 @@ export default function KongCertificates() {
     if (!confirm('Are you sure you want to delete this SNI?')) return;
 
     try {
-      await superAdminApi.deleteKongSNI(sniId);
+      await kongApi.deleteKongSNI(sniId);
       setSuccess('SNI deleted successfully');
       loadData();
     } catch (err) {

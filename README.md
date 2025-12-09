@@ -1,123 +1,171 @@
-# decK: Declarative configuration for Kong
+# WaddleBot v0.2.0
 
-decK provides declarative configuration and drift detection for Kong.
+> **Next-Generation Multi-Platform Bot Framework**
+>
+> Build powerful chatbots for Twitch, Discord, Slack, YouTube, and more with AI, loyalty systems, and enterprise-grade deployment options.
 
-[![Build Status](https://github.com/kong/deck/workflows/CI%20Test/badge.svg)](https://github.com/kong/deck/actions?query=branch%3Amain+event%3Apush)
-[![codecov](https://codecov.io/gh/Kong/deck/branch/main/graph/badge.svg?token=m9WNK9rFEG)](https://codecov.io/gh/Kong/deck)
-[![Go Report Card](https://goreportcard.com/badge/github.com/kong/deck)](https://goreportcard.com/report/github.com/kong/deck)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Version](https://img.shields.io/badge/version-0.2.0-green.svg)](https://github.com/waddlebot/waddlebot)
+[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://www.docker.com/)
+[![Kubernetes](https://img.shields.io/badge/kubernetes-ready-blue.svg)](https://kubernetes.io/)
 
-[![asciicast](https://asciinema.org/a/238318.svg)](https://asciinema.org/a/238318)
+---
 
-## Table of Content
+## Why WaddleBot?
 
-- [**Features**](#features)
-- [**Compatibility**](#compatibility)
-- [**Installation**](#installation)
-- [**Documentation**](#documentation)
-- [**Stale issue and pull request policy**](#stale-issue-and-pull-request-policy)
-- [**License**](#license)
+**For Streamers & Communities:**
+- Engage your audience with AI-powered chat, loyalty points, and interactive minigames
+- Support multiple platforms from one place (Twitch, Discord, Slack, YouTube)
+- Built-in features: giveaways, duels, music requests, event calendars, and more
 
-## Features
+**For Developers:**
+- Modern microservices architecture with clean APIs
+- Easy to extend with new modules and commands
+- Comprehensive documentation and examples
+- Production-ready with Kubernetes and CI/CD
 
-- **Export**  
-  Existing Kong configuration to a YAML configuration file
-  This can be used to backup Kong's configuration.
-- **Import**  
-  Kong's database can be populated using the exported or a hand written config
-  file.
-- **Diff and sync capabilities**  
-  decK can diff the configuration in the config file and
-  the configuration in Kong's DB and then sync it as well.
-  This can be used to detect config drifts or manual interventions.
-- **Reverse sync**  
-  decK supports a sync the other way as well, meaning if an
-  entity is created in Kong and doesn't add it to the config file,
-  decK will detect the change.
-- **Validation**  
-  decK can validate a YAML file that you backup or modify to catch errors
-  early on.
-- **Reset**  
-  This can be used to drops all entities in Kong's DB.
-- **Parallel operations**  
-  All Admin API calls to Kong are executed in parallel using multiple
-  threads to speed up the sync process.
-- **Authentication with Kong**
-  Custom HTTP headers can be injected in requests to Kong's Admin API
-  for authentication/authorization purposes.
-- **Manage Kong's config with multiple config file**  
-  Split your Kong's configuration into multiple logical files based on a shared
-  set of tags amongst entities.
-- **Designed to automate configuration management**  
-  decK is designed to be part of your CI pipeline and can be used to not only
-  push configuration to Kong but also detect drifts in configuration.
+**For Businesses:**
+- Enterprise deployment options with high availability
+- RBAC, audit logging, and security best practices
+- Multi-tenant support for managing multiple communities
+- Prometheus metrics and observability built-in
 
-## Compatibility
+## Quick Start
 
-decK is compatible with Kong Gateway >= 1.x and Kong Enterprise >= 0.35.
+### Try It Locally (5 minutes)
 
-## Installation
-
-### macOS
-
-If you are on macOS, install decK using brew:
-
-```shell
-$ brew tap kong/deck
-$ brew install deck
+```bash
+git clone https://github.com/waddlebot/waddlebot.git
+cd waddlebot
+docker-compose up -d
 ```
 
-### Linux
+**Access the admin portal:** http://localhost:8060
+**Default login:** `admin@localhost` / `admin123`
 
-If you are Linux, you can either use the Debian or RPM archive from
-the GitHub [release page](https://github.com/kong/deck/releases)
-or install by downloading the binary:
+### Deploy to Kubernetes
 
-```shell
-$ curl -sL https://github.com/kong/deck/releases/download/v1.37.0/deck_1.37.0_linux_amd64.tar.gz -o deck.tar.gz
-$ tar -xf deck.tar.gz -C /tmp
-$ sudo cp /tmp/deck /usr/local/bin/
+```bash
+cd k8s
+helm install waddlebot ./helm/waddlebot -n waddlebot --create-namespace
 ```
 
-### Windows
+**See [k8s/QUICKSTART.md](k8s/QUICKSTART.md) for full deployment guide.**
 
-If you are on Windows, you can download the binary from the GitHub
-[release page](https://github.com/kong/deck/releases) or via PowerShell:
+## Key Features
 
-```shell
-$ curl -sL https://github.com/kong/deck/releases/download/v1.37.0/deck_1.37.0_windows_amd64.tar.gz -o deck.tar.gz
-$ tar -xzvf deck.tar.gz
+### 🎮 Out-of-the-Box Modules
+
+| Feature | Description |
+|---------|-------------|
+| **AI Chat** | Intelligent responses powered by Ollama, OpenAI, or MCP |
+| **Loyalty System** | Virtual currency, earning configs, leaderboards |
+| **Minigames** | Slots, coinflip, roulette with betting |
+| **Duels** | PvP wagering with gear bonuses |
+| **Giveaways** | Reputation-weighted prize system |
+| **Music** | Spotify & YouTube Music with OBS integration |
+| **Calendar** | Event scheduling with approval workflows |
+| **Shoutouts** | Highlight users across platforms |
+| **Inventory** | Item management system |
+| **Memories** | Community quotes and reminders |
+
+### 🚀 Platform Support
+
+✅ **Twitch** - EventSub webhooks, chat commands, OAuth
+✅ **Discord** - Bot events, slash commands
+✅ **Slack** - Events API, slash commands
+✅ **YouTube Live** - Live chat, SuperChat
+✅ **Kick** - Webhook integration
+
+### 🏗️ Architecture
+
+```
+Platform Events (Twitch, Discord, Slack, YouTube)
+        ↓
+    Router Module (Command Processing & API Gateway)
+        ↓
+Interactive Modules (AI, Loyalty, Music, Games)
+        ↓
+Core Services (Identity, Reputation, Browser Source)
+        ↓
+Infrastructure (PostgreSQL, Redis, MinIO, Qdrant)
 ```
 
-### Docker image
+**Full architecture diagram:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
-Docker image is hosted on [Docker Hub](https://hub.docker.com/r/kong/deck).
+## Screenshots
 
-You can get the image with the command:
+### Dashboard Overview
+![Dashboard](docs/screenshots/dashboard.png)
 
-```
-docker pull kong/deck
-```
+### Community Management
+![Communities](docs/screenshots/communities.png)
+![Community Dashboard](docs/screenshots/community-dashboard.png)
+
+### Module Registry & Command Routing
+![Modules](docs/screenshots/modules.png)
+![Routes](docs/screenshots/routes.png)
+
+### User Management
+![Users](docs/screenshots/users.png)
+
+## What's New in v0.2.0
+
+- ✅ **Kubernetes Deployment** - Helm charts, manifests, auto-scaling
+- ✅ **GitHub Actions CI/CD** - Automated builds and deployments
+- ✅ **Health Check Standardization** - `/health`, `/healthz`, `/metrics` on all containers
+- ✅ **Loyalty System** - Complete virtual economy with minigames and duels
+- ✅ **Comprehensive Docs** - Architecture, API reference, deployment guides
+
+**Full changelog:** [CHANGELOG.md](CHANGELOG.md)
 
 ## Documentation
 
-You can use `--help` flag once you've decK installed on your system
-to get help in the terminal itself.
+| Guide | Description |
+|-------|-------------|
+| **[Getting Started](docs/deployment-guide.md)** | Installation and first-time setup |
+| **[Architecture](docs/ARCHITECTURE.md)** | System design and component overview |
+| **[API Reference](docs/api-reference.md)** | Complete API documentation |
+| **[Kubernetes](k8s/README.md)** | K8s deployment, Helm, CI/CD |
+| **[Development](docs/development-rules.md)** | Building new modules |
+| **[Module Details](docs/module-details-core.md)** | In-depth module documentation |
 
-The project's documentation is hosted at
-[https://docs.konghq.com/deck/overview](https://docs.konghq.com/deck/overview).
+**Browse all docs:** [/docs](docs/)
 
-## Changelog
+## Technology Stack
 
-Changelog can be found in the [CHANGELOG.md](CHANGELOG.md) file.
-
-## Stale issue and pull request policy
-
-To ensure our backlog is organized and up to date, we will close issues and
-pull requests that have been inactive awaiting a community response for over 2
-weeks. If you wish to reopen a closed issue or PR to continue work, please
-leave a comment asking a team member to do so.
+**Backend:** Python 3.13, Flask/Quart, PostgreSQL, Redis
+**Frontend:** React 18, Vite, TailwindCSS
+**Infrastructure:** Docker, Kubernetes, Helm v3, GitHub Actions
+**AI/LLM:** Ollama, OpenAI, MCP providers
+**Storage:** PostgreSQL, MinIO (S3), Qdrant (vectors)
 
 ## License
 
-decK is licensed with Apache License Version 2.0.
-Please read the [LICENSE](LICENSE) file for more details.
+**Open Source (GPL-3.0)** - Free for personal, internal, and educational use
+
+**Commercial License** required for:
+- SaaS/hosting services
+- Commercial products embedding WaddleBot
+- Managed services for clients
+
+**Contributor Employer Exception:** Companies employing contributors get perpetual GPL-2.0 access to versions their employee contributed to.
+
+**Contact:** licensing@waddlebot.com
+
+## Community & Support
+
+- **Documentation:** [/docs](docs/)
+- **Issues:** [GitHub Issues](https://github.com/waddlebot/waddlebot/issues)
+- **Discord:** Coming soon
+- **Email:** support@waddlebot.com
+
+## Contributing
+
+We welcome contributions! See [docs/development-rules.md](docs/development-rules.md) for guidelines.
+
+---
+
+**Made with ❤️ by the WaddleBot team**
+
+*Want to see WaddleBot in action? [Schedule a demo](mailto:demo@waddlebot.com)*

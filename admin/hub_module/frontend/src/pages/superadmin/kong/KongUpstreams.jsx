@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { superAdminApi } from '../../../services/api';
+import { kongApi } from '../../../services/api';
 import { Plus, Edit2, Trash2 } from 'lucide-react';
 
 const ALGORITHMS = ['round-robin', 'consistent-hashing', 'least-connections'];
@@ -68,13 +68,13 @@ export default function KongUpstreams() {
     try {
       setLoading(true);
       setError(null);
-      const response = await superAdminApi.getKongUpstreams({ search });
+      const response = await kongApi.getKongUpstreams({ search });
       setUpstreams(response.data.data || []);
       // Load targets for each upstream
       const targetsData = {};
       for (const upstream of response.data.data || []) {
         try {
-          const targetsRes = await superAdminApi.getKongTargets(upstream.id);
+          const targetsRes = await kongApi.getKongTargets(upstream.id);
           targetsData[upstream.id] = targetsRes.data.data || [];
         } catch (err) {
           console.error(`Failed to load targets for upstream ${upstream.id}:`, err);
@@ -91,7 +91,7 @@ export default function KongUpstreams() {
   const handleCreate = async (e) => {
     e.preventDefault();
     try {
-      await superAdminApi.createKongUpstream(formData);
+      await kongApi.createKongUpstream(formData);
       setSuccess('Upstream created successfully');
       setShowCreateModal(false);
       resetForm();
@@ -104,7 +104,7 @@ export default function KongUpstreams() {
   const handleUpdate = async (e) => {
     e.preventDefault();
     try {
-      await superAdminApi.updateKongUpstream(editingUpstream.id, formData);
+      await kongApi.updateKongUpstream(editingUpstream.id, formData);
       setSuccess('Upstream updated successfully');
       setShowEditModal(false);
       setEditingUpstream(null);
@@ -119,7 +119,7 @@ export default function KongUpstreams() {
     if (!confirm('Are you sure you want to delete this upstream? All associated targets will be deleted.')) return;
 
     try {
-      await superAdminApi.deleteKongUpstream(upstreamId);
+      await kongApi.deleteKongUpstream(upstreamId);
       setSuccess('Upstream deleted successfully');
       loadUpstreams();
     } catch (err) {
@@ -130,7 +130,7 @@ export default function KongUpstreams() {
   const handleAddTarget = async (e) => {
     e.preventDefault();
     try {
-      await superAdminApi.createKongTarget(selectedUpstreamId, targetFormData);
+      await kongApi.createKongTarget(selectedUpstreamId, targetFormData);
       setSuccess('Target added successfully');
       setTargetFormData({ target: '', weight: 100 });
       loadUpstreams();
@@ -143,7 +143,7 @@ export default function KongUpstreams() {
     if (!confirm('Are you sure you want to delete this target?')) return;
 
     try {
-      await superAdminApi.deleteKongTarget(upstreamId, targetId);
+      await kongApi.deleteKongTarget(upstreamId, targetId);
       setSuccess('Target deleted successfully');
       loadUpstreams();
     } catch (err) {

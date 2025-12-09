@@ -1,6 +1,32 @@
 -- WaddleBot Development Database Initialization
 -- This script sets up the basic database structure for development
 
+-- Create Kong database and user
+-- Kong requires its own database separate from WaddleBot
+CREATE DATABASE kong;
+
+-- Create Kong user with password (must match KONG_PG_PASSWORD in docker-compose.yml)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'kong') THEN
+        CREATE ROLE kong WITH LOGIN PASSWORD 'kong_db_pass_change_me';
+    END IF;
+END
+$$;
+
+-- Grant all privileges on kong database to kong user
+GRANT ALL PRIVILEGES ON DATABASE kong TO kong;
+
+-- Connect to kong database to grant schema permissions
+\c kong
+
+-- Grant schema permissions to kong user
+GRANT ALL ON SCHEMA public TO kong;
+ALTER SCHEMA public OWNER TO kong;
+
+-- Switch to WaddleBot database for remaining setup
+\c waddlebot
+
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";

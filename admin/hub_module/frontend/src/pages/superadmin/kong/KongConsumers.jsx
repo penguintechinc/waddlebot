@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { superAdminApi } from '../../../services/api';
+import { kongApi } from '../../../services/api';
 import { Plus, Trash2, Copy } from 'lucide-react';
 
 export default function KongConsumers() {
@@ -22,7 +22,7 @@ export default function KongConsumers() {
     try {
       setLoading(true);
       setError(null);
-      const response = await superAdminApi.getKongConsumers({ search });
+      const response = await kongApi.getKongConsumers({ search });
       setConsumers(response.data.data || []);
     } catch (err) {
       setError(err.response?.data?.error?.message || 'Failed to load consumers');
@@ -39,7 +39,7 @@ export default function KongConsumers() {
     }
 
     try {
-      await superAdminApi.createKongConsumer(formData);
+      await kongApi.createKongConsumer(formData);
       setSuccess('Consumer created successfully');
       setShowCreateModal(false);
       resetForm();
@@ -53,7 +53,7 @@ export default function KongConsumers() {
     if (!confirm('Are you sure you want to delete this consumer?')) return;
 
     try {
-      await superAdminApi.deleteKongConsumer(consumerId);
+      await kongApi.deleteKongConsumer(consumerId);
       setSuccess('Consumer deleted successfully');
       loadConsumers();
     } catch (err) {

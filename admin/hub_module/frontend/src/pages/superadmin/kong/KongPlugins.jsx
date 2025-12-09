@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { superAdminApi } from '../../../services/api';
+import { kongApi } from '../../../services/api';
 import { Plus, Edit2, Trash2 } from 'lucide-react';
 
 const PLUGIN_TYPES = [
@@ -56,9 +56,9 @@ export default function KongPlugins() {
       setLoading(true);
       setError(null);
       const [pluginsRes, servicesRes, routesRes] = await Promise.all([
-        superAdminApi.getKongPlugins({ search, scope: scopeFilter }),
-        superAdminApi.getKongServices(),
-        superAdminApi.getKongRoutes(),
+        kongApi.getKongPlugins({ search, scope: scopeFilter }),
+        kongApi.getKongServices(),
+        kongApi.getKongRoutes(),
       ]);
       setPlugins(pluginsRes.data.data || []);
       setServices(servicesRes.data.data || []);
@@ -73,7 +73,7 @@ export default function KongPlugins() {
   const handleCreate = async (e) => {
     e.preventDefault();
     try {
-      await superAdminApi.createKongPlugin(formData);
+      await kongApi.createKongPlugin(formData);
       setSuccess('Plugin created successfully');
       setShowCreateModal(false);
       resetForm();
@@ -86,7 +86,7 @@ export default function KongPlugins() {
   const handleUpdate = async (e) => {
     e.preventDefault();
     try {
-      await superAdminApi.updateKongPlugin(editingPlugin.id, formData);
+      await kongApi.updateKongPlugin(editingPlugin.id, formData);
       setSuccess('Plugin updated successfully');
       setShowEditModal(false);
       setEditingPlugin(null);
@@ -101,7 +101,7 @@ export default function KongPlugins() {
     if (!confirm('Are you sure you want to delete this plugin?')) return;
 
     try {
-      await superAdminApi.deleteKongPlugin(pluginId);
+      await kongApi.deleteKongPlugin(pluginId);
       setSuccess('Plugin deleted successfully');
       loadData();
     } catch (err) {

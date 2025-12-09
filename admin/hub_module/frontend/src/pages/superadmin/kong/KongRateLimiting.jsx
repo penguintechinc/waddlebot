@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { superAdminApi } from '../../../services/api';
+import { kongApi } from '../../../services/api';
 import { Plus, Edit2, Trash2 } from 'lucide-react';
 
 const POLICY_TYPES = ['local', 'redis', 'cluster'];
@@ -42,9 +42,9 @@ export default function KongRateLimiting() {
       setLoading(true);
       setError(null);
       const [pluginsRes, servicesRes, routesRes] = await Promise.all([
-        superAdminApi.getKongPlugins({ search: 'rate-limiting' }),
-        superAdminApi.getKongServices(),
-        superAdminApi.getKongRoutes(),
+        kongApi.getKongPlugins({ search: 'rate-limiting' }),
+        kongApi.getKongServices(),
+        kongApi.getKongRoutes(),
       ]);
       setPlugins(pluginsRes.data.data?.filter((p) => p.name === 'rate-limiting') || []);
       setServices(servicesRes.data.data || []);
@@ -59,7 +59,7 @@ export default function KongRateLimiting() {
   const handleCreate = async (e) => {
     e.preventDefault();
     try {
-      await superAdminApi.createKongPlugin(formData);
+      await kongApi.createKongPlugin(formData);
       setSuccess('Rate limiting policy created successfully');
       setShowCreateModal(false);
       resetForm();
@@ -72,7 +72,7 @@ export default function KongRateLimiting() {
   const handleUpdate = async (e) => {
     e.preventDefault();
     try {
-      await superAdminApi.updateKongPlugin(editingPlugin.id, formData);
+      await kongApi.updateKongPlugin(editingPlugin.id, formData);
       setSuccess('Rate limiting policy updated successfully');
       setShowEditModal(false);
       setEditingPlugin(null);
@@ -87,7 +87,7 @@ export default function KongRateLimiting() {
     if (!confirm('Are you sure you want to delete this rate limiting policy?')) return;
 
     try {
-      await superAdminApi.deleteKongPlugin(pluginId);
+      await kongApi.deleteKongPlugin(pluginId);
       setSuccess('Rate limiting policy deleted successfully');
       loadData();
     } catch (err) {

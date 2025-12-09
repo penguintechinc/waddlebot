@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { superAdminApi } from '../../../services/api';
+import { kongApi } from '../../../services/api';
 import { Plus, Edit2, Trash2, Copy } from 'lucide-react';
 
 export default function KongServices() {
@@ -28,7 +28,7 @@ export default function KongServices() {
     try {
       setLoading(true);
       setError(null);
-      const response = await superAdminApi.getKongServices({ search });
+      const response = await kongApi.getKongServices({ search });
       setServices(response.data.data || []);
     } catch (err) {
       setError(err.response?.data?.error?.message || 'Failed to load services');
@@ -40,7 +40,7 @@ export default function KongServices() {
   const handleCreate = async (e) => {
     e.preventDefault();
     try {
-      await superAdminApi.createKongService(formData);
+      await kongApi.createKongService(formData);
       setSuccess('Service created successfully');
       setShowCreateModal(false);
       resetForm();
@@ -53,7 +53,7 @@ export default function KongServices() {
   const handleUpdate = async (e) => {
     e.preventDefault();
     try {
-      await superAdminApi.updateKongService(editingService.id, formData);
+      await kongApi.updateKongService(editingService.id, formData);
       setSuccess('Service updated successfully');
       setShowEditModal(false);
       setEditingService(null);
@@ -68,7 +68,7 @@ export default function KongServices() {
     if (!confirm('Are you sure you want to delete this service? Related routes will not be deleted.')) return;
 
     try {
-      await superAdminApi.deleteKongService(serviceId);
+      await kongApi.deleteKongService(serviceId);
       setSuccess('Service deleted successfully');
       loadServices();
     } catch (err) {
