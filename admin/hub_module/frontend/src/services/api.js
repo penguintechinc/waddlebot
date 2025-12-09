@@ -194,6 +194,8 @@ export const adminApi = {
     api.get(`/api/v1/admin/${communityId}/ai-researcher/config`),
   updateAIResearcherConfig: (communityId, data) =>
     api.put(`/api/v1/admin/${communityId}/ai-researcher/config`, data),
+  getAvailableAIModels: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/ai-researcher/available-models`),
   // Bot Detection
   getBotDetections: (communityId, params) =>
     api.get(`/api/v1/admin/${communityId}/bot-detection`, { params }),
@@ -411,7 +413,7 @@ export const kongApi = {
   getKongServices: (params) => api.get('/api/v1/superadmin/kong/services', { params }),
   getKongService: (id) => api.get(`/api/v1/superadmin/kong/services/${id}`),
   createKongService: (data) => api.post('/api/v1/superadmin/kong/services', data),
-  updateKongService: (id, data) => api.put(`/api/v1/superadmin/kong/services/${id}`, data),
+  updateKongService: (id, data) => api.patch(`/api/v1/superadmin/kong/services/${id}`, data),
   deleteKongService: (id) => api.delete(`/api/v1/superadmin/kong/services/${id}`),
 
   // Routes
@@ -419,14 +421,14 @@ export const kongApi = {
   getKongRoute: (id) => api.get(`/api/v1/superadmin/kong/routes/${id}`),
   getKongServiceRoutes: (serviceId) => api.get(`/api/v1/superadmin/kong/services/${serviceId}/routes`),
   createKongRoute: (serviceId, data) => api.post(`/api/v1/superadmin/kong/services/${serviceId}/routes`, data),
-  updateKongRoute: (id, data) => api.put(`/api/v1/superadmin/kong/routes/${id}`, data),
+  updateKongRoute: (id, data) => api.patch(`/api/v1/superadmin/kong/routes/${id}`, data),
   deleteKongRoute: (id) => api.delete(`/api/v1/superadmin/kong/routes/${id}`),
 
   // Plugins
   getKongPlugins: (params) => api.get('/api/v1/superadmin/kong/plugins', { params }),
   getKongPlugin: (id) => api.get(`/api/v1/superadmin/kong/plugins/${id}`),
   createKongPlugin: (data) => api.post('/api/v1/superadmin/kong/plugins', data),
-  updateKongPlugin: (id, data) => api.put(`/api/v1/superadmin/kong/plugins/${id}`, data),
+  updateKongPlugin: (id, data) => api.patch(`/api/v1/superadmin/kong/plugins/${id}`, data),
   deleteKongPlugin: (id) => api.delete(`/api/v1/superadmin/kong/plugins/${id}`),
 
   // Consumers
@@ -439,7 +441,7 @@ export const kongApi = {
   getKongUpstreams: (params) => api.get('/api/v1/superadmin/kong/upstreams', { params }),
   getKongUpstream: (id) => api.get(`/api/v1/superadmin/kong/upstreams/${id}`),
   createKongUpstream: (data) => api.post('/api/v1/superadmin/kong/upstreams', data),
-  updateKongUpstream: (id, data) => api.put(`/api/v1/superadmin/kong/upstreams/${id}`, data),
+  updateKongUpstream: (id, data) => api.patch(`/api/v1/superadmin/kong/upstreams/${id}`, data),
   deleteKongUpstream: (id) => api.delete(`/api/v1/superadmin/kong/upstreams/${id}`),
 
   // Targets
@@ -452,6 +454,12 @@ export const kongApi = {
   getKongCertificate: (id) => api.get(`/api/v1/superadmin/kong/certificates/${id}`),
   createKongCertificate: (data) => api.post('/api/v1/superadmin/kong/certificates', data),
   deleteKongCertificate: (id) => api.delete(`/api/v1/superadmin/kong/certificates/${id}`),
+
+  // Certificate Generation
+  generateSelfSignedCertificate: (data) => api.post('/api/v1/superadmin/kong/certificates/generate/self-signed', data),
+  generateCertbotCertificate: (data) => api.post('/api/v1/superadmin/kong/certificates/generate/certbot', data),
+  renewCertbotCertificate: (domain) => api.post(`/api/v1/superadmin/kong/certificates/renew/${domain}`),
+  listCertbotCertificates: () => api.get('/api/v1/superadmin/kong/certificates/certbot/list'),
 
   // SNIs
   getKongSNIs: (params) => api.get('/api/v1/superadmin/kong/snis', { params }),

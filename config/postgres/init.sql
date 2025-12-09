@@ -591,8 +591,13 @@ CREATE TABLE IF NOT EXISTS ai_researcher_config (
     is_premium BOOLEAN DEFAULT FALSE,
 
     -- AI Provider Configuration
-    ai_provider VARCHAR(50) DEFAULT 'ollama',           -- ollama/openai/anthropic
+    ai_provider VARCHAR(50) DEFAULT 'ollama',           -- ollama/openai/anthropic/gemini
     ai_model VARCHAR(100) DEFAULT 'tinyllama',
+
+    -- Custom AI Endpoint (Premium)
+    custom_ai_endpoint VARCHAR(500),                    -- Custom endpoint URL (Azure OpenAI, private Ollama, etc.)
+    custom_api_key_encrypted TEXT,                      -- Encrypted API key for custom endpoint
+    use_custom_endpoint BOOLEAN DEFAULT FALSE,          -- Use custom endpoint instead of default
 
     -- Research Command Settings
     research_enabled BOOLEAN DEFAULT TRUE,

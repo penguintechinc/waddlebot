@@ -1,5 +1,11 @@
 // Kong Gateway management controller
 import kongClient from '../utils/kongClient.js';
+import {
+  generateSelfSignedCertificate,
+  generateCertbotCertificate,
+  renewCertbotCertificate,
+  getCertbotCertificates
+} from '../utils/certificates.js';
 
 // Services
 export const getServices = async (req, res) => {
@@ -377,6 +383,162 @@ export const deleteCertificate = async (req, res) => {
     console.error('Error deleting Kong certificate:', error);
     res.status(error.response?.status || 500).json({
       error: error.response?.data?.message || 'Failed to delete certificate'
+    });
+  }
+};
+
+// Generate self-signed certificate and upload to Kong
+export const generateSelfSigned = async (req, res) => {
+  try {
+    const {
+      commonName,
+      altNames,
+      validityDays,
+      organization,
+      country,
+      tags,
+      uploadToKong = true
+    } = req.body;
+
+    if (!commonName) {
+      return res.status(400).json({ error: 'Common name is required' });
+    }
+
+    // Generate the certificate
+    const { cert, key } = await generateSelfSignedCertificate({
+      commonName,
+      altNames,
+      validityDays,
+      organization,
+      country
+    });
+
+    // Upload to Kong if requested
+    let kongCertificate = null;
+    if (uploadToKong) {
+      const certData = {
+        cert,
+        key,
+        tags: tags || ['self-signed', commonName]
+      };
+
+      const response = await kongClient.createCertificate(certData);
+      kongCertificate = response.data;
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Self-signed certificate generated successfully',
+      certificate: uploadToKong ? kongCertificate : { cert, key },
+      uploaded: uploadToKong
+    });
+  } catch (error) {
+    console.error('Error generating self-signed certificate:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to generate self-signed certificate'
+    });
+  }
+};
+
+// Generate Let's Encrypt certificate with Certbot and upload to Kong
+export const generateCertbot = async (req, res) => {
+  try {
+    const {
+      domain,
+      altDomains,
+      email,
+      challengeType,
+      staging,
+      webroot,
+      dnsPlugin,
+      tags,
+      uploadToKong = true
+    } = req.body;
+
+    if (!domain) {
+      return res.status(400).json({ error: 'Domain is required' });
+    }
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required for Let\'s Encrypt registration' });
+    }
+
+    // Generate the certificate
+    const { cert, key, chain } = await generateCertbotCertificate({
+      domain,
+      altDomains,
+      email,
+      challengeType,
+      staging,
+      webroot,
+      dnsPlugin
+    });
+
+    // Upload to Kong if requested
+    let kongCertificate = null;
+    if (uploadToKong) {
+      const certData = {
+        cert,
+        key,
+        tags: tags || ['letsencrypt', domain, staging ? 'staging' : 'production']
+      };
+
+      const response = await kongClient.createCertificate(certData);
+      kongCertificate = response.data;
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Let\'s Encrypt certificate generated successfully',
+      certificate: uploadToKong ? kongCertificate : { cert, key, chain },
+      uploaded: uploadToKong,
+      staging
+    });
+  } catch (error) {
+    console.error('Error generating Certbot certificate:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to generate Let\'s Encrypt certificate'
+    });
+  }
+};
+
+// Renew Let's Encrypt certificate
+export const renewCertbot = async (req, res) => {
+  try {
+    const { domain } = req.params;
+
+    if (!domain) {
+      return res.status(400).json({ error: 'Domain is required' });
+    }
+
+    const result = await renewCertbotCertificate(domain);
+
+    res.json({
+      success: true,
+      message: result.message,
+      domain
+    });
+  } catch (error) {
+    console.error('Error renewing Certbot certificate:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to renew certificate'
+    });
+  }
+};
+
+// List Certbot certificates
+export const listCertbotCertificates = async (req, res) => {
+  try {
+    const certificates = await getCertbotCertificates();
+
+    res.json({
+      success: true,
+      data: certificates
+    });
+  } catch (error) {
+    console.error('Error listing Certbot certificates:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to list Certbot certificates'
     });
   }
 };

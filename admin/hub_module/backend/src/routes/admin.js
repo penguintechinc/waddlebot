@@ -190,6 +190,7 @@ router.put('/:communityId/ai-researcher/config',
   validateRequest,
   adminController.updateAIResearcherConfig
 );
+router.get('/:communityId/ai-researcher/available-models', requireCommunityAdmin, adminController.getAvailableAIModels);
 
 // Bot Detection
 router.get('/:communityId/bot-detection', requireCommunityAdmin, adminController.getBotDetectionResults);

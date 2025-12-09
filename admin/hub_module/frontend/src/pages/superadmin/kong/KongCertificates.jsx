@@ -11,7 +11,10 @@ export default function KongCertificates() {
   const [search, setSearch] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showSNIModal, setShowSNIModal] = useState(false);
+  const [showSelfSignedModal, setShowSelfSignedModal] = useState(false);
+  const [showCertbotModal, setShowCertbotModal] = useState(false);
   const [selectedCertId, setSelectedCertId] = useState(null);
+  const [generating, setGenerating] = useState(false);
   const [formData, setFormData] = useState({
     cert: '',
     key: '',
@@ -20,6 +23,24 @@ export default function KongCertificates() {
   const [sniFormData, setSNIFormData] = useState({
     name: '',
     certificate_id: '',
+  });
+  const [selfSignedFormData, setSelfSignedFormData] = useState({
+    commonName: '',
+    altNames: '',
+    validityDays: 365,
+    organization: 'WaddleBot',
+    country: 'US',
+    uploadToKong: true
+  });
+  const [certbotFormData, setCertbotFormData] = useState({
+    domain: '',
+    altDomains: '',
+    email: '',
+    challengeType: 'http',
+    staging: false,
+    webroot: '/var/www/html',
+    dnsPlugin: '',
+    uploadToKong: true
   });
 
   useEffect(() => {
@@ -114,6 +135,72 @@ export default function KongCertificates() {
     });
   };
 
+  const handleGenerateSelfSigned = async (e) => {
+    e.preventDefault();
+    setGenerating(true);
+    setError(null);
+
+    try {
+      const data = {
+        ...selfSignedFormData,
+        altNames: selfSignedFormData.altNames
+          ? selfSignedFormData.altNames.split(',').map(s => s.trim()).filter(s => s)
+          : []
+      };
+
+      const response = await kongApi.generateSelfSignedCertificate(data);
+      setSuccess(response.data.message || 'Self-signed certificate generated and uploaded successfully');
+      setShowSelfSignedModal(false);
+      setSelfSignedFormData({
+        commonName: '',
+        altNames: '',
+        validityDays: 365,
+        organization: 'WaddleBot',
+        country: 'US',
+        uploadToKong: true
+      });
+      loadData();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to generate self-signed certificate');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleGenerateCertbot = async (e) => {
+    e.preventDefault();
+    setGenerating(true);
+    setError(null);
+
+    try {
+      const data = {
+        ...certbotFormData,
+        altDomains: certbotFormData.altDomains
+          ? certbotFormData.altDomains.split(',').map(s => s.trim()).filter(s => s)
+          : []
+      };
+
+      const response = await kongApi.generateCertbotCertificate(data);
+      setSuccess(response.data.message || 'Let\'s Encrypt certificate generated and uploaded successfully');
+      setShowCertbotModal(false);
+      setCertbotFormData({
+        domain: '',
+        altDomains: '',
+        email: '',
+        challengeType: 'http',
+        staging: false,
+        webroot: '/var/www/html',
+        dnsPlugin: '',
+        uploadToKong: true
+      });
+      loadData();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to generate Let\'s Encrypt certificate');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   const getExpirationWarning = (cert) => {
     if (!cert.cert_alt_names) return null;
 
@@ -175,23 +262,39 @@ export default function KongCertificates() {
             className="w-full px-4 py-2 bg-navy-900 border border-navy-700 rounded-lg text-white focus:outline-none focus:border-sky-500"
           />
         </div>
-        <button
-          onClick={() => {
-            resetForm();
-            setShowCreateModal(true);
-          }}
-          className="flex items-center gap-2 px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white rounded-lg font-semibold transition-colors"
-        >
-          <Plus size={20} />
-          Upload Certificate
-        </button>
-        <button
-          onClick={() => setShowSNIModal(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold transition-colors"
-        >
-          <Plus size={20} />
-          Add SNI
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowSelfSignedModal(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-colors"
+          >
+            <Plus size={20} />
+            Self-Signed
+          </button>
+          <button
+            onClick={() => setShowCertbotModal(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors"
+          >
+            <Plus size={20} />
+            Let's Encrypt
+          </button>
+          <button
+            onClick={() => {
+              resetForm();
+              setShowCreateModal(true);
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white rounded-lg font-semibold transition-colors"
+          >
+            <Plus size={20} />
+            Upload
+          </button>
+          <button
+            onClick={() => setShowSNIModal(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold transition-colors"
+          >
+            <Plus size={20} />
+            Add SNI
+          </button>
+        </div>
       </div>
 
       {/* Certificates Section */}
@@ -431,6 +534,233 @@ export default function KongCertificates() {
                   className="px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white rounded-lg font-semibold transition-colors"
                 >
                   Add SNI
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Generate Self-Signed Certificate Modal */}
+      {showSelfSignedModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-navy-900 border border-navy-700 rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <h2 className="text-2xl font-bold text-green-400 mb-6">Generate Self-Signed Certificate</h2>
+            <p className="text-sm text-gray-400 mb-4">
+              Generate a self-signed SSL/TLS certificate for development and testing. Not recommended for production.
+            </p>
+            <form onSubmit={handleGenerateSelfSigned}>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">Common Name (Domain) *</label>
+                  <input
+                    type="text"
+                    value={selfSignedFormData.commonName}
+                    onChange={(e) => setSelfSignedFormData({ ...selfSignedFormData, commonName: e.target.value })}
+                    placeholder="example.com"
+                    className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-white focus:outline-none focus:border-green-500"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">Subject Alternative Names (comma-separated)</label>
+                  <input
+                    type="text"
+                    value={selfSignedFormData.altNames}
+                    onChange={(e) => setSelfSignedFormData({ ...selfSignedFormData, altNames: e.target.value })}
+                    placeholder="www.example.com, api.example.com"
+                    className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-white focus:outline-none focus:border-green-500"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">Validity (Days)</label>
+                    <input
+                      type="number"
+                      value={selfSignedFormData.validityDays}
+                      onChange={(e) => setSelfSignedFormData({ ...selfSignedFormData, validityDays: parseInt(e.target.value) })}
+                      min="1"
+                      max="3650"
+                      className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-white focus:outline-none focus:border-green-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">Country Code</label>
+                    <input
+                      type="text"
+                      value={selfSignedFormData.country}
+                      onChange={(e) => setSelfSignedFormData({ ...selfSignedFormData, country: e.target.value.toUpperCase() })}
+                      placeholder="US"
+                      maxLength="2"
+                      className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-white focus:outline-none focus:border-green-500"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">Organization</label>
+                  <input
+                    type="text"
+                    value={selfSignedFormData.organization}
+                    onChange={(e) => setSelfSignedFormData({ ...selfSignedFormData, organization: e.target.value })}
+                    placeholder="WaddleBot"
+                    className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-white focus:outline-none focus:border-green-500"
+                  />
+                </div>
+                <div>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selfSignedFormData.uploadToKong}
+                      onChange={(e) => setSelfSignedFormData({ ...selfSignedFormData, uploadToKong: e.target.checked })}
+                      className="w-4 h-4 rounded border-navy-600 text-green-500 focus:ring-green-500"
+                    />
+                    <span className="text-sm text-gray-400">Upload to Kong automatically</span>
+                  </label>
+                </div>
+              </div>
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowSelfSignedModal(false)}
+                  className="px-4 py-2 bg-navy-800 hover:bg-navy-700 text-white rounded-lg transition-colors"
+                  disabled={generating}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50"
+                  disabled={generating}
+                >
+                  {generating ? 'Generating...' : 'Generate Certificate'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Generate Certbot Certificate Modal */}
+      {showCertbotModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-navy-900 border border-navy-700 rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <h2 className="text-2xl font-bold text-blue-400 mb-6">Generate Let's Encrypt Certificate</h2>
+            <p className="text-sm text-gray-400 mb-4">
+              Generate a free, trusted SSL/TLS certificate from Let's Encrypt using Certbot ACME.
+            </p>
+            <form onSubmit={handleGenerateCertbot}>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">Primary Domain *</label>
+                  <input
+                    type="text"
+                    value={certbotFormData.domain}
+                    onChange={(e) => setCertbotFormData({ ...certbotFormData, domain: e.target.value })}
+                    placeholder="example.com"
+                    className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">Additional Domains (comma-separated)</label>
+                  <input
+                    type="text"
+                    value={certbotFormData.altDomains}
+                    onChange={(e) => setCertbotFormData({ ...certbotFormData, altDomains: e.target.value })}
+                    placeholder="www.example.com, api.example.com"
+                    className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">Email Address *</label>
+                  <input
+                    type="email"
+                    value={certbotFormData.email}
+                    onChange={(e) => setCertbotFormData({ ...certbotFormData, email: e.target.value })}
+                    placeholder="admin@example.com"
+                    className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                    required
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Used for renewal and security notices</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">Challenge Type</label>
+                  <select
+                    value={certbotFormData.challengeType}
+                    onChange={(e) => setCertbotFormData({ ...certbotFormData, challengeType: e.target.value })}
+                    className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="http">HTTP-01 (Webroot)</option>
+                    <option value="dns">DNS-01 (DNS Plugin)</option>
+                    <option value="standalone">Standalone</option>
+                  </select>
+                </div>
+                {certbotFormData.challengeType === 'http' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">Webroot Path</label>
+                    <input
+                      type="text"
+                      value={certbotFormData.webroot}
+                      onChange={(e) => setCertbotFormData({ ...certbotFormData, webroot: e.target.value })}
+                      placeholder="/var/www/html"
+                      className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                )}
+                {certbotFormData.challengeType === 'dns' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">DNS Plugin</label>
+                    <select
+                      value={certbotFormData.dnsPlugin}
+                      onChange={(e) => setCertbotFormData({ ...certbotFormData, dnsPlugin: e.target.value })}
+                      className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="">Select DNS provider</option>
+                      <option value="cloudflare">Cloudflare</option>
+                      <option value="route53">AWS Route53</option>
+                      <option value="digitalocean">DigitalOcean</option>
+                      <option value="google">Google Cloud DNS</option>
+                    </select>
+                  </div>
+                )}
+                <div>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={certbotFormData.staging}
+                      onChange={(e) => setCertbotFormData({ ...certbotFormData, staging: e.target.checked })}
+                      className="w-4 h-4 rounded border-navy-600 text-blue-500 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-400">Use Let's Encrypt staging (for testing)</span>
+                  </label>
+                </div>
+                <div>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={certbotFormData.uploadToKong}
+                      onChange={(e) => setCertbotFormData({ ...certbotFormData, uploadToKong: e.target.checked })}
+                      className="w-4 h-4 rounded border-navy-600 text-blue-500 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-400">Upload to Kong automatically</span>
+                  </label>
+                </div>
+              </div>
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowCertbotModal(false)}
+                  className="px-4 py-2 bg-navy-800 hover:bg-navy-700 text-white rounded-lg transition-colors"
+                  disabled={generating}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50"
+                  disabled={generating}
+                >
+                  {generating ? 'Generating...' : 'Generate Certificate'}
                 </button>
               </div>
             </form>

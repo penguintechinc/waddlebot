@@ -43,6 +43,7 @@ function AdminAIResearcherConfig() {
   const { communityId } = useParams();
   const { user } = useAuth();
   const [config, setConfig] = useState(null);
+  const [availableModels, setAvailableModels] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState(null);
@@ -50,6 +51,7 @@ function AdminAIResearcherConfig() {
 
   useEffect(() => {
     fetchConfig();
+    fetchAvailableModels();
   }, [communityId]);
 
   async function fetchConfig() {
@@ -68,10 +70,31 @@ function AdminAIResearcherConfig() {
     }
   }
 
+  async function fetchAvailableModels() {
+    try {
+      const response = await adminApi.getAvailableAIModels(communityId);
+      if (response.data.success) {
+        setAvailableModels(response.data.data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch available models:', err);
+      // Set defaults if fetch fails
+      setAvailableModels({
+        ollama: [
+          { id: 'tinyllama', name: 'TinyLlama', description: 'Lightweight 1.1B model' },
+          { id: 'llama3.2', name: 'Llama 3.2', description: '3B parameter model' }
+        ],
+        openai: [{ id: 'gpt-4o', name: 'GPT-4o' }],
+        anthropic: [{ id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5' }],
+        gemini: [{ id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' }]
+      });
+    }
+  }
+
   function getDefaultConfig() {
     return {
       aiProvider: 'ollama',
-      aiModel: 'llama3.2',
+      aiModel: 'tinyllama',
       researchEnabled: false,
       responseDestination: 'same_chat',
       rateLimitPerUser: 5,
@@ -211,19 +234,92 @@ function AdminAIResearcherConfig() {
               <label className="block text-sm font-medium text-navy-300 mb-2">
                 AI Model
               </label>
-              <input
-                type="text"
+              <select
                 value={config.aiModel}
                 onChange={(e) => updateConfig('aiModel', e.target.value)}
-                placeholder="e.g., llama3.2, gpt-4, claude-3.5-sonnet"
                 className="w-full px-4 py-2 bg-navy-800 border border-navy-600 rounded-lg text-sky-100 focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-              />
+              >
+                <option value="">Select a model</option>
+                {config.aiProvider && availableModels[config.aiProvider]?.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.name} {model.description && `- ${model.description}`}
+                  </option>
+                ))}
+              </select>
               <p className="text-xs text-navy-500 mt-1">
-                Specify the exact model to use for research
+                Available models for {config.aiProvider || 'selected provider'}
               </p>
             </div>
           </div>
         </div>
+
+        {/* Custom Endpoint (Premium Only) */}
+        {isPremium && config.customEndpoint !== null && (
+          <div className="card p-6 border-sky-500/30">
+            <div className="flex items-center gap-2 mb-4">
+              <h2 className="text-lg font-semibold text-sky-100">Custom AI Endpoint</h2>
+              <span className="px-2 py-1 text-xs bg-sky-500/20 text-sky-400 rounded-full">Premium</span>
+            </div>
+            <p className="text-sm text-navy-400 mb-4">
+              Configure a custom AI endpoint for enterprise deployments (Azure OpenAI, private Ollama instance, etc.)
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="flex items-center gap-2 mb-3">
+                  <input
+                    type="checkbox"
+                    checked={config.customEndpoint?.enabled || false}
+                    onChange={(e) => updateConfig('customEndpoint', {
+                      ...config.customEndpoint,
+                      enabled: e.target.checked
+                    })}
+                    className="w-4 h-4 rounded border-navy-600 text-sky-500 focus:ring-sky-500"
+                  />
+                  <span className="text-sm font-medium text-navy-300">Use custom endpoint</span>
+                </label>
+              </div>
+              {config.customEndpoint?.enabled && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-navy-300 mb-2">
+                      Endpoint URL
+                    </label>
+                    <input
+                      type="url"
+                      value={config.customEndpoint?.url || ''}
+                      onChange={(e) => updateConfig('customEndpoint', {
+                        ...config.customEndpoint,
+                        url: e.target.value
+                      })}
+                      placeholder="https://your-instance.openai.azure.com/"
+                      className="w-full px-4 py-2 bg-navy-800 border border-navy-600 rounded-lg text-sky-100 focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-navy-300 mb-2">
+                      API Key
+                    </label>
+                    <input
+                      type="password"
+                      value={config.customEndpoint?.apiKey || ''}
+                      onChange={(e) => updateConfig('customEndpoint', {
+                        ...config.customEndpoint,
+                        apiKey: e.target.value
+                      })}
+                      placeholder={config.customEndpoint?.hasApiKey ? '••••••••••••••••' : 'Enter API key'}
+                      className="w-full px-4 py-2 bg-navy-800 border border-navy-600 rounded-lg text-sky-100 focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                    />
+                    {config.customEndpoint?.hasApiKey && (
+                      <p className="text-xs text-navy-500 mt-1">
+                        Leave blank to keep existing API key
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Response Settings */}
         <div className="card p-6">

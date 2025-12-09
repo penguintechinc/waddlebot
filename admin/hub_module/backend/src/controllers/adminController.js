@@ -8,8 +8,43 @@ import { logger } from '../utils/logger.js';
 import { formatReputation, clampReputation, REPUTATION_MIN, REPUTATION_MAX } from '../utils/reputation.js';
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 
 const SALT_ROUNDS = 12;
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
+const ENCRYPTION_ALGORITHM = 'aes-256-gcm';
+
+/**
+ * Encrypt sensitive data (API keys)
+ */
+function encryptData(text) {
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  const authTag = cipher.getAuthTag();
+  return JSON.stringify({
+    iv: iv.toString('hex'),
+    data: encrypted,
+    tag: authTag.toString('hex')
+  });
+}
+
+/**
+ * Decrypt sensitive data (API keys)
+ */
+function decryptData(encrypted) {
+  const { iv, data, tag } = JSON.parse(encrypted);
+  const decipher = crypto.createDecipheriv(
+    ENCRYPTION_ALGORITHM,
+    Buffer.from(ENCRYPTION_KEY, 'hex'),
+    Buffer.from(iv, 'hex')
+  );
+  decipher.setAuthTag(Buffer.from(tag, 'hex'));
+  let decrypted = decipher.update(data, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
+}
 
 /**
  * Get community members
@@ -2046,7 +2081,8 @@ export async function getAIResearcherConfig(req, res, next) {
     const communityId = parseInt(req.params.communityId, 10);
 
     const result = await query(
-      `SELECT is_enabled, ai_provider, ai_model, stream_summary_enabled,
+      `SELECT is_enabled, ai_provider, ai_model, custom_ai_endpoint,
+              use_custom_endpoint, stream_summary_enabled,
               stream_summary_interval_hours, weekly_rollup_enabled, weekly_rollup_day,
               bot_detection_enabled, bot_detection_sensitivity, context_window_days,
               max_context_tokens, is_premium, created_at, updated_at
@@ -2091,6 +2127,11 @@ export async function getAIResearcherConfig(req, res, next) {
         isEnabled: row.is_enabled,
         aiProvider: row.ai_provider || 'ollama',
         aiModel: row.ai_model || 'tinyllama',
+        customEndpoint: row.is_premium ? {
+          url: row.custom_ai_endpoint || '',
+          enabled: row.use_custom_endpoint || false,
+          hasApiKey: !!row.custom_api_key_encrypted
+        } : null,
         streamSummary: {
           enabled: row.stream_summary_enabled,
           intervalHours: row.stream_summary_interval_hours,
@@ -2123,7 +2164,7 @@ export async function getAIResearcherConfig(req, res, next) {
 export async function updateAIResearcherConfig(req, res, next) {
   try {
     const communityId = parseInt(req.params.communityId, 10);
-    const { isEnabled, aiProvider, aiModel, streamSummary, weeklyRollup, botDetection, context } = req.body;
+    const { isEnabled, aiProvider, aiModel, customEndpoint, streamSummary, weeklyRollup, botDetection, context } = req.body;
 
     // Check if config exists and get premium status
     const existingResult = await query(
@@ -2154,6 +2195,54 @@ export async function updateAIResearcherConfig(req, res, next) {
       updates.push(`is_enabled = $${paramIndex}`);
       params.push(isEnabled);
       paramIndex++;
+    }
+
+    if (aiProvider !== undefined) {
+      const validProviders = ['ollama', 'openai', 'anthropic', 'gemini'];
+      if (!validProviders.includes(aiProvider)) {
+        return next(errors.badRequest('Invalid AI provider'));
+      }
+      updates.push(`ai_provider = $${paramIndex}`);
+      params.push(aiProvider);
+      paramIndex++;
+    }
+
+    if (aiModel !== undefined) {
+      updates.push(`ai_model = $${paramIndex}`);
+      params.push(aiModel);
+      paramIndex++;
+    }
+
+    // Custom endpoint (premium only)
+    if (customEndpoint && isPremium) {
+      if (customEndpoint.url !== undefined) {
+        updates.push(`custom_ai_endpoint = $${paramIndex}`);
+        params.push(customEndpoint.url || null);
+        paramIndex++;
+      }
+      if (customEndpoint.enabled !== undefined) {
+        updates.push(`use_custom_endpoint = $${paramIndex}`);
+        params.push(customEndpoint.enabled);
+        paramIndex++;
+      }
+      if (customEndpoint.apiKey !== undefined) {
+        if (customEndpoint.apiKey) {
+          // Encrypt and store API key
+          const encrypted = encryptData(customEndpoint.apiKey);
+          updates.push(`custom_api_key_encrypted = $${paramIndex}`);
+          params.push(encrypted);
+          paramIndex++;
+        } else {
+          // Clear API key
+          updates.push(`custom_api_key_encrypted = NULL`);
+        }
+      }
+    } else if (customEndpoint && !isPremium) {
+      return res.status(403).json({
+        success: false,
+        error: 'Custom AI endpoints require premium subscription',
+        upgradeRequired: true,
+      });
     }
 
     if (streamSummary) {
@@ -2254,6 +2343,64 @@ export async function updateAIResearcherConfig(req, res, next) {
     });
 
     res.json({ success: true, message: 'Configuration updated' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Get available AI models and providers
+ */
+export async function getAvailableAIModels(req, res, next) {
+  try {
+    const models = {
+      ollama: [],
+      openai: [
+        { id: 'gpt-4o', name: 'GPT-4o', description: 'Most capable model' },
+        { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Fast and affordable' },
+        { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', description: 'Previous generation' },
+        { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', description: 'Fast and economical' }
+      ],
+      anthropic: [
+        { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5', description: 'Most capable model' },
+        { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', description: 'Balanced performance' },
+        { id: 'claude-haiku-4-20250924', name: 'Claude Haiku 4', description: 'Fast and efficient' }
+      ],
+      gemini: [
+        { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'Fast and multimodal' },
+        { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', description: 'Most capable' },
+        { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', description: 'Fast and efficient' }
+      ]
+    };
+
+    // Fetch Ollama models if Ollama is available
+    try {
+      const ollamaUrl = process.env.OLLAMA_URL || 'http://ollama:11434';
+      const response = await fetch(`${ollamaUrl}/api/tags`);
+      if (response.ok) {
+        const data = await response.json();
+        models.ollama = data.models.map(m => ({
+          id: m.name,
+          name: m.name,
+          description: `Size: ${(m.size / 1e9).toFixed(1)}GB`,
+          modified: m.modified_at
+        }));
+      }
+    } catch (err) {
+      logger.warn('Failed to fetch Ollama models', { error: err.message });
+      // Default Ollama models if service is unavailable
+      models.ollama = [
+        { id: 'tinyllama', name: 'TinyLlama', description: 'Lightweight 1.1B model' },
+        { id: 'llama3.2', name: 'Llama 3.2', description: '3B parameter model' },
+        { id: 'llama3.1', name: 'Llama 3.1', description: '8B parameter model' },
+        { id: 'mistral', name: 'Mistral', description: '7B parameter model' }
+      ];
+    }
+
+    res.json({
+      success: true,
+      data: models
+    });
   } catch (err) {
     next(err);
   }

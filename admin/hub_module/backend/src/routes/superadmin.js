@@ -131,7 +131,14 @@ router.get('/kong/upstreams/:upstreamId/targets', kongController.getTargets);
 router.post('/kong/upstreams/:upstreamId/targets', kongController.createTarget);
 router.delete('/kong/upstreams/:upstreamId/targets/:targetId', kongController.deleteTarget);
 
-// Certificates
+// Certificates - IMPORTANT: Specific routes must come BEFORE parameterized routes
+// Certificate Generation (specific routes first)
+router.post('/kong/certificates/generate/self-signed', kongController.generateSelfSigned);
+router.post('/kong/certificates/generate/certbot', kongController.generateCertbot);
+router.post('/kong/certificates/renew/:domain', kongController.renewCertbot);
+router.get('/kong/certificates/certbot/list', kongController.listCertbotCertificates);
+
+// Certificate CRUD (parameterized routes last)
 router.get('/kong/certificates', kongController.getCertificates);
 router.get('/kong/certificates/:id', kongController.getCertificate);
 router.post('/kong/certificates', kongController.createCertificate);
