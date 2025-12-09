@@ -61,7 +61,7 @@ export default function AdminAnnouncements() {
         status: filter !== 'all' ? filter : undefined,
         limit: 20,
       });
-      setAnnouncements(response.data.announcements || []);
+      setAnnouncements(response.data.data || []);
       setTotalPages(response.data.pagination?.totalPages || 1);
       setConnectedPlatforms(response.data.connectedPlatforms || []);
     } catch (err) {
