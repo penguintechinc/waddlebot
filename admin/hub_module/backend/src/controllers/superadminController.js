@@ -5,6 +5,9 @@ import { query, transaction } from '../config/database.js';
 import { errors } from '../middleware/errorHandler.js';
 import { logger } from '../utils/logger.js';
 
+// Valid community types for validation
+const VALID_COMMUNITY_TYPES = ['shared_interest_group', 'gaming', 'creator', 'corporate', 'other'];
+
 /**
  * List all communities with pagination and filtering
  */
@@ -47,7 +50,7 @@ export async function listCommunities(req, res, next) {
 
     const result = await query(
       `SELECT id, name, display_name, description, platform, platform_server_id,
-              owner_id, owner_name, member_count, is_active, is_public, created_at, updated_at
+              owner_id, owner_name, member_count, is_active, is_public, community_type, created_at, updated_at
        FROM communities
        ${whereClause}
        ORDER BY created_at DESC
@@ -67,6 +70,7 @@ export async function listCommunities(req, res, next) {
       memberCount: row.member_count || 0,
       isActive: row.is_active,
       isPublic: row.is_public,
+      communityType: row.community_type || 'creator',
       createdAt: row.created_at?.toISOString(),
       updatedAt: row.updated_at?.toISOString(),
     }));
@@ -90,7 +94,7 @@ export async function getCommunity(req, res, next) {
 
     const result = await query(
       `SELECT id, name, display_name, description, platform, platform_server_id,
-              owner_id, owner_name, member_count, is_active, is_public, config,
+              owner_id, owner_name, member_count, is_active, is_public, community_type, config,
               created_at, updated_at
        FROM communities WHERE id = $1`,
       [communityId]
@@ -115,6 +119,7 @@ export async function getCommunity(req, res, next) {
         memberCount: row.member_count || 0,
         isActive: row.is_active,
         isPublic: row.is_public,
+        communityType: row.community_type || 'creator',
         config: row.config,
         createdAt: row.created_at?.toISOString(),
         updatedAt: row.updated_at?.toISOString(),
@@ -130,10 +135,16 @@ export async function getCommunity(req, res, next) {
  */
 export async function createCommunity(req, res, next) {
   try {
-    const { name, displayName, description, platform, platformServerId, ownerId, ownerName, isPublic } = req.body;
+    const { name, displayName, description, platform, platformServerId, ownerId, ownerName, isPublic, communityType } = req.body;
 
     if (!name || !platform) {
       return next(errors.badRequest('Name and platform are required'));
+    }
+
+    // Validate community type (default to 'creator' if not provided)
+    const validatedCommunityType = communityType || 'creator';
+    if (!VALID_COMMUNITY_TYPES.includes(validatedCommunityType)) {
+      return next(errors.badRequest(`Invalid community type. Must be one of: ${VALID_COMMUNITY_TYPES.join(', ')}`));
     }
 
     // Validate ownerId is a number if provided
@@ -162,9 +173,9 @@ export async function createCommunity(req, res, next) {
       // Create the community
       const communityResult = await client.query(
         `INSERT INTO communities
-         (name, display_name, description, platform, platform_server_id, owner_id, owner_name, is_public, member_count, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9)
-         RETURNING id, name, display_name, platform, created_at`,
+         (name, display_name, description, platform, platform_server_id, owner_id, owner_name, is_public, community_type, member_count, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10)
+         RETURNING id, name, display_name, platform, community_type, created_at`,
         [
           name.toLowerCase().replace(/\s+/g, '-'),
           displayName || name,
@@ -174,6 +185,7 @@ export async function createCommunity(req, res, next) {
           finalOwnerId,
           finalOwnerName,
           isPublic !== false,
+          validatedCommunityType,
           req.user.id,
         ]
       );
@@ -198,6 +210,7 @@ export async function createCommunity(req, res, next) {
       adminId: req.user.id,
       communityId: result.id,
       name: result.name,
+      communityType: result.community_type,
     });
 
     res.status(201).json({
@@ -207,6 +220,7 @@ export async function createCommunity(req, res, next) {
         name: result.name,
         displayName: result.display_name,
         platform: result.platform,
+        communityType: result.community_type,
         createdAt: result.created_at?.toISOString(),
       },
     });
@@ -221,7 +235,7 @@ export async function createCommunity(req, res, next) {
 export async function updateCommunity(req, res, next) {
   try {
     const communityId = parseInt(req.params.id, 10);
-    const { displayName, description, ownerId, ownerName, isActive, isPublic, platform, platformServerId } = req.body;
+    const { displayName, description, ownerId, ownerName, isActive, isPublic, platform, platformServerId, communityType } = req.body;
 
     // Check community exists
     const existingResult = await query(
@@ -231,6 +245,11 @@ export async function updateCommunity(req, res, next) {
 
     if (existingResult.rows.length === 0) {
       return next(errors.notFound('Community not found'));
+    }
+
+    // Validate community type if provided
+    if (communityType !== undefined && !VALID_COMMUNITY_TYPES.includes(communityType)) {
+      return next(errors.badRequest(`Invalid community type. Must be one of: ${VALID_COMMUNITY_TYPES.join(', ')}`));
     }
 
     const updates = [];
@@ -268,6 +287,10 @@ export async function updateCommunity(req, res, next) {
     if (platformServerId !== undefined) {
       updates.push(`platform_server_id = $${paramIndex++}`);
       params.push(platformServerId);
+    }
+    if (communityType !== undefined) {
+      updates.push(`community_type = $${paramIndex++}`);
+      params.push(communityType);
     }
 
     if (updates.length === 0) {

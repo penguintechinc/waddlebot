@@ -57,7 +57,7 @@ export async function getCommunityDashboard(req, res, next) {
     // Get community details
     const communityResult = await query(
       `SELECT id, name, display_name, description, config,
-              platform, member_count, created_at
+              platform, community_type, member_count, created_at
        FROM communities
        WHERE id = $1 AND is_active = true`,
       [communityId]
@@ -137,6 +137,7 @@ export async function getCommunityDashboard(req, res, next) {
         logoUrl: community.config?.logo_url || null,
         bannerUrl: community.config?.banner_url || null,
         platform: community.platform,
+        communityType: community.community_type || 'creator',
         memberCount: community.member_count || 0,
         createdAt: community.created_at?.toISOString(),
       },
@@ -974,7 +975,6 @@ export async function cancelServerLinkRequest(req, res, next) {
     next(err);
   }
 }
-<<<<<<< HEAD
 
 /**
  * Get connected platforms for a community
@@ -1007,5 +1007,3 @@ export async function getConnectedPlatforms(req, res, next) {
     next(err);
   }
 }
-=======
->>>>>>> origin/main

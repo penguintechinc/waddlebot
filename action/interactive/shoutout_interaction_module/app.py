@@ -2,10 +2,12 @@
 Shoutout Interaction Module
 
 Generates platform-aware shoutouts with Twitch API integration.
+Includes video shoutouts (!vso) with cross-platform fallback.
 """
 import asyncio
 import os
 import sys
+from dataclasses import asdict
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'libs'))
 
@@ -22,6 +24,9 @@ from flask_core import (  # noqa: E402
 from config import Config  # noqa: E402
 from services.twitch_service import TwitchService  # noqa: E402
 from services.shoutout_service import ShoutoutService  # noqa: E402
+from services.video_service import VideoService  # noqa: E402
+from services.identity_service import IdentityService  # noqa: E402
+from services.video_shoutout_service import VideoShoutoutService  # noqa: E402
 
 app = Quart(__name__)
 
@@ -33,17 +38,26 @@ api_bp = Blueprint('api', __name__, url_prefix='/api/v1')
 logger = setup_aaa_logging(Config.MODULE_NAME, Config.MODULE_VERSION)
 
 dal = None
+db_pool = None
 twitch_service = None
 shoutout_service = None
+video_service = None
+identity_service = None
+video_shoutout_service = None
 
 
 @app.before_serving
 async def startup():
-    global dal, twitch_service, shoutout_service
+    global dal, db_pool, twitch_service, shoutout_service
+    global video_service, identity_service, video_shoutout_service
     logger.system("Starting shoutout_interaction_module", action="startup")
 
     dal = init_database(Config.DATABASE_URL)
     app.config['dal'] = dal
+
+    # Create asyncpg pool for video shoutout service
+    import asyncpg
+    db_pool = await asyncpg.create_pool(Config.DATABASE_URL)
 
     # Initialize Twitch service
     twitch_service = TwitchService(
@@ -53,6 +67,19 @@ async def startup():
 
     # Initialize shoutout service
     shoutout_service = ShoutoutService(dal)
+
+    # Initialize video services
+    video_service = VideoService(
+        twitch_client_id=Config.TWITCH_CLIENT_ID,
+        twitch_client_secret=Config.TWITCH_CLIENT_SECRET,
+        youtube_api_key=Config.YOUTUBE_API_KEY
+    )
+    identity_service = IdentityService(Config.IDENTITY_URL)
+    video_shoutout_service = VideoShoutoutService(
+        db_pool=db_pool,
+        video_service=video_service,
+        identity_service=identity_service
+    )
 
     logger.system("shoutout_interaction_module started", result="SUCCESS")
 
@@ -266,6 +293,348 @@ async def circuit_breaker_metrics():
 
     except Exception as e:
         logger.error(f"Failed to get metrics: {e}")
+        return error_response(str(e), status_code=500)
+
+
+# =====================================================
+# VIDEO SHOUTOUT ENDPOINTS (!vso / /vso)
+# =====================================================
+
+@api_bp.route('/video-shoutout', methods=['POST'])
+@async_endpoint
+async def execute_video_shoutout():
+    """
+    Execute a video shoutout (!vso command).
+
+    Request JSON:
+    {
+        "community_id": 123,
+        "target_username": "streamer_name",
+        "target_platform": "twitch",
+        "triggered_by_user_id": "123456",
+        "triggered_by_username": "mod_name",
+        "user_roles": ["mod", "vip"]
+    }
+
+    Returns video info for overlay display.
+    """
+    try:
+        data = await request.get_json()
+
+        community_id = data.get('community_id')
+        target_username = data.get('target_username')
+        target_platform = data.get('target_platform', 'twitch')
+        triggered_by_user_id = data.get('triggered_by_user_id')
+        triggered_by_username = data.get('triggered_by_username')
+        user_roles = data.get('user_roles', [])
+
+        if not community_id or not target_username:
+            return error_response(
+                "community_id and target_username required",
+                status_code=400
+            )
+
+        logger.audit(
+            action="video_shoutout",
+            community=community_id,
+            target_user=target_username,
+            triggered_by=triggered_by_username,
+            result="STARTED"
+        )
+
+        result = await video_shoutout_service.execute_video_shoutout(
+            community_id=community_id,
+            target_username=target_username,
+            target_platform=target_platform,
+            trigger_type='manual',
+            triggered_by_user_id=triggered_by_user_id,
+            triggered_by_username=triggered_by_username,
+            user_roles=user_roles
+        )
+
+        if not result.success:
+            logger.audit(
+                action="video_shoutout",
+                community=community_id,
+                target_user=target_username,
+                result="FAILED",
+                error=result.error
+            )
+            return error_response(result.error, status_code=400)
+
+        logger.audit(
+            action="video_shoutout",
+            community=community_id,
+            target_user=target_username,
+            result="SUCCESS"
+        )
+
+        # Build response with video and channel info
+        response_data = {
+            'success': True,
+            'video': asdict(result.video) if result.video else None,
+            'channel': asdict(result.channel) if result.channel else None,
+            'game_name': result.game_name,
+            'is_live': result.is_live
+        }
+
+        return success_response(response_data)
+
+    except Exception as e:
+        logger.error(f"Video shoutout failed: {e}")
+        return error_response(str(e), status_code=500)
+
+
+@api_bp.route('/video-shoutout/auto-check', methods=['POST'])
+@async_endpoint
+async def check_auto_shoutout():
+    """
+    Check if user is eligible for auto-shoutout.
+
+    Request JSON:
+    {
+        "community_id": 123,
+        "platform": "twitch",
+        "user_id": "123456",
+        "user_roles": ["vip"],
+        "trigger_type": "first_message"
+    }
+
+    Returns eligibility status.
+    """
+    try:
+        data = await request.get_json()
+
+        community_id = data.get('community_id')
+        platform = data.get('platform')
+        user_id = data.get('user_id')
+        user_roles = data.get('user_roles', [])
+        trigger_type = data.get('trigger_type', 'first_message')
+
+        if not all([community_id, platform, user_id]):
+            return error_response(
+                "community_id, platform, and user_id required",
+                status_code=400
+            )
+
+        eligible = await video_shoutout_service.check_auto_shoutout_eligible(
+            community_id=community_id,
+            platform=platform,
+            user_id=user_id,
+            user_roles=user_roles,
+            trigger_type=trigger_type
+        )
+
+        return success_response({'eligible': eligible})
+
+    except Exception as e:
+        logger.error(f"Auto-shoutout check failed: {e}")
+        return error_response(str(e), status_code=500)
+
+
+@api_bp.route('/video-shoutout/config/<int:community_id>', methods=['GET'])
+@auth_required
+@async_endpoint
+async def get_vso_config(community_id: int):
+    """Get video shoutout configuration for a community"""
+    try:
+        # Check community eligibility
+        eligible = await video_shoutout_service.check_community_eligible(
+            community_id
+        )
+        if not eligible:
+            return error_response(
+                "Shoutouts not available for this community type",
+                status_code=403
+            )
+
+        config = await video_shoutout_service.get_config(community_id)
+        return success_response(asdict(config) if config else {})
+
+    except Exception as e:
+        logger.error(f"Failed to get config: {e}")
+        return error_response(str(e), status_code=500)
+
+
+@api_bp.route('/video-shoutout/config/<int:community_id>', methods=['PUT'])
+@auth_required
+@async_endpoint
+async def update_vso_config(community_id: int):
+    """Update video shoutout configuration"""
+    try:
+        data = await request.get_json()
+
+        success = await video_shoutout_service.update_config(community_id, data)
+
+        if success:
+            logger.audit(
+                action="update_vso_config",
+                community=community_id,
+                result="SUCCESS"
+            )
+            return success_response({'message': 'Configuration updated'})
+        else:
+            return error_response(
+                "Shoutouts not available for this community type",
+                status_code=403
+            )
+
+    except Exception as e:
+        logger.error(f"Failed to update config: {e}")
+        return error_response(str(e), status_code=500)
+
+
+@api_bp.route('/video-shoutout/creators/<int:community_id>', methods=['GET'])
+@auth_required
+@async_endpoint
+async def get_creators(community_id: int):
+    """Get auto-shoutout creator list"""
+    try:
+        creators = await video_shoutout_service.get_creators(community_id)
+        return success_response({'creators': creators})
+
+    except Exception as e:
+        logger.error(f"Failed to get creators: {e}")
+        return error_response(str(e), status_code=500)
+
+
+@api_bp.route('/video-shoutout/creators/<int:community_id>', methods=['POST'])
+@auth_required
+@async_endpoint
+async def add_creator(community_id: int):
+    """
+    Add creator to auto-shoutout list.
+
+    Request JSON:
+    {
+        "platform": "twitch",
+        "user_id": "123456",
+        "username": "streamer_name",
+        "custom_trigger": "default"
+    }
+    """
+    try:
+        data = await request.get_json()
+
+        platform = data.get('platform')
+        user_id = data.get('user_id')
+        username = data.get('username')
+        custom_trigger = data.get('custom_trigger', 'default')
+
+        if not all([platform, user_id, username]):
+            return error_response(
+                "platform, user_id, and username required",
+                status_code=400
+            )
+
+        success = await video_shoutout_service.add_creator(
+            community_id=community_id,
+            platform=platform,
+            user_id=user_id,
+            username=username,
+            custom_trigger=custom_trigger
+        )
+
+        if success:
+            logger.audit(
+                action="add_creator",
+                community=community_id,
+                creator=username,
+                result="SUCCESS"
+            )
+            return success_response({'message': 'Creator added'})
+        else:
+            return error_response("Failed to add creator", status_code=500)
+
+    except Exception as e:
+        logger.error(f"Failed to add creator: {e}")
+        return error_response(str(e), status_code=500)
+
+
+@api_bp.route('/video-shoutout/creators/<int:community_id>/<platform>/<user_id>',
+              methods=['DELETE'])
+@auth_required
+@async_endpoint
+async def remove_creator(community_id: int, platform: str, user_id: str):
+    """Remove creator from auto-shoutout list"""
+    try:
+        success = await video_shoutout_service.remove_creator(
+            community_id=community_id,
+            platform=platform,
+            user_id=user_id
+        )
+
+        if success:
+            logger.audit(
+                action="remove_creator",
+                community=community_id,
+                platform=platform,
+                user_id=user_id,
+                result="SUCCESS"
+            )
+            return success_response({'message': 'Creator removed'})
+        else:
+            return error_response("Creator not found", status_code=404)
+
+    except Exception as e:
+        logger.error(f"Failed to remove creator: {e}")
+        return error_response(str(e), status_code=500)
+
+
+@api_bp.route('/video-shoutout/history/<int:community_id>', methods=['GET'])
+@auth_required
+@async_endpoint
+async def get_vso_history(community_id: int):
+    """Get video shoutout history for community"""
+    try:
+        limit = int(request.args.get('limit', 50))
+        offset = int(request.args.get('offset', 0))
+
+        history = await video_shoutout_service.get_history(
+            community_id=community_id,
+            limit=limit,
+            offset=offset
+        )
+
+        return success_response({
+            'history': history,
+            'count': len(history)
+        })
+
+    except Exception as e:
+        logger.error(f"Failed to get VSO history: {e}")
+        return error_response(str(e), status_code=500)
+
+
+@api_bp.route('/video-shoutout/video/<platform>/<username>', methods=['GET'])
+@auth_required
+@async_endpoint
+async def get_video_content(platform: str, username: str):
+    """
+    Get video content for a user.
+
+    For testing/preview of video shoutout content.
+    """
+    try:
+        result = await video_service.get_video_for_shoutout(
+            platform=platform,
+            username=username
+        )
+
+        if not result:
+            return error_response("No video content found", status_code=404)
+
+        response_data = {
+            'video': asdict(result['video']) if result.get('video') else None,
+            'channel': asdict(result['channel']) if result.get('channel') else None,
+            'game_name': result.get('game_name'),
+            'is_live': result.get('is_live', False)
+        }
+
+        return success_response(response_data)
+
+    except Exception as e:
+        logger.error(f"Failed to get video content: {e}")
         return error_response(str(e), status_code=500)
 
 

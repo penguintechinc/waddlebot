@@ -317,6 +317,19 @@ export const adminApi = {
     api.get(`/api/v1/admin/${communityId}/security/warnings`, { params }),
   getSecurityModerationLog: (communityId, params) =>
     api.get(`/api/v1/admin/${communityId}/security/moderation-log`, { params }),
+  // Shoutout configuration
+  getShoutoutConfig: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/shoutout/config`),
+  updateShoutoutConfig: (communityId, data) =>
+    api.put(`/api/v1/admin/${communityId}/shoutout/config`, data),
+  getShoutoutCreators: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/shoutout/creators`),
+  addShoutoutCreator: (communityId, data) =>
+    api.post(`/api/v1/admin/${communityId}/shoutout/creators`, data),
+  removeShoutoutCreator: (communityId, creatorId) =>
+    api.delete(`/api/v1/admin/${communityId}/shoutout/creators/${creatorId}`),
+  getShoutoutHistory: (communityId, params) =>
+    api.get(`/api/v1/admin/${communityId}/shoutout/history`, { params }),
 };
 
 export const platformApi = {

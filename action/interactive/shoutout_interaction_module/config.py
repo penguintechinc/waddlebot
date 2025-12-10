@@ -12,9 +12,17 @@ class Config:
     DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://waddlebot:password@localhost:5432/waddlebot')
     CORE_API_URL = os.getenv('CORE_API_URL', 'http://router-service:8000')
     ROUTER_API_URL = os.getenv('ROUTER_API_URL', 'http://router-service:8000/api/v1/router')
+    IDENTITY_URL = os.getenv('IDENTITY_URL', 'http://identity-core:8050')
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
     SECRET_KEY = os.getenv('SECRET_KEY', 'change-me-in-production')
 
     # Twitch API credentials
     TWITCH_CLIENT_ID = os.getenv('TWITCH_CLIENT_ID', '')
     TWITCH_CLIENT_SECRET = os.getenv('TWITCH_CLIENT_SECRET', '')
+
+    # YouTube API credentials
+    YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY', '')
+
+    # Video shoutout settings
+    VIDEO_SHOUTOUT_DEFAULT_DURATION = int(os.getenv('VIDEO_SHOUTOUT_DEFAULT_DURATION', '30'))
+    VIDEO_SHOUTOUT_DEFAULT_COOLDOWN = int(os.getenv('VIDEO_SHOUTOUT_DEFAULT_COOLDOWN', '60'))

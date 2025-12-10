@@ -13,7 +13,17 @@ function SuperAdminCreateCommunity() {
     ownerId: '',
     ownerName: '',
     isPublic: true,
+    communityType: 'creator',
   });
+
+  // Community type options with icons
+  const communityTypes = [
+    { value: 'creator', label: 'Creator', icon: '🎬', description: 'Content creators, streamers, YouTubers' },
+    { value: 'gaming', label: 'Gaming', icon: '🎮', description: 'Gaming communities, esports teams' },
+    { value: 'shared_interest_group', label: 'Shared Interest', icon: '👥', description: 'Hobby groups, fan communities' },
+    { value: 'corporate', label: 'Corporate', icon: '🏢', description: 'Business, professional organizations' },
+    { value: 'other', label: 'Other', icon: '📌', description: 'Other community types' },
+  ];
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -110,6 +120,31 @@ function SuperAdminCreateCommunity() {
                 rows={3}
                 placeholder="A brief description of this community..."
               />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-sky-200 mb-1">
+                Community Type *
+                <span className="text-navy-400 font-normal ml-2">
+                  (determines available features)
+                </span>
+              </label>
+              <select
+                name="communityType"
+                value={form.communityType}
+                onChange={handleChange}
+                className="input w-full"
+                required
+              >
+                {communityTypes.map(type => (
+                  <option key={type.value} value={type.value}>
+                    {type.icon} {type.label} - {type.description}
+                  </option>
+                ))}
+              </select>
+              <p className="text-sm text-navy-400 mt-1">
+                Note: Shoutout features are only available for Creator and Gaming communities.
+              </p>
             </div>
           </div>
 

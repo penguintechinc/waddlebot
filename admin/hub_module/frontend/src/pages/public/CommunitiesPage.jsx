@@ -1,18 +1,31 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { publicApi } from '../../services/api';
+import CommunityTypeBadge, { communityTypeConfig } from '../../components/CommunityTypeBadge';
 
 function CommunitiesPage() {
   const [communities, setCommunities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState(null);
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+
+  // Debounce search
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     async function fetchCommunities() {
       setLoading(true);
       try {
-        const response = await publicApi.getCommunities({ page, limit: 12 });
+        const params = { page, limit: 12 };
+        if (debouncedSearch) params.search = debouncedSearch;
+        if (typeFilter) params.type = typeFilter;
+        const response = await publicApi.getCommunities(params);
         setCommunities(response.data.communities);
         setPagination(response.data.pagination);
       } catch (err) {
@@ -22,7 +35,12 @@ function CommunitiesPage() {
       }
     }
     fetchCommunities();
-  }, [page]);
+  }, [page, debouncedSearch, typeFilter]);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, typeFilter]);
 
   const platformIcon = (platform) => {
     switch (platform) {
@@ -33,11 +51,45 @@ function CommunitiesPage() {
     }
   };
 
+  const typeFilterOptions = [
+    { value: '', label: 'All Types' },
+    ...Object.entries(communityTypeConfig).map(([value, config]) => ({
+      value,
+      label: `${config.icon} ${config.label}`,
+    })),
+  ];
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-      <div className="text-center mb-12">
+      <div className="text-center mb-8">
         <h1 className="text-3xl font-bold mb-4 gradient-text">Discover Communities</h1>
         <p className="text-navy-400">Browse public communities using WaddleBot</p>
+      </div>
+
+      {/* Search and Filter */}
+      <div className="flex flex-col sm:flex-row gap-4 mb-8 max-w-2xl mx-auto">
+        <div className="flex-1">
+          <input
+            type="text"
+            placeholder="Search communities..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="input w-full"
+          />
+        </div>
+        <div className="sm:w-48">
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className="input w-full"
+          >
+            {typeFilterOptions.map(option => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {loading ? (
@@ -65,15 +117,23 @@ function CommunitiesPage() {
                   )}
                 </div>
                 <div className="p-4">
-                  <div className="flex items-center space-x-2 mb-1">
-                    <span>{platformIcon(community.primaryPlatform)}</span>
-                    <h3 className="font-semibold truncate text-sky-100">{community.displayName}</h3>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center space-x-2 min-w-0">
+                      <span>{platformIcon(community.primaryPlatform)}</span>
+                      <h3 className="font-semibold truncate text-sky-100">{community.displayName}</h3>
+                    </div>
+                    {community.communityType && (
+                      <CommunityTypeBadge type={community.communityType} size="sm" showLabel={false} />
+                    )}
                   </div>
                   <p className="text-sm text-navy-400 line-clamp-2">
                     {community.description || 'No description'}
                   </p>
-                  <div className="mt-3 text-xs text-navy-500">
-                    {community.memberCount} members
+                  <div className="mt-3 flex items-center justify-between text-xs text-navy-500">
+                    <span>{community.memberCount} members</span>
+                    {community.communityType && (
+                      <span className="text-navy-400">{communityTypeConfig[community.communityType]?.label}</span>
+                    )}
                   </div>
                 </div>
               </Link>

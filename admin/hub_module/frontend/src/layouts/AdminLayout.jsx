@@ -22,6 +22,7 @@ import {
   MegaphoneIcon,
   FireIcon,
   CommandLineIcon,
+  SpeakerWaveIcon,
 } from '@heroicons/react/24/outline';
 
 function AdminLayout() {
@@ -49,6 +50,7 @@ function AdminLayout() {
         { to: `/admin/${communityId}/browser-sources`, icon: ComputerDesktopIcon, label: 'Browser Sources' },
         { to: `/admin/${communityId}/domains`, icon: GlobeAltIcon, label: 'Custom Domains' },
         { to: `/admin/${communityId}/overlays`, icon: WindowIcon, label: 'Overlays' },
+        { to: `/admin/${communityId}/shoutouts`, icon: SpeakerWaveIcon, label: 'Shoutouts' },
         { to: `/admin/${communityId}/loyalty`, icon: CurrencyDollarIcon, label: 'Loyalty System' },
       ]
     : [];

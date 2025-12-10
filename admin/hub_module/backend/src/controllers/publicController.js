@@ -14,22 +14,7 @@ export async function getStats(req, res, next) {
       'SELECT COUNT(*) as count FROM communities WHERE is_active = true'
     );
 
-<<<<<<< HEAD
     // Initialize stats with defaults
-=======
-    // Get platform counts from coordination table
-    const platformResult = await query(`
-      SELECT
-        platform,
-        COUNT(DISTINCT server_id) as servers,
-        COUNT(*) as channels,
-        SUM(CASE WHEN is_live = true THEN 1 ELSE 0 END) as live,
-        SUM(CASE WHEN is_live = true THEN viewer_count ELSE 0 END) as viewers
-      FROM coordination
-      GROUP BY platform
-    `);
-
->>>>>>> origin/main
     const stats = {
       communities: parseInt(communitiesResult.rows[0]?.count || 0, 10),
       discord: { servers: 0, channels: 0 },
@@ -37,7 +22,6 @@ export async function getStats(req, res, next) {
       slack: { workspaces: 0, channels: 0 },
     };
 
-<<<<<<< HEAD
     // Try to get platform counts from coordination table
     // This may fail if the table doesn't exist or has wrong schema
     try {
@@ -80,30 +64,6 @@ export async function getStats(req, res, next) {
       // Log the error but return stats with zeros instead of failing
       console.error('Failed to fetch coordination stats:', coordErr.message);
       // Stats already initialized with zeros above
-=======
-    for (const row of platformResult.rows) {
-      switch (row.platform) {
-        case 'discord':
-          stats.discord = {
-            servers: parseInt(row.servers || 0, 10),
-            channels: parseInt(row.channels || 0, 10),
-          };
-          break;
-        case 'twitch':
-          stats.twitch = {
-            channels: parseInt(row.channels || 0, 10),
-            live: parseInt(row.live || 0, 10),
-            viewers: parseInt(row.viewers || 0, 10),
-          };
-          break;
-        case 'slack':
-          stats.slack = {
-            workspaces: parseInt(row.servers || 0, 10),
-            channels: parseInt(row.channels || 0, 10),
-          };
-          break;
-      }
->>>>>>> origin/main
     }
 
     res.json({ success: true, stats });
@@ -112,30 +72,55 @@ export async function getStats(req, res, next) {
   }
 }
 
+// Valid community types for validation
+const VALID_COMMUNITY_TYPES = ['shared_interest_group', 'gaming', 'creator', 'corporate', 'other'];
+
 /**
- * List public communities
+ * List public communities with optional search and type filter
  */
 export async function getCommunities(req, res, next) {
   try {
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '12', 10)));
     const offset = (page - 1) * limit;
+    const search = req.query.search || '';
+    const typeFilter = req.query.type || '';
 
-    // Get total count
+    // Build WHERE clause
+    let whereClause = 'WHERE is_active = true AND is_public = true';
+    const params = [];
+    let paramIndex = 1;
+
+    // Add search filter
+    if (search) {
+      whereClause += ` AND (name ILIKE $${paramIndex} OR display_name ILIKE $${paramIndex} OR description ILIKE $${paramIndex})`;
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    // Add type filter (validate against allowed types)
+    if (typeFilter && VALID_COMMUNITY_TYPES.includes(typeFilter)) {
+      whereClause += ` AND community_type = $${paramIndex}`;
+      params.push(typeFilter);
+      paramIndex++;
+    }
+
+    // Get total count with filters
     const countResult = await query(
-      'SELECT COUNT(*) as count FROM communities WHERE is_active = true AND is_public = true'
+      `SELECT COUNT(*) as count FROM communities ${whereClause}`,
+      params
     );
     const total = parseInt(countResult.rows[0]?.count || 0, 10);
 
-    // Get communities
+    // Get communities with filters
     const result = await query(`
-      SELECT id, name, display_name, description, platform,
-             member_count, config, created_at
+      SELECT id, name, display_name, description, platform, platform_server_id,
+             member_count, config, community_type, created_at
       FROM communities
-      WHERE is_active = true AND is_public = true
+      ${whereClause}
       ORDER BY member_count DESC, name ASC
-      LIMIT $1 OFFSET $2
-    `, [limit, offset]);
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `, [...params, limit, offset]);
 
     const communities = result.rows.map(row => ({
       id: row.id,
@@ -143,8 +128,10 @@ export async function getCommunities(req, res, next) {
       displayName: row.display_name || row.name,
       description: row.description,
       logoUrl: row.config?.logo_url || null,
-      platform: row.platform,
+      primaryPlatform: row.platform,
+      platformServerId: row.platform_server_id,
       memberCount: row.member_count || 0,
+      communityType: row.community_type || 'creator',
       createdAt: row.created_at?.toISOString(),
     }));
 
@@ -176,7 +163,7 @@ export async function getCommunity(req, res, next) {
 
     const result = await query(`
       SELECT id, name, display_name, description, platform,
-             member_count, config, join_mode, created_at
+             member_count, config, join_mode, community_type, created_at
       FROM communities
       WHERE id = $1 AND is_active = true AND is_public = true
     `, [communityId]);
@@ -195,9 +182,10 @@ export async function getCommunity(req, res, next) {
         description: row.description,
         logoUrl: row.config?.logo_url || null,
         bannerUrl: row.config?.banner_url || null,
-        platform: row.platform,
+        primaryPlatform: row.platform,
         memberCount: row.member_count || 0,
         joinMode: row.join_mode || 'open',
+        communityType: row.community_type || 'creator',
         createdAt: row.created_at?.toISOString(),
       },
     });
@@ -291,7 +279,6 @@ export async function getSignupSettings(req, res, next) {
        WHERE setting_key IN ('signup_enabled', 'email_configured', 'signup_allowed_domains')`
     );
 
-<<<<<<< HEAD
     // Build settings object with defaults
     const settings = {
       signup_enabled: 'true',
@@ -300,9 +287,6 @@ export async function getSignupSettings(req, res, next) {
     };
 
     // Override with database values if they exist
-=======
-    const settings = {};
->>>>>>> origin/main
     for (const row of result.rows) {
       settings[row.setting_key] = row.setting_value;
     }
