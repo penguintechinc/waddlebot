@@ -403,8 +403,7 @@ fi
 # Test: Get signup settings
 print_test "GET /api/v1/public/signup-settings"
 if response=$(api_call GET /api/v1/public/signup-settings "" 200 false); then
-    if echo "$response" | jq -e '.data' > /dev/null 2>&1 || \
-       echo "$response" | jq -e '.signupEnabled' > /dev/null 2>&1; then
+    if echo "$response" | jq -e 'has("data") or has("signupEnabled")' > /dev/null 2>&1; then
         print_pass "Get signup settings successful"
     else
         print_fail "Get signup settings returned unexpected response"
@@ -721,8 +720,7 @@ if [ -n "$COMMUNITY_ID" ]; then
     # Test: Get reputation leaderboard
     print_test "GET /api/v1/admin/$COMMUNITY_ID/reputation/leaderboard"
     if response=$(api_call GET "/api/v1/admin/$COMMUNITY_ID/reputation/leaderboard?limit=10" "" 200 true 2>/dev/null); then
-        if echo "$response" | jq -e '.users' > /dev/null 2>&1 || \
-           echo "$response" | jq -e '.data' > /dev/null 2>&1; then
+        if echo "$response" | jq -e 'has("users") or has("data")' > /dev/null 2>&1; then
             print_pass "Get reputation leaderboard successful"
         else
             print_fail "Get reputation leaderboard returned unexpected response"
