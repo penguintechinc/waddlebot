@@ -1,0 +1,124 @@
+# Pre-commit hooks for security scanning and code quality
+# Install: pip install pre-commit
+# Setup: pre-commit install
+# Run: pre-commit run --all-files
+
+repos:
+  # Detect secrets and credentials
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: package.lock.json
+
+  # Python security scanning with bandit
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        args: ['-ll', '-i']
+        types: [python]
+        exclude: ^(tests/|.venv)
+
+  # Credential pattern detection
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      # Detect private keys
+      - id: detect-private-key
+        exclude: |
+          (?x)^(
+            \.git/|
+            \.venv/|
+            node_modules/
+          )
+
+      # Trailing whitespace
+      - id: trailing-whitespace
+        exclude: |
+          (?x)^(
+            \.git/|
+            package.lock.json|
+            \.next/
+          )
+
+      # End of file fixer
+      - id: end-of-file-fixer
+        exclude: |
+          (?x)^(
+            \.git/|
+            \.venv/|
+            \.next/
+          )
+
+      # YAML linting
+      - id: check-yaml
+        args: ['--safe']
+        exclude: |
+          (?x)^(
+            \.git/|
+            \.venv/
+          )
+
+      # JSON linting
+      - id: check-json
+        exclude: |
+          (?x)^(
+            \.git/|
+            \.venv/|
+            \.next/
+          )
+
+      # Check for large files
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+        exclude: |
+          (?x)^(
+            \.git/|
+            package.lock.json
+          )
+
+      # Check for merge conflicts
+      - id: check-merge-conflict
+
+      # Prevent giant files from being committed
+      - id: check-case-conflict
+
+  # Forbid commits of secrets
+  - repo: https://github.com/sirwart/ripsecrets
+    rev: v0.1.7
+    hooks:
+      - id: ripsecrets
+        exclude: |
+          (?x)^(
+            \.git/|
+            \.venv/|
+            node_modules/|
+            package.lock.json
+          )
+
+default_language_version:
+  python: python3.13
+
+# Configure which files to skip
+exclude: |
+  (?x)^(
+    \.git/|
+    \.venv/|
+    \.next/|
+    node_modules/|
+    build/|
+    dist/|
+    \.egg-info/|
+    package.lock.json|
+    \.env.*
+  )
+
+# Fail fast on first error
+fail_fast: false
+
+# Configure stages
+stages:
+  - commit
+  - push

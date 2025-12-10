@@ -1,6 +1,6 @@
 # Core dependencies
 py4web>=1.20231025.1
-pydal>=20231025.1
+pydal>=20240906.1,<20250101
 uvicorn>=0.24.0
 fastapi>=0.104.1
 

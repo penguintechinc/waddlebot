@@ -5,10 +5,10 @@ quart==0.19.4
 hypercorn==0.16.0
 
 # HTTP Client (async)
-aiohttp==3.9.1
+aiohttp>=3.10.0,<4.0.0
 
 # Database
-pydal==20231121.1
+pydal>=20240906.1,<20250101
 
 # Workflow Execution
 RestrictedPython==7.0
@@ -20,6 +20,7 @@ redis==5.0.1
 
 # Authentication & Security
 python-jose[cryptography]==3.3.0
+cryptography==43.0.3
 
 # Environment
 python-dotenv>=1.0.0
