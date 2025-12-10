@@ -112,6 +112,13 @@ CREATE TABLE IF NOT EXISTS hub_settings (
 CREATE INDEX IF NOT EXISTS idx_hub_users_email ON hub_users(email);
 CREATE INDEX IF NOT EXISTS idx_hub_users_username ON hub_users(username);
 
+-- Initialize default hub settings for signup configuration
+INSERT INTO hub_settings (setting_key, setting_value, updated_at) VALUES
+    ('signup_enabled', 'true', NOW()),
+    ('email_configured', 'false', NOW()),
+    ('signup_allowed_domains', '', NOW())
+ON CONFLICT (setting_key) DO NOTHING;
+
 -- Platform identities linked to users
 CREATE TABLE IF NOT EXISTS hub_user_identities (
     id SERIAL PRIMARY KEY,
@@ -2161,22 +2168,8 @@ CREATE TABLE IF NOT EXISTS community_domains (
 CREATE INDEX IF NOT EXISTS idx_community_domains_community ON community_domains(community_id);
 CREATE INDEX IF NOT EXISTS idx_community_domains_domain ON community_domains(domain);
 
--- Coordination table for stream status
-CREATE TABLE IF NOT EXISTS coordination (
-    id SERIAL PRIMARY KEY,
-    entity_id INTEGER NOT NULL,
-    channel_id VARCHAR(255),
-    viewer_count INTEGER DEFAULT 0,
-    stream_title TEXT,
-    game_name VARCHAR(255),
-    is_live BOOLEAN DEFAULT FALSE,
-    started_at TIMESTAMPTZ,
-    last_updated TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(entity_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_coordination_entity ON coordination(entity_id);
-CREATE INDEX IF NOT EXISTS idx_coordination_live ON coordination(is_live);
+-- NOTE: Coordination table is defined earlier in this file (line 545)
+-- This duplicate definition has been removed to prevent confusion
 
 -- AI insights table
 CREATE TABLE IF NOT EXISTS ai_insights (

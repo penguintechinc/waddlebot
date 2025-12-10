@@ -61,21 +61,28 @@ CREATE INDEX IF NOT EXISTS idx_community_domains_community ON community_domains(
 CREATE INDEX IF NOT EXISTS idx_community_domains_domain ON community_domains(domain);
 
 -- Coordination table for stream status
+-- NOTE: This table definition was incorrect and missing platform/server_id columns
+-- See migration 007_fix_coordination_table.sql for the fix
 CREATE TABLE IF NOT EXISTS coordination (
     id SERIAL PRIMARY KEY,
-    entity_id INTEGER NOT NULL,
+    entity_id VARCHAR(255) NOT NULL,
+    platform VARCHAR(50) NOT NULL,
+    server_id VARCHAR(255),
     channel_id VARCHAR(255),
+    channel_name VARCHAR(255),
+    is_live BOOLEAN DEFAULT FALSE,
     viewer_count INTEGER DEFAULT 0,
+    live_since TIMESTAMP,
     stream_title TEXT,
     game_name VARCHAR(255),
-    is_live BOOLEAN DEFAULT FALSE,
-    started_at TIMESTAMPTZ,
-    last_updated TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(entity_id)
+    thumbnail_url TEXT,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(platform, channel_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_coordination_entity ON coordination(entity_id);
+CREATE INDEX IF NOT EXISTS idx_coordination_platform ON coordination(platform);
 CREATE INDEX IF NOT EXISTS idx_coordination_live ON coordination(is_live);
+CREATE INDEX IF NOT EXISTS idx_coordination_server ON coordination(server_id);
 
 -- AI insights table
 CREATE TABLE IF NOT EXISTS ai_insights (
