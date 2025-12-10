@@ -12,6 +12,7 @@ import marketplaceRoutes from './marketplace.js';
 import platformRoutes from './platform.js';
 import superadminRoutes from './superadmin.js';
 import internalRoutes from './internal.js';
+import cookieConsentRoutes from './cookieConsent.js';
 
 const router = Router();
 
@@ -20,6 +21,9 @@ router.use('/public', publicRoutes);
 
 // Auth routes (login, OAuth, temp password)
 router.use('/auth', authRoutes);
+
+// Cookie consent routes (GDPR compliance)
+router.use('/cookie-consent', cookieConsentRoutes);
 
 // User routes (auth required - identity linking, profile)
 router.use('/user', userRoutes);

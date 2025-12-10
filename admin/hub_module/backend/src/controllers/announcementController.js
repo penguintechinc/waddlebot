@@ -5,6 +5,7 @@
 import { query } from '../config/database.js';
 import { errors } from '../middleware/errorHandler.js';
 import { logger } from '../utils/logger.js';
+import * as broadcastService from '../services/broadcastService.js';
 
 // Valid announcement types
 const VALID_ANNOUNCEMENT_TYPES = ['general', 'important', 'event', 'update'];
@@ -610,16 +611,28 @@ export async function broadcastAnnouncement(req, res, next) {
       return next(errors.badRequest('Only published announcements can be broadcast'));
     }
 
-    // TODO: Import broadcastService when created
-    // For now, just log and return success
-    // const broadcastResults = await broadcastService.broadcast(announcementId, platforms);
+    // Get full announcement data
+    const announcement = announcementResult.rows[0];
 
-    logger.audit('Announcement broadcast initiated', {
+    // Broadcast to all requested platforms
+    const broadcastResults = await broadcastService.broadcastToAllPlatforms(
+      communityId,
+      {
+        id: announcementId,
+        title: announcement.title,
+        content: announcement.content,
+      },
+      req.user.userId,
+      platforms
+    );
+
+    logger.audit('Announcement broadcast completed', {
       communityId,
       announcementId,
       userId: req.user.userId,
       username: req.user.username,
       platforms,
+      results: broadcastResults,
     });
 
     res.json({
@@ -627,8 +640,8 @@ export async function broadcastAnnouncement(req, res, next) {
       data: {
         announcementId,
         platforms,
-        status: 'initiated',
-        message: 'Broadcast initiated. Use broadcast status endpoint to check progress.',
+        results: broadcastResults,
+        message: 'Broadcast completed. Check broadcast status for details.',
       },
     });
   } catch (err) {

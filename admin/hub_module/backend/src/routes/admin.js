@@ -5,6 +5,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import * as adminController from '../controllers/adminController.js';
 import * as activityController from '../controllers/activityController.js';
+import * as communityController from '../controllers/communityController.js';
 import * as communityProfileController from '../controllers/communityProfileController.js';
 import * as overlayController from '../controllers/overlayController.js';
 import * as loyaltyController from '../controllers/loyaltyController.js';
@@ -91,6 +92,12 @@ router.post('/:communityId/temp-password', requireCommunityAdmin, adminControlle
 router.get('/:communityId/servers', requireCommunityAdmin, adminController.getLinkedServers);
 router.put('/:communityId/servers/:serverId', requireCommunityAdmin, adminController.updateServer);
 router.delete('/:communityId/servers/:serverId', requireCommunityAdmin, adminController.removeServer);
+
+// Connected platforms
+router.get('/:communityId/connected-platforms',
+  requireCommunityAdmin,
+  communityController.getConnectedPlatforms
+);
 
 // Server link requests
 router.get('/:communityId/server-link-requests', requireCommunityAdmin, adminController.getServerLinkRequests);
