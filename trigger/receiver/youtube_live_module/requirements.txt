@@ -1,7 +1,7 @@
 # WaddleBot YouTube Live Module - Dependencies
 
 # Core Framework
-quart>=0.19.0
+quart>=0.20.0
 hypercorn>=0.16.0
 
 # HTTP Client (async)

@@ -1,16 +1,12 @@
 # WaddleBot Flask Module - Dependencies
 
 # Core Framework
-quart>=0.19.0
+quart>=0.20.0
 hypercorn>=0.16.0
 
 # HTTP Client (async)
-<<<<<<< HEAD
 httpx>=0.27.0,<0.28.0
-aiohttp>=3.10.0,<4.0.0
-=======
-httpx>=0.26.0
->>>>>>> origin/main
+aiohttp>=3.12.14,<4.0.0
 
 # Environment
 python-dotenv>=1.0.0

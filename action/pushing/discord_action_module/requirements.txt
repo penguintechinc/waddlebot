@@ -1,10 +1,10 @@
-quart==0.19.4
+quart==0.20.0
 hypercorn==0.16.0
 <<<<<<< HEAD
 grpcio>=1.67.0,<2.0.0
 grpcio-tools>=1.67.0,<2.0.0
 pydal>=20240906.1,<20250101
-aiohttp>=3.10.0,<4.0.0
+aiohttp>=3.12.14,<4.0.0
 =======
 grpcio==1.60.0
 grpcio-tools==1.60.0

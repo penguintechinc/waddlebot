@@ -1,24 +1,17 @@
 # WaddleBot Workflow Core Module - Dependencies
 
 # Core Framework
-quart==0.19.4
+quart>=0.20.0
 hypercorn==0.16.0
 
 # HTTP Client (async)
-<<<<<<< HEAD
-aiohttp>=3.10.0,<4.0.0
+aiohttp>=3.12.14,<4.0.0
 
 # Database
 pydal>=20240906.1,<20250101
-=======
-aiohttp==3.9.1
-
-# Database
-pydal==20231121.1
->>>>>>> origin/main
 
 # Workflow Execution
-RestrictedPython==7.0
+RestrictedPython>=8.0
 croniter==2.0.1
 APScheduler==3.10.4
 
@@ -26,11 +19,8 @@ APScheduler==3.10.4
 redis==5.0.1
 
 # Authentication & Security
-python-jose[cryptography]==3.3.0
-<<<<<<< HEAD
+python-jose[cryptography]>=3.4.0
 cryptography==43.0.3
-=======
->>>>>>> origin/main
 
 # Environment
 python-dotenv>=1.0.0

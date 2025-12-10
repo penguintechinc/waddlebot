@@ -1,5 +1,5 @@
 # Web framework
-quart==0.19.4
+quart==0.20.0
 hypercorn==0.16.0
 
 # gRPC
