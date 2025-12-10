@@ -952,10 +952,100 @@ The Workflow API provides comprehensive REST endpoints for managing visual workf
 
 **License Validation**: Returns HTTP 402 Payment Required if license validation fails
 
+### License Requirements
+
+Workflows are subject to licensing restrictions based on community tier:
+
+| Tier | Workflows per Community | Features | License Key |
+|------|------------------------|----------|------------|
+| **FREE** | 1 | Basic workflow creation, all operations | Not required |
+| **PREMIUM** | Unlimited | All features, advanced integrations | Required (PENG-XXXX-XXXX-XXXX-XXXX-XXXX format) |
+| **PRO** | Unlimited | Enterprise features, custom integrations | Required |
+| **ENTERPRISE** | Unlimited | Full customization, dedicated support | Required |
+
+#### Workflow Limit Restrictions
+
+- **FREE tier**: Can create up to 1 workflow per community
+- **PREMIUM/PRO/ENTERPRISE tiers**: Can create unlimited workflows per community
+- When workflow limit is reached, API returns HTTP 402 with message: "Workflow limit reached. Free tier allows 1 workflow per community."
+
+#### License Key Validation
+
+Free tier communities do not require a license key for basic operations. Premium and higher tiers require a valid license key in the format: `PENG-XXXX-XXXX-XXXX-XXXX-XXXX`
+
+### Get Community License Info
+
+#### `GET /api/v1/admin/{communityId}/license-info`
+
+Returns license tier and workflow limits for the community.
+
+**Parameters:**
+- `communityId` (required, path): Community ID
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "tier": "free|premium|pro|enterprise",
+  "maxWorkflows": 1,
+  "currentWorkflows": 5,
+  "canCreateMore": false,
+  "expired": false,
+  "expiresAt": "2026-12-31T23:59:59Z"
+}
+```
+
+**Status Codes:**
+- `200 OK`: License information retrieved successfully
+- `401 Unauthorized`: Missing or invalid authentication
+- `403 Forbidden`: Insufficient permissions (requires admin role)
+- `404 Not Found`: Community not found
+
+### HTTP 402 Payment Required
+
+The following scenarios return HTTP 402 Payment Required:
+
+1. **Workflow Limit Exceeded** (FREE tier)
+   ```json
+   {
+     "error": {
+       "code": "WORKFLOW_LIMIT_EXCEEDED",
+       "message": "Workflow limit reached. Free tier allows 1 workflow per community.",
+       "tier": "free",
+       "maxWorkflows": 1,
+       "currentWorkflows": 1
+     }
+   }
+   ```
+
+2. **Invalid License Key** (PREMIUM+ tier)
+   ```json
+   {
+     "error": {
+       "code": "INVALID_LICENSE",
+       "message": "License key is invalid or expired.",
+       "license_key": "provided_key_format"
+     }
+   }
+   ```
+
+3. **Expired License** (PREMIUM+ tier)
+   ```json
+   {
+     "error": {
+       "code": "LICENSE_EXPIRED",
+       "message": "License has expired. Please renew to continue using workflows.",
+       "expiresAt": "2025-12-01T00:00:00Z"
+     }
+   }
+   ```
+
 ### Workflow Management
 
 #### `POST /api/v1/workflows`
 Create a new workflow with license validation.
+
+**Note**: Requires valid license. Free tier limited to 1 workflow per community. Premium tiers allow unlimited workflows. When workflow limit is reached, returns HTTP 402 "Workflow limit reached. Free tier allows 1 workflow per community."
 
 **Request Body:**
 ```json
@@ -1020,7 +1110,7 @@ Create a new workflow with license validation.
 - `201 Created`: Workflow created successfully
 - `400 Bad Request`: Invalid input data
 - `401 Unauthorized`: Missing or invalid authentication
-- `402 Payment Required`: License validation failed
+- `402 Payment Required`: License validation failed or workflow limit reached
 - `500 Internal Server Error`: Server error
 
 #### `GET /api/v1/workflows`

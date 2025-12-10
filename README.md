@@ -69,6 +69,7 @@ helm install waddlebot ./helm/waddlebot -n waddlebot --create-namespace
 | **Inventory** | Item management system |
 | **Memories** | Community quotes and reminders |
 | **Announcements** | Broadcast to hub and all platforms |
+| **Workflows** | Visual workflow builder with event triggers and actions (1 per community free, unlimited premium) |
 
 ### 🚀 Platform Support
 
@@ -132,9 +133,28 @@ Infrastructure (PostgreSQL, Redis, MinIO, Qdrant)
 - ✅ **GitHub Actions CI/CD** - Automated builds and deployments
 - ✅ **Health Check Standardization** - `/health`, `/healthz`, `/metrics` on all containers
 - ✅ **Loyalty System** - Complete virtual economy with minigames and duels
+- ✅ **Workflow Builder** - Visual workflow editor with conditional logic, limited to 1 per community on free tier
 - ✅ **Comprehensive Docs** - Architecture, API reference, deployment guides
 
 **Full changelog:** [CHANGELOG.md](CHANGELOG.md)
+
+## Licensing & Tiers
+
+WaddleBot is open source (GPL-3.0) and free to use with basic features:
+
+**Free Tier (Open Source)**
+- All core features included
+- 1 workflow per community
+- Broadcast announcements to all connected platforms
+- Full community management
+
+**Premium Tier**
+- Unlimited workflows per community
+- Advanced analytics
+- Priority support
+- Custom integrations
+
+[Learn more about Premium →](https://waddlebot.io/pricing)
 
 ## Documentation
 
