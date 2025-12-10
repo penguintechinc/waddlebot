@@ -9,7 +9,11 @@ metadata:
     app.kubernetes.io/component: configuration
 data:
   # Database Configuration
+<<<<<<< HEAD
+  DATABASE_URL: "postgres://waddlebot:${POSTGRES_PASSWORD}@postgres-service:5432/waddlebot"
+=======
   DATABASE_URL: "postgres://waddlebot:waddlebot_secret@postgres-service:5432/waddlebot"
+>>>>>>> origin/main
   DATABASE_HOST: "postgres-service"
   DATABASE_PORT: "5432"
   DATABASE_NAME: "waddlebot"

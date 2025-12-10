@@ -1958,7 +1958,11 @@ export async function getReputationLeaderboard(req, res, next) {
       [communityId, limit, offset]
     );
 
+<<<<<<< HEAD
+    const users = result.rows.map(row => ({
+=======
     const leaderboard = result.rows.map(row => ({
+>>>>>>> origin/main
       userId: row.user_id,
       username: row.username,
       avatarUrl: row.avatar_url,
@@ -1968,9 +1972,16 @@ export async function getReputationLeaderboard(req, res, next) {
 
     res.json({
       success: true,
+<<<<<<< HEAD
+      users,
+      limit,
+      offset,
+      count: users.length,
+=======
       leaderboard,
       limit,
       offset,
+>>>>>>> origin/main
     });
   } catch (err) {
     next(err);

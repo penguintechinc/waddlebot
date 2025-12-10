@@ -974,3 +974,38 @@ export async function cancelServerLinkRequest(req, res, next) {
     next(err);
   }
 }
+<<<<<<< HEAD
+
+/**
+ * Get connected platforms for a community
+ * GET /api/v1/admin/:communityId/connected-platforms
+ */
+export async function getConnectedPlatforms(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+
+    const platforms = await query(`
+      SELECT DISTINCT
+        platform,
+        COUNT(*) as server_count,
+        BOOL_OR(is_active) as has_active_servers
+      FROM community_servers
+      WHERE community_id = $1
+      GROUP BY platform
+      ORDER BY platform
+    `, [communityId]);
+
+    res.json({
+      success: true,
+      connectedPlatforms: platforms.rows.map(p => ({
+        platform: p.platform,
+        serverCount: parseInt(p.server_count, 10),
+        isActive: p.has_active_servers
+      }))
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+=======
+>>>>>>> origin/main

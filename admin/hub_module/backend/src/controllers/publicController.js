@@ -14,6 +14,9 @@ export async function getStats(req, res, next) {
       'SELECT COUNT(*) as count FROM communities WHERE is_active = true'
     );
 
+<<<<<<< HEAD
+    // Initialize stats with defaults
+=======
     // Get platform counts from coordination table
     const platformResult = await query(`
       SELECT
@@ -26,6 +29,7 @@ export async function getStats(req, res, next) {
       GROUP BY platform
     `);
 
+>>>>>>> origin/main
     const stats = {
       communities: parseInt(communitiesResult.rows[0]?.count || 0, 10),
       discord: { servers: 0, channels: 0 },
@@ -33,6 +37,50 @@ export async function getStats(req, res, next) {
       slack: { workspaces: 0, channels: 0 },
     };
 
+<<<<<<< HEAD
+    // Try to get platform counts from coordination table
+    // This may fail if the table doesn't exist or has wrong schema
+    try {
+      const platformResult = await query(`
+        SELECT
+          platform,
+          COUNT(DISTINCT server_id) as servers,
+          COUNT(*) as channels,
+          SUM(CASE WHEN is_live = true THEN 1 ELSE 0 END) as live,
+          SUM(CASE WHEN is_live = true THEN viewer_count ELSE 0 END) as viewers
+        FROM coordination
+        WHERE platform IS NOT NULL
+        GROUP BY platform
+      `);
+
+      for (const row of platformResult.rows) {
+        switch (row.platform) {
+          case 'discord':
+            stats.discord = {
+              servers: parseInt(row.servers || 0, 10),
+              channels: parseInt(row.channels || 0, 10),
+            };
+            break;
+          case 'twitch':
+            stats.twitch = {
+              channels: parseInt(row.channels || 0, 10),
+              live: parseInt(row.live || 0, 10),
+              viewers: parseInt(row.viewers || 0, 10),
+            };
+            break;
+          case 'slack':
+            stats.slack = {
+              workspaces: parseInt(row.servers || 0, 10),
+              channels: parseInt(row.channels || 0, 10),
+            };
+            break;
+        }
+      }
+    } catch (coordErr) {
+      // Log the error but return stats with zeros instead of failing
+      console.error('Failed to fetch coordination stats:', coordErr.message);
+      // Stats already initialized with zeros above
+=======
     for (const row of platformResult.rows) {
       switch (row.platform) {
         case 'discord':
@@ -55,6 +103,7 @@ export async function getStats(req, res, next) {
           };
           break;
       }
+>>>>>>> origin/main
     }
 
     res.json({ success: true, stats });
@@ -242,7 +291,18 @@ export async function getSignupSettings(req, res, next) {
        WHERE setting_key IN ('signup_enabled', 'email_configured', 'signup_allowed_domains')`
     );
 
+<<<<<<< HEAD
+    // Build settings object with defaults
+    const settings = {
+      signup_enabled: 'true',
+      email_configured: 'false',
+      signup_allowed_domains: '',
+    };
+
+    // Override with database values if they exist
+=======
     const settings = {};
+>>>>>>> origin/main
     for (const row of result.rows) {
       settings[row.setting_key] = row.setting_value;
     }

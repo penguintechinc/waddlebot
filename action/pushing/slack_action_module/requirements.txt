@@ -1,7 +1,13 @@
 quart==0.19.4
+<<<<<<< HEAD
+pydal>=20240906.1,<20250101
+grpcio>=1.67.0,<2.0.0
+grpcio-tools>=1.67.0,<2.0.0
+=======
 pydal==20231128.1
 grpcio==1.60.0
 grpcio-tools==1.60.0
+>>>>>>> origin/main
 slack-sdk==3.26.1
 pyjwt==2.8.0
 psycopg2-binary==2.9.9

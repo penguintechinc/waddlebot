@@ -17,6 +17,12 @@ import UserPublicProfile from './pages/public/UserPublicProfile';
 import LoginPage from './pages/auth/LoginPage';
 import OAuthCallback from './pages/auth/OAuthCallback';
 
+<<<<<<< HEAD
+// Cookie Policy page
+import CookiePolicy from './pages/CookiePolicy';
+
+=======
+>>>>>>> origin/main
 // Dashboard pages
 import DashboardHome from './pages/dashboard/DashboardHome';
 import CommunityDashboard from './pages/dashboard/CommunityDashboard';
@@ -110,6 +116,10 @@ function App() {
         <Route path="/users/:userId" element={<UserPublicProfile />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/auth/callback" element={<OAuthCallback />} />
+<<<<<<< HEAD
+        <Route path="/cookie-policy" element={<CookiePolicy />} />
+=======
+>>>>>>> origin/main
       </Route>
 
       {/* Dashboard routes (authenticated) */}

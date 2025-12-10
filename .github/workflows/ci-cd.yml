@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -40,6 +40,23 @@ jobs:
         uses: github/codeql-action/analyze@v2
         with:
           languages: go, java, javascript
+
+      - name: Run pip-audit
+        run: |
+          pip install pip-audit
+          find . -name requirements.txt -exec pip-audit -r {} \; || true
+
+      - name: Run npm audit
+        run: |
+          cd admin/hub_module/backend && npm audit --production --audit-level=moderate || true
+          cd ../frontend && npm audit --production --audit-level=moderate || true
+          cd ../../.. && npm audit --production --audit-level=moderate || true
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        if: github.event_name == 'pull_request'
+        with:
+          fail-on-severity: high
 
   # Container Builds
   containers:
@@ -98,7 +115,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Run container security scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.service }}:latest
           format: 'sarif'

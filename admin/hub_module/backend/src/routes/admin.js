@@ -5,6 +5,10 @@ import { Router } from 'express';
 import multer from 'multer';
 import * as adminController from '../controllers/adminController.js';
 import * as activityController from '../controllers/activityController.js';
+<<<<<<< HEAD
+import * as communityController from '../controllers/communityController.js';
+=======
+>>>>>>> origin/main
 import * as communityProfileController from '../controllers/communityProfileController.js';
 import * as overlayController from '../controllers/overlayController.js';
 import * as loyaltyController from '../controllers/loyaltyController.js';
@@ -92,6 +96,15 @@ router.get('/:communityId/servers', requireCommunityAdmin, adminController.getLi
 router.put('/:communityId/servers/:serverId', requireCommunityAdmin, adminController.updateServer);
 router.delete('/:communityId/servers/:serverId', requireCommunityAdmin, adminController.removeServer);
 
+<<<<<<< HEAD
+// Connected platforms
+router.get('/:communityId/connected-platforms',
+  requireCommunityAdmin,
+  communityController.getConnectedPlatforms
+);
+
+=======
+>>>>>>> origin/main
 // Server link requests
 router.get('/:communityId/server-link-requests', requireCommunityAdmin, adminController.getServerLinkRequests);
 router.post('/:communityId/server-link-requests/:requestId/approve', requireCommunityAdmin, adminController.approveServerLinkRequest);
