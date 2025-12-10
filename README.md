@@ -96,23 +96,34 @@ Infrastructure (PostgreSQL, Redis, MinIO, Qdrant)
 
 ## Screenshots
 
+### Login
+![Login Page](docs/screenshots/login.png)
+
 ### User Dashboard
-![Dashboard](docs/screenshots/dashboard.png)
+![User Dashboard](docs/screenshots/dashboard.png)
 
 ### Community Portal
-![Communities](docs/screenshots/communities.png)
+![Communities List](docs/screenshots/communities.png)
+
 ![Community Dashboard](docs/screenshots/community-dashboard.png)
 
 ### Admin Panel
 ![Admin Overview](docs/screenshots/admin-overview.png)
+
 ![Admin Members](docs/screenshots/admin-members.png)
+
+![Admin Servers](docs/screenshots/admin-servers.png)
+
+![Admin Modules](docs/screenshots/admin-modules.png)
+
 ![Admin Announcements](docs/screenshots/admin-announcements.png)
 
-### OBS Integration
+### OBS Browser Source Integration
 ![OBS Overlays](docs/screenshots/admin-overlays.png)
 
 ### Super Admin
 ![Super Admin Dashboard](docs/screenshots/superadmin-dashboard.png)
+
 ![Community Management](docs/screenshots/superadmin-communities.png)
 
 ## What's New in v0.2.0
