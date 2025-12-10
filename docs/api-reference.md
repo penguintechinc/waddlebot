@@ -952,6 +952,7 @@ The Workflow API provides comprehensive REST endpoints for managing visual workf
 
 **License Validation**: Returns HTTP 402 Payment Required if license validation fails
 
+<<<<<<< HEAD
 ### License Requirements
 
 Workflows are subject to licensing restrictions based on community tier:
@@ -1040,13 +1041,18 @@ The following scenarios return HTTP 402 Payment Required:
    }
    ```
 
+=======
+>>>>>>> origin/main
 ### Workflow Management
 
 #### `POST /api/v1/workflows`
 Create a new workflow with license validation.
 
+<<<<<<< HEAD
 **Note**: Requires valid license. Free tier limited to 1 workflow per community. Premium tiers allow unlimited workflows. When workflow limit is reached, returns HTTP 402 "Workflow limit reached. Free tier allows 1 workflow per community."
 
+=======
+>>>>>>> origin/main
 **Request Body:**
 ```json
 {
@@ -1110,7 +1116,11 @@ Create a new workflow with license validation.
 - `201 Created`: Workflow created successfully
 - `400 Bad Request`: Invalid input data
 - `401 Unauthorized`: Missing or invalid authentication
+<<<<<<< HEAD
 - `402 Payment Required`: License validation failed or workflow limit reached
+=======
+- `402 Payment Required`: License validation failed
+>>>>>>> origin/main
 - `500 Internal Server Error`: Server error
 
 #### `GET /api/v1/workflows`

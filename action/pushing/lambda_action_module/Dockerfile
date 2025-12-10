@@ -21,12 +21,15 @@ COPY action/pushing/lambda_action_module /app/
 # Create log directory
 RUN mkdir -p /var/log/waddlebotlog
 
+<<<<<<< HEAD
 # Create non-root user
 RUN groupadd -r waddlebot && useradd -r -g waddlebot -m waddlebot
 
 # Set proper permissions for app directory and log directory
 RUN chown -R waddlebot:waddlebot /app /var/log/waddlebotlog
 
+=======
+>>>>>>> origin/main
 # Create databases directory for PyDAL
 RUN mkdir -p /app/databases
 
@@ -51,7 +54,10 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python3 /usr/local/bin/healthcheck.py http://localhost:50060/healthz
 
 # Run application with Hypercorn
+<<<<<<< HEAD
 # Switch to non-root user
 USER waddlebot
 
+=======
+>>>>>>> origin/main
 CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8080", "--workers", "4"]
