@@ -142,7 +142,7 @@ WaddleBot/
 ├── config/                           # Shared configurations
 │   ├── nginx/                       # Nginx reverse proxy configs
 │   └── postgres/                    # PostgreSQL database configs
-├── docs/                             # Documentation
+├── docs/                             # Documentation (source files)
 └── Premium/                          # Premium mobile applications
     ├── Android/                      # Native Android app (Kotlin)
     └── iOS/                          # Native iOS app (Swift)
@@ -150,19 +150,21 @@ WaddleBot/
 
 ## Detailed Documentation
 
-For comprehensive details, see the documentation in the `docs/` folder:
+For comprehensive details, see the documentation in the `docs/` folder.
+
+**Documentation Website**: The MkDocs-based documentation website is maintained separately at `~/code/website/waddlebot-docs/`.
 
 | Document | Description |
 |----------|-------------|
-| [docs/api-reference.md](docs/api-reference.md) | All API endpoints, authentication, rate limiting |
-| [docs/database-schema.md](docs/database-schema.md) | PostgreSQL schemas for all modules |
-| [docs/environment-variables.md](docs/environment-variables.md) | Environment variable reference for all modules |
-| [docs/module-details-core.md](docs/module-details-core.md) | Core, trigger, and hub module details |
-| [docs/module-details-action.md](docs/module-details-action.md) | Action module details (AI, music, etc.) |
-| [docs/event-processing.md](docs/event-processing.md) | Event flows, message types, execution |
-| [docs/shared-patterns.md](docs/shared-patterns.md) | Router, string matching, response system |
-| [docs/development-rules.md](docs/development-rules.md) | Development standards and quality requirements |
-| [docs/flask-conversion.md](docs/flask-conversion.md) | Flask/Quart conversion and CI/CD process |
+| [docs/reference/api-reference.md](docs/reference/api-reference.md) | All API endpoints, authentication, rate limiting |
+| [docs/architecture/database-schema.md](docs/architecture/database-schema.md) | PostgreSQL schemas for all modules |
+| [docs/reference/environment-variables.md](docs/reference/environment-variables.md) | Environment variable reference for all modules |
+| [docs/core-modules/details.md](docs/core-modules/details.md) | Core, trigger, and hub module details |
+| [docs/interaction-modules/details.md](docs/interaction-modules/details.md) | Action module details (AI, music, etc.) |
+| [docs/architecture/event-processing.md](docs/architecture/event-processing.md) | Event flows, message types, execution |
+| [docs/architecture/shared-patterns.md](docs/architecture/shared-patterns.md) | Router, string matching, response system |
+| [docs/reference/development-rules.md](docs/reference/development-rules.md) | Development standards and quality requirements |
+| [docs/guides/flask-conversion.md](docs/guides/flask-conversion.md) | Flask/Quart conversion and CI/CD process |
 
 ## Development Guidelines
 
@@ -244,7 +246,7 @@ Community admins can enable/disable any module (including core modules) via the 
 - **CLAUDE.md exception**: Maximum 39,000 characters
 - **Strategy**: Create detailed docs in `docs/` folder and link from CLAUDE.md
 
-For complete development rules, see [docs/development-rules.md](docs/development-rules.md).
+For complete development rules, see [docs/reference/development-rules.md](docs/reference/development-rules.md).
 
 ## Integration Points
 
@@ -258,17 +260,33 @@ All WaddleBot APIs route through the Hub Module for centralized routing, authent
 
 **Authentication**: API Key via `X-API-Key` header with RBAC (roles: trigger, action, core, admin, user)
 
-For complete API reference, see [docs/api-reference.md](docs/api-reference.md).
+For complete API reference, see [docs/reference/api-reference.md](docs/reference/api-reference.md).
 
 ### Communication Protocols
 
-| Path | Protocol |
-|------|----------|
-| External → Kong | REST |
-| Kong → Module | REST |
-| Module → Module | gRPC |
+| Path | Protocol | Notes |
+|------|----------|-------|
+| Browser → Hub Backend | REST | Frontend always REST |
+| External 3rd Party → Kong | REST | Public API access |
+| Desktop Bridge → Hub/Router | REST + WebSocket | Go app uses REST for commands, WS for real-time |
+| Hub Backend → Router/Services | gRPC (primary), REST (fallback) | Node.js uses @grpc/grpc-js |
+| Router → Internal Modules | gRPC (primary), REST (fallback) | WaddleBot-owned modules |
+| Router → External Integrations | REST/SDK | AWS Secrets, external APIs, etc. |
+| Router → 3rd Party Marketplace Modules | Webhook ONLY | Security sandbox for vendors |
 
-gRPC ports follow the pattern: 50XXX (e.g., discord_action: 50051, reputation: 50021)
+**gRPC Ports**: Follow pattern 50XXX (e.g., discord_action: 50051, reputation: 50021)
+
+**3rd Party Marketplace Module Security**:
+- Vendors host their own compute (their AWS Lambda, GCP Functions, etc.)
+- WaddleBot sends webhook (HTTP POST with HMAC signature) to vendor endpoint
+- No access to internal gRPC, service mesh, or WaddleBot infrastructure
+- **Minimal Data Principle**: Only send bare minimum data needed for module function
+- **Permission Transparency**: When installing/enabling a marketplace module, community admins see:
+  - Required scopes (e.g., `read_chat`, `send_message`, `control_music`)
+  - Risk level per scope (low/medium/high/critical)
+  - What data will be shared with the vendor
+  - Vendor identity and verification status
+- Scopes are enforced - vendors cannot access data outside granted permissions
 
 ## License & External Integrations
 
@@ -327,8 +345,8 @@ WaddleBot implements comprehensive .WORKFLOW compliance with automated CI/CD, ve
 - **Pull Request Checks**: All security and dependency checks on PRs
 
 ### Documentation
-- **docs/WORKFLOWS.md**: Complete CI/CD and version management documentation
-- **docs/STANDARDS.md**: Microservices architecture patterns and best practices
+- **docs/project/workflows.md**: Complete CI/CD and version management documentation
+- **docs/project/standards.md**: Microservices architecture patterns and best practices
 - **.CI-CD-SETUP.md**: Version-based container tagging strategy
 
 ## Next Steps
