@@ -7,6 +7,7 @@ import sys
 import asyncio
 import json
 
+import grpc
 from quart import Quart, Blueprint, request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'libs'))
@@ -23,6 +24,8 @@ from services.reputation_service import ReputationService  # noqa: E402
 from services.weight_manager import WeightManager  # noqa: E402
 from services.event_processor import EventProcessor  # noqa: E402
 from services.policy_enforcer import PolicyEnforcer  # noqa: E402
+from services.grpc_handler import ReputationServiceServicer  # noqa: E402
+from proto import reputation_pb2_grpc  # noqa: E402
 
 app = Quart(__name__)
 
@@ -43,6 +46,7 @@ weight_manager = None
 reputation_service = None
 event_processor = None
 policy_enforcer = None
+grpc_server = None
 
 
 def _verify_service_key():
@@ -58,7 +62,7 @@ def _verify_service_key():
 
 @app.before_serving
 async def startup():
-    global dal, weight_manager, reputation_service, event_processor, policy_enforcer
+    global dal, weight_manager, reputation_service, event_processor, policy_enforcer, grpc_server
     logger.system("Starting reputation_module", action="startup")
 
     dal = init_database(Config.DATABASE_URL)
@@ -75,12 +79,34 @@ async def startup():
     # Wire up policy enforcer to event processor
     event_processor.policy_enforcer = policy_enforcer
 
+    # Initialize gRPC server
+    grpc_server = grpc.aio.server()
+    servicer = ReputationServiceServicer(reputation_service, event_processor)
+    reputation_pb2_grpc.add_ReputationServiceServicer_to_server(servicer, grpc_server)
+
+    grpc_server_address = f"0.0.0.0:{Config.GRPC_PORT}"
+    await grpc_server.add_insecure_port(grpc_server_address)
+    await grpc_server.start()
+
+    logger.system(
+        "gRPC server started",
+        action="grpc_startup",
+        port=Config.GRPC_PORT,
+        address=grpc_server_address
+    )
     logger.system("reputation_module started", result="SUCCESS")
 
 
 @app.after_serving
 async def shutdown():
+    global grpc_server
     logger.system("Shutting down reputation_module", action="shutdown")
+
+    # Shutdown gRPC server
+    if grpc_server:
+        await grpc_server.stop(grace=5)
+        logger.system("gRPC server stopped", action="grpc_shutdown")
+
     if policy_enforcer:
         await policy_enforcer.close()
     logger.system("reputation_module shutdown complete", result="SUCCESS")

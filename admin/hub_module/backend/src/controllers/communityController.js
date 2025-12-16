@@ -707,6 +707,15 @@ export async function leaveCommunity(req, res, next) {
       return next(errors.badRequest('Invalid community ID'));
     }
 
+    // Check if this is global community - cannot leave
+    const communityCheck = await query(
+      'SELECT is_global FROM communities WHERE id = $1',
+      [communityId]
+    );
+    if (communityCheck.rows[0]?.is_global) {
+      return next(errors.forbidden('You cannot leave the Global community'));
+    }
+
     // Check if user is owner
     const memberResult = await query(
       `SELECT role FROM community_members

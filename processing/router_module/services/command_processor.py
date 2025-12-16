@@ -8,12 +8,14 @@ import aiohttp
 
 from config import Config
 from services.command_registry import CommandRegistry, CommandInfo
+from services.translation_service import TranslationService
+from services.grpc_clients import get_grpc_manager
 
 logger = logging.getLogger(__name__)
 
 
 class CommandProcessor:
-    def __init__(self, dal, cache_manager, rate_limiter, session_manager, command_registry: CommandRegistry):
+    def __init__(self, dal, cache_manager, rate_limiter, session_manager, command_registry: CommandRegistry, stream_pipeline=None):
         self.dal = dal
         self.cache = cache_manager
         self.rate_limiter = rate_limiter
@@ -21,6 +23,20 @@ class CommandProcessor:
         self.command_registry = command_registry
         self._http_session = None
         self._response_cache: Dict[str, Any] = {}  # session_id -> response
+        self.translation_service = TranslationService(
+            dal=dal,
+            cache_manager=cache_manager
+        )
+        self._grpc_manager = get_grpc_manager() if Config.GRPC_ENABLED else None
+        self.stream_pipeline = stream_pipeline  # Optional Redis streams pipeline
+
+    def _setup_proto_path(self):
+        """Add proto path to sys.path if not already present"""
+        import sys
+        import os
+        proto_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'libs', 'grpc_protos')
+        if proto_path not in sys.path:
+            sys.path.insert(0, proto_path)
 
     async def _get_http_session(self):
         """Get or create HTTP session for activity tracking"""
@@ -70,6 +86,21 @@ class CommandProcessor:
                 # Also record for reputation tracking
                 asyncio.create_task(self._record_reputation_event(event_data))
 
+                # NEW: Translate message if translation enabled for this community
+                translation_result = await self._translate_message(event_data, entity_id)
+                if translation_result:
+                    # Update event data with translated message
+                    event_data['message'] = translation_result['translated_text']
+                    if 'metadata' not in event_data:
+                        event_data['metadata'] = {}
+                    event_data['metadata']['translation'] = translation_result
+                    event_data['metadata']['original_message'] = message
+
+                    # Send caption to overlay (fire-and-forget)
+                    asyncio.create_task(
+                        self._send_caption_event(event_data, translation_result, entity_id)
+                    )
+
             # Check for prefix commands (! or #)
             if message.startswith('!') or message.startswith('#'):
                 command = message.split()[0] if message else ''
@@ -87,6 +118,10 @@ class CommandProcessor:
 
                 # Check for workflows triggered by this command
                 await self._check_and_trigger_workflows(command, entity_id, user_id, message, session_id, event_data)
+
+                # Publish result to actions stream if stream mode is enabled
+                if Config.STREAM_PIPELINE_ENABLED:
+                    await self.publish_to_stream(Config.STREAM_ACTIONS, result)
 
                 return result
 
@@ -180,13 +215,46 @@ class CommandProcessor:
     async def _record_stream_activity(self, event_data: Dict[str, Any]):
         """Record stream events (subs, follows, raids, etc.) for activity tracking"""
         try:
-            if not Config.HUB_API_URL or not Config.SERVICE_API_KEY:
-                return
-
             entity_id = event_data.get('entity_id')
             community_id = await self._get_community_for_entity(entity_id)
 
             if not community_id:
+                return
+
+            # Try gRPC first if enabled
+            if self._grpc_manager and Config.GRPC_ENABLED:
+                try:
+                    # Import proto files dynamically to avoid startup errors if not generated
+                    self._setup_proto_path()
+                    from hub_internal_pb2 import RecordActivityRequest
+                    from hub_internal_pb2_grpc import HubInternalServiceStub
+
+                    channel = await self._grpc_manager.get_channel('hub_internal')
+                    stub = HubInternalServiceStub(channel)
+
+                    # Convert metadata dict to string dict (proto maps require string values)
+                    metadata = event_data.get('metadata', {})
+                    metadata_str = {k: str(v) for k, v in metadata.items()}
+
+                    request = RecordActivityRequest(
+                        token=self._grpc_manager.generate_token(),
+                        community_id=community_id,
+                        platform=event_data.get('platform', 'unknown'),
+                        platform_user_id=event_data.get('user_id', ''),
+                        platform_username=event_data.get('username', ''),
+                        channel_id=event_data.get('channel_id', entity_id),
+                        event_type=event_data.get('message_type'),
+                        metadata=metadata_str
+                    )
+
+                    await self._grpc_manager.call_with_retry(stub.RecordActivity, request, timeout=5.0)
+                    logger.debug(f"Recorded stream activity via gRPC for community {community_id}")
+                    return
+                except Exception as e:
+                    logger.warning(f"gRPC call failed for stream activity, falling back to REST: {e}")
+
+            # Fallback to REST
+            if not Config.HUB_API_URL or not Config.SERVICE_API_KEY:
                 return
 
             session = await self._get_http_session()
@@ -205,20 +273,49 @@ class CommandProcessor:
                 json=payload,
                 headers={'X-Service-Key': Config.SERVICE_API_KEY},
             )
+            logger.debug(f"Recorded stream activity via REST for community {community_id}")
         except Exception as e:
             logger.warning(f"Failed to record stream activity: {e}")
 
     async def _record_message_activity(self, event_data: Dict[str, Any]):
         """Record message activity to hub for leaderboard tracking"""
         try:
-            if not Config.HUB_API_URL or not Config.SERVICE_API_KEY:
-                return
-
             # Get community_id from entity mapping (entity_id -> community)
             entity_id = event_data.get('entity_id')
             community_id = await self._get_community_for_entity(entity_id)
 
             if not community_id:
+                return
+
+            # Try gRPC first if enabled
+            if self._grpc_manager and Config.GRPC_ENABLED:
+                try:
+                    # Import proto files dynamically
+                    self._setup_proto_path()
+                    from hub_internal_pb2 import RecordMessageRequest
+                    from hub_internal_pb2_grpc import HubInternalServiceStub
+
+                    channel = await self._grpc_manager.get_channel('hub_internal')
+                    stub = HubInternalServiceStub(channel)
+
+                    request = RecordMessageRequest(
+                        token=self._grpc_manager.generate_token(),
+                        community_id=community_id,
+                        platform=event_data.get('platform', 'unknown'),
+                        platform_user_id=event_data.get('user_id', ''),
+                        platform_username=event_data.get('username', ''),
+                        channel_id=event_data.get('channel_id', entity_id),
+                        message_content=event_data.get('message', '')
+                    )
+
+                    await self._grpc_manager.call_with_retry(stub.RecordMessage, request, timeout=5.0)
+                    logger.debug(f"Recorded message activity via gRPC for community {community_id}")
+                    return
+                except Exception as e:
+                    logger.warning(f"gRPC call failed for message activity, falling back to REST: {e}")
+
+            # Fallback to REST
+            if not Config.HUB_API_URL or not Config.SERVICE_API_KEY:
                 return
 
             session = await self._get_http_session()
@@ -235,6 +332,7 @@ class CommandProcessor:
                 json=payload,
                 headers={'X-Service-Key': Config.SERVICE_API_KEY},
             )
+            logger.debug(f"Recorded message activity via REST for community {community_id}")
         except Exception as e:
             # Don't let activity tracking failures affect message processing
             logger.warning(f"Failed to record message activity: {e}")
@@ -270,13 +368,54 @@ class CommandProcessor:
     async def _record_reputation_event(self, event_data: Dict[str, Any]):
         """Forward event to reputation module for score adjustment"""
         try:
-            if not Config.REPUTATION_ENABLED or not Config.REPUTATION_API_URL:
+            if not Config.REPUTATION_ENABLED:
                 return
 
             entity_id = event_data.get('entity_id')
             community_id = await self._get_community_for_entity(entity_id)
 
             if not community_id:
+                return
+
+            # Try gRPC first if enabled
+            if self._grpc_manager and Config.GRPC_ENABLED:
+                try:
+                    # Import proto files dynamically
+                    self._setup_proto_path()
+                    from reputation_pb2 import RecordEventRequest
+                    from reputation_pb2_grpc import ReputationServiceStub
+
+                    channel = await self._grpc_manager.get_channel('reputation')
+                    stub = ReputationServiceStub(channel)
+
+                    # Build metadata dict with all event metadata
+                    metadata = {
+                        'username': event_data.get('username', ''),
+                        'channel_id': event_data.get('channel_id', entity_id),
+                    }
+                    # Add event metadata if present
+                    event_metadata = event_data.get('metadata', {})
+                    for k, v in event_metadata.items():
+                        metadata[k] = str(v)
+
+                    request = RecordEventRequest(
+                        token=self._grpc_manager.generate_token(),
+                        community_id=community_id,
+                        user_id=0,  # Will be resolved by reputation module
+                        platform=event_data.get('platform', 'unknown'),
+                        platform_user_id=event_data.get('user_id', ''),
+                        event_type=event_data.get('message_type', 'chatMessage'),
+                        metadata=metadata
+                    )
+
+                    await self._grpc_manager.call_with_retry(stub.RecordEvent, request, timeout=5.0)
+                    logger.debug(f"Recorded reputation event via gRPC for community {community_id}")
+                    return
+                except Exception as e:
+                    logger.warning(f"gRPC call failed for reputation event, falling back to REST: {e}")
+
+            # Fallback to REST
+            if not Config.REPUTATION_API_URL:
                 return
 
             session = await self._get_http_session()
@@ -302,8 +441,48 @@ class CommandProcessor:
                 json=payload,
                 headers=headers,
             )
+            logger.debug(f"Recorded reputation event via REST for community {community_id}")
         except Exception as e:
             logger.warning(f"Failed to record reputation event: {e}")
+
+    async def _is_module_enabled(self, module_name: str, community_id: int) -> bool:
+        """Check if a module is enabled for a community. Cached in Redis."""
+        if not community_id:
+            return True  # No community context, allow by default
+
+        cache_key = f"module_enabled:{community_id}:{module_name}"
+
+        # Check Redis cache first
+        try:
+            cached = await self.cache.get(cache_key)
+            if cached is not None:
+                return cached == b'1'
+        except Exception as e:
+            logger.warning(f"Redis cache check failed: {e}")
+
+        # Query database
+        try:
+            result = self.dal.executesql(
+                """
+                SELECT is_enabled FROM module_installations
+                WHERE community_id = %s AND module_id = %s
+                """,
+                [community_id, module_name]
+            )
+
+            # Default to enabled if no record exists
+            is_enabled = result[0][0] if result and result[0] else True
+
+            # Cache result for 5 minutes
+            try:
+                await self.cache.set(cache_key, b'1' if is_enabled else b'0', ttl=300)
+            except Exception:
+                pass
+
+            return is_enabled
+        except Exception as e:
+            logger.error(f"Failed to check module status: {e}")
+            return True  # Default to enabled on error
 
     async def execute_command(
         self,
@@ -333,6 +512,14 @@ class CommandProcessor:
                     "error": f"Unknown command: {command}",
                     "session_id": session_id,
                     "help_url": f"/commands"
+                }
+
+            # Check if module is enabled for this community
+            if not await self._is_module_enabled(cmd_info.module_name, community_id):
+                return {
+                    "success": False,
+                    "error": f"The '{cmd_info.module_name}' module is disabled for this community",
+                    "session_id": session_id
                 }
 
             # Check if command is enabled
@@ -571,6 +758,39 @@ class CommandProcessor:
     async def _trigger_workflow(self, workflow: Dict, event_data: Dict[str, Any], session_id: str):
         """Trigger workflow execution"""
         try:
+            # Try gRPC first if enabled
+            if self._grpc_manager and Config.GRPC_ENABLED:
+                try:
+                    # Import proto files dynamically
+                    self._setup_proto_path()
+                    from workflow_pb2 import TriggerWorkflowRequest
+                    from workflow_pb2_grpc import WorkflowServiceStub
+
+                    channel = await self._grpc_manager.get_channel('workflow')
+                    stub = WorkflowServiceStub(channel)
+
+                    # Serialize trigger_data to JSON string for proto
+                    import json
+                    trigger_data_json = json.dumps(event_data)
+
+                    request = TriggerWorkflowRequest(
+                        token=self._grpc_manager.generate_token(),
+                        workflow_id=str(workflow['workflow_id']),
+                        trigger_source=event_data.get('message_type', 'command'),
+                        trigger_data=trigger_data_json,
+                        session_id=session_id,
+                        entity_id=event_data.get('entity_id', ''),
+                        user_id=0,  # Will be resolved by workflow module if needed
+                        platform=event_data.get('platform', 'unknown')
+                    )
+
+                    await self._grpc_manager.call_with_retry(stub.TriggerWorkflow, request, timeout=2.0)
+                    logger.info(f"Triggered workflow {workflow['workflow_id']} via gRPC for session {session_id}")
+                    return
+                except Exception as e:
+                    logger.warning(f"gRPC call failed for workflow trigger, falling back to REST: {e}")
+
+            # Fallback to REST
             if not Config.WORKFLOW_CORE_URL:
                 return
 
@@ -594,7 +814,7 @@ class CommandProcessor:
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=2)
             )
-            logger.info(f"Triggered workflow {workflow['workflow_id']} for session {session_id}")
+            logger.info(f"Triggered workflow {workflow['workflow_id']} via REST for session {session_id}")
         except Exception as e:
             logger.warning(f"Failed to trigger workflow: {e}")
 
@@ -605,3 +825,195 @@ class CommandProcessor:
             "avg_response_time_ms": 0,
             "cache_hit_rate": 0
         }
+
+    async def _translate_message(
+        self,
+        event_data: Dict[str, Any],
+        entity_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Translate message if enabled for community.
+
+        Preserves @mentions, !commands, emails, URLs, and platform emotes
+        during translation using placeholder substitution.
+        """
+        try:
+            # Get community ID from entity
+            community_id = await self._get_community_for_entity(entity_id)
+            if not community_id:
+                return None
+
+            # Get translation config
+            config = await self._get_translation_config(community_id)
+            if not config or not config.get('enabled', False):
+                return None
+
+            message = event_data.get('message', '')
+            target_lang = config.get('default_language', 'en')
+
+            # Extract platform context for emote detection
+            platform = event_data.get('platform', 'unknown')
+            channel_id = event_data.get('channel_id', entity_id)
+
+            # Translate using service (with platform context for emote preservation)
+            result = await self.translation_service.translate(
+                text=message,
+                target_lang=target_lang,
+                community_id=community_id,
+                config=config,
+                platform=platform,
+                channel_id=channel_id
+            )
+
+            return result
+
+        except Exception as e:
+            logger.warning(f"Translation failed: {e}")
+            return None
+
+    async def _get_translation_config(
+        self,
+        community_id: int
+    ) -> Dict[str, Any]:
+        """Get translation config from community.config JSONB"""
+        cache_key = f"translation:config:{community_id}"
+        cached = await self.cache.get(cache_key)
+        if cached:
+            return json.loads(cached)
+
+        result = self.dal.executesql(
+            "SELECT config->'translation' as translation_config FROM communities WHERE id = %s",
+            [community_id]
+        )
+
+        if result and result[0] and result[0][0]:
+            config = result[0][0]
+            await self.cache.set(cache_key, json.dumps(config), ttl=600)
+            return config
+
+        return {}
+
+    async def _send_caption_event(
+        self,
+        event_data: Dict[str, Any],
+        translation_result: Dict[str, Any],
+        entity_id: str
+    ):
+        """Send caption to browser source overlay via internal API"""
+        try:
+            community_id = await self._get_community_for_entity(entity_id)
+            if not community_id:
+                return
+
+            # Try gRPC first if enabled
+            if self._grpc_manager and Config.GRPC_ENABLED:
+                try:
+                    # Import proto files dynamically
+                    self._setup_proto_path()
+                    from browser_source_pb2 import SendCaptionRequest
+                    from browser_source_pb2_grpc import BrowserSourceServiceStub
+
+                    channel = await self._grpc_manager.get_channel('browser_source')
+                    stub = BrowserSourceServiceStub(channel)
+
+                    request = SendCaptionRequest(
+                        token=self._grpc_manager.generate_token(),
+                        community_id=community_id,
+                        platform=event_data.get('platform', ''),
+                        username=event_data.get('username', ''),
+                        original_message=event_data.get('metadata', {}).get('original_message', event_data.get('message', '')),
+                        translated_message=translation_result.get('translated_text', ''),
+                        detected_language=translation_result.get('detected_lang', ''),
+                        target_language=translation_result.get('target_lang', ''),
+                        confidence=translation_result.get('confidence', 0.0)
+                    )
+
+                    await self._grpc_manager.call_with_retry(stub.SendCaption, request, timeout=2.0)
+                    logger.debug(f"Sent caption via gRPC for community {community_id}")
+                    return
+                except Exception as e:
+                    logger.warning(f"gRPC call failed for caption event, falling back to REST: {e}")
+
+            # Fallback to REST
+            if not hasattr(Config, 'BROWSER_SOURCE_URL') or not Config.BROWSER_SOURCE_URL:
+                return
+
+            session = await self._get_http_session()
+
+            payload = {
+                'community_id': community_id,
+                'platform': event_data.get('platform', ''),
+                'username': event_data.get('username', ''),
+                'original_message': event_data.get('metadata', {}).get('original_message', event_data.get('message', '')),
+                'translated_message': translation_result.get('translated_text'),
+                'detected_language': translation_result.get('detected_lang'),
+                'target_language': translation_result.get('target_lang'),
+                'confidence': translation_result.get('confidence', 0.0)
+            }
+
+            headers = {}
+            if hasattr(Config, 'SERVICE_API_KEY') and Config.SERVICE_API_KEY:
+                headers['X-Service-Key'] = Config.SERVICE_API_KEY
+
+            await session.post(
+                f"{Config.BROWSER_SOURCE_URL}/api/v1/internal/captions",
+                json=payload,
+                headers=headers,
+                timeout=2
+            )
+            logger.debug(f"Sent caption via REST for community {community_id}")
+        except Exception as e:
+            logger.warning(f"Failed to send caption event: {e}")
+
+    async def publish_to_stream(self, stream_name: str, event_data: dict) -> bool:
+        """
+        Publish event to Redis stream if stream pipeline is available.
+
+        Args:
+            stream_name: Name of the stream (e.g., STREAM_COMMANDS, STREAM_ACTIONS)
+            event_data: Event data to publish
+
+        Returns:
+            True if published successfully, False otherwise
+        """
+        if not Config.STREAM_PIPELINE_ENABLED or not self.stream_pipeline:
+            return False
+
+        try:
+            # Serialize event data to JSON
+            event_json = json.dumps(event_data)
+
+            # Publish to stream
+            message_id = await self.stream_pipeline.publish(stream_name, event_json)
+
+            logger.debug(f"Published event to stream {stream_name} with message ID {message_id}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to publish to stream {stream_name}: {e}")
+            return False
+
+    async def process_stream_event(self, event: dict) -> Dict[str, Any]:
+        """
+        Process event from stream (stream mode).
+
+        Similar to process_event but designed for stream consumption.
+
+        Args:
+            event: Event data from stream
+
+        Returns:
+            Processing result
+        """
+        try:
+            # Handle the event through standard process_event
+            result = await self.process_event(event)
+
+            # If stream mode is enabled and event was successfully processed,
+            # publish result to actions stream
+            if result.get('success') and Config.STREAM_PIPELINE_ENABLED:
+                await self.publish_to_stream(Config.STREAM_ACTIONS, result)
+
+            return result
+        except Exception as e:
+            logger.error(f"Failed to process stream event: {e}")
+            return {"success": False, "error": str(e)}

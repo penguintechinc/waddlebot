@@ -11,6 +11,7 @@ class Config:
     MODULE_NAME = 'reputation_module'
     MODULE_VERSION = '2.0.0'
     MODULE_PORT = int(os.getenv('MODULE_PORT', '8021'))
+    GRPC_PORT = int(os.getenv('GRPC_PORT', '50021'))
     DATABASE_URL = os.getenv(
         'DATABASE_URL',
         'postgresql://waddlebot:password@localhost:5432/waddlebot'

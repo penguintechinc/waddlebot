@@ -38,6 +38,7 @@ from .api_utils import (
 from .cache import CacheManager, create_cache_manager
 from .rate_limiter import RateLimiter, RateLimitExceeded, create_rate_limiter
 from .message_queue import MessageQueue, Message, create_message_queue
+from .stream_pipeline import StreamPipeline, StreamEvent, create_stream_pipeline
 from .circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerError,
@@ -155,6 +156,10 @@ __all__ = [
     "MessageQueue",
     "Message",
     "create_message_queue",
+    # Stream Pipeline
+    "StreamPipeline",
+    "StreamEvent",
+    "create_stream_pipeline",
     # Circuit Breaker & Resilience
     "CircuitBreaker",
     "CircuitBreakerError",

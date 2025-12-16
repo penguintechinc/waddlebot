@@ -82,11 +82,7 @@ LicenseService
 - `UNLICENSED`: No license found for community
 
 #### LicenseTier
-<<<<<<< HEAD
 - `FREE`: Free tier (1 workflow per community allowed)
-=======
-- `FREE`: Free tier (0 workflows allowed)
->>>>>>> origin/main
 - `PREMIUM`: Premium tier (unlimited workflows)
 
 ### Exception Classes
@@ -283,11 +279,7 @@ Get complete license information for a community.
 info = await license_service.get_license_info(community_id=123)
 
 if info['tier'] == 'free':
-<<<<<<< HEAD
     logger.info(f"Free tier community: max 1 workflow (open source limit)")
-=======
-    logger.info(f"Free tier community: {info['workflow_limit']} workflows")
->>>>>>> origin/main
 elif info['tier'] == 'premium':
     logger.info(f"Premium tier: unlimited workflows")
 ```
@@ -313,7 +305,6 @@ status = await license_service.check_license_status(123)
 ### Free Tier
 
 - **Cost**: $0
-<<<<<<< HEAD
 - **Workflow Creation**: Allowed (1 workflow per community)
 - **Workflow Execution**: Allowed
 - **Limit**: Cannot create more workflows after reaching 1
@@ -322,11 +313,6 @@ status = await license_service.check_license_status(123)
 ### Open Source Model
 
 Workflows are available for open source projects on the Free tier, limited to 1 workflow per community. This allows community developers to create and test basic workflow automation without cost.
-=======
-- **Workflow Creation**: Blocked (0 workflows)
-- **Workflow Execution**: Blocked
-- **Response**: HTTP 402 with message: "Free tier does not support workflows. Upgrade to Premium."
->>>>>>> origin/main
 
 ### Premium Tier
 
@@ -390,11 +376,7 @@ Returned when license validation fails:
 ```json
 {
     "error": true,
-<<<<<<< HEAD
     "message": "Free tier allows 1 workflow per community. Upgrade to Premium for unlimited workflows.",
-=======
-    "message": "Free tier does not support workflows. Upgrade to Premium.",
->>>>>>> origin/main
     "status_code": 402,
     "community_id": 123
 }

@@ -112,6 +112,7 @@ export const adminApi = {
   getModules: (communityId) => api.get(`/api/v1/admin/${communityId}/modules`),
   updateModuleConfig: (communityId, moduleId, data) =>
     api.put(`/api/v1/admin/${communityId}/modules/${moduleId}/config`, data),
+  getConnectedPlatforms: (communityId) => api.get(`/api/v1/admin/${communityId}/connected-platforms`),
   getBrowserSources: (communityId) => api.get(`/api/v1/admin/${communityId}/browser-sources`),
   regenerateBrowserSources: (communityId, sourceType) =>
     api.post(`/api/v1/admin/${communityId}/browser-sources/regenerate`, { sourceType }),
@@ -330,6 +331,11 @@ export const adminApi = {
     api.delete(`/api/v1/admin/${communityId}/shoutout/creators/${creatorId}`),
   getShoutoutHistory: (communityId, params) =>
     api.get(`/api/v1/admin/${communityId}/shoutout/history`, { params }),
+  // Translation configuration
+  getTranslationConfig: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/translation/config`),
+  updateTranslationConfig: (communityId, config) =>
+    api.put(`/api/v1/admin/${communityId}/translation/config`, config),
 };
 
 export const platformApi = {

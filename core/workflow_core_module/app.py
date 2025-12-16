@@ -1,7 +1,8 @@
-"""Workflow Core Module - Quart Application"""
+"""Workflow Core Module - Quart Application with gRPC"""
 import asyncio
 import os
 import sys
+import threading
 
 from quart import Blueprint, Quart
 
@@ -17,6 +18,7 @@ from services.license_service import LicenseService  # noqa: E402
 from services.permission_service import PermissionService  # noqa: E402
 from services.validation_service import WorkflowValidationService  # noqa: E402
 from services.workflow_service import WorkflowService  # noqa: E402
+from services.grpc_handler import WorkflowServiceServicer, WorkflowGrpcService  # noqa: E402
 
 # Import controllers
 from controllers.workflow_api import register_workflow_api  # noqa: E402
@@ -41,17 +43,87 @@ permission_service = None
 validation_service = None
 workflow_service = None
 workflow_engine = None
+grpc_server = None
+grpc_thread = None
+
+
+def _run_grpc_server(
+    workflow_service,
+    permission_service,
+    workflow_engine,
+    secret_key,
+    grpc_port
+):
+    """
+    Run gRPC server in a separate thread.
+
+    Args:
+        workflow_service: WorkflowService instance
+        permission_service: PermissionService instance
+        workflow_engine: WorkflowEngine instance
+        secret_key: Secret key for JWT validation
+        grpc_port: Port for gRPC server
+    """
+    import grpc
+
+    try:
+        import workflow_pb2_grpc
+
+        # Create gRPC service handler
+        handler = WorkflowServiceServicer(
+            workflow_engine=workflow_engine,
+            workflow_service=workflow_service,
+            permission_service=permission_service,
+            secret_key=secret_key,
+            logger_instance=logger
+        )
+
+        # Create gRPC service
+        grpc_service = WorkflowGrpcService(handler)
+
+        # Create gRPC server
+        server = grpc.aio.server()
+        workflow_pb2_grpc.add_WorkflowServiceServicer_to_server(
+            grpc_service,
+            server
+        )
+
+        # Add port and start
+        server.add_insecure_port(f"[::]:{grpc_port}")
+
+        logger.system(
+            f"Starting gRPC server on port {grpc_port}",
+            action="grpc_startup"
+        )
+
+        # Run server in event loop
+        asyncio.new_event_loop().run_until_complete(server.start())
+        asyncio.get_event_loop().run_forever()
+
+    except Exception as e:
+        logger.error(
+            f"Failed to start gRPC server: {str(e)}",
+            extra={
+                "action": "grpc_startup",
+                "result": "FAILURE"
+            },
+            exc_info=True
+        )
 
 
 @app.before_serving
 async def startup():
     """Initialize application on startup"""
-    global dal, license_service, permission_service, validation_service, workflow_service, workflow_engine
+    global dal, license_service, permission_service, validation_service, workflow_service, workflow_engine, grpc_server, grpc_thread
 
     logger.system(
         "Starting workflow_core_module",
         action="startup",
-        extra={"port": Config.PORT, "feature_workflows": Config.FEATURE_WORKFLOWS_ENABLED}
+        extra={
+            "rest_port": Config.PORT,
+            "grpc_port": Config.GRPC_PORT,
+            "feature_workflows": Config.FEATURE_WORKFLOWS_ENABLED
+        }
     )
     try:
         # Initialize database
@@ -100,6 +172,38 @@ async def startup():
         # Register execution API
         register_execution_api(app, workflow_engine)
 
+        # Start gRPC server in background thread
+        try:
+            grpc_thread = threading.Thread(
+                target=_run_grpc_server,
+                args=(
+                    workflow_service,
+                    permission_service,
+                    workflow_engine,
+                    Config.SECRET_KEY,
+                    Config.GRPC_PORT
+                ),
+                daemon=True,
+                name="grpc_server_thread"
+            )
+            grpc_thread.start()
+
+            logger.system(
+                "gRPC server started in background thread",
+                action="grpc_startup",
+                result="SUCCESS"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to start gRPC server: {str(e)}",
+                extra={
+                    "action": "grpc_startup",
+                    "result": "FAILURE"
+                },
+                exc_info=True
+            )
+            # Don't fail startup if gRPC fails - REST API should still work
+
         logger.system("workflow_core_module started successfully", result="SUCCESS")
     except Exception as e:
         logger.error(f"Failed to start workflow_core_module: {str(e)}", result="FAILURE")
@@ -109,10 +213,18 @@ async def startup():
 @app.after_serving
 async def shutdown():
     """Cleanup on shutdown"""
-    global license_service, workflow_engine
+    global license_service, workflow_engine, grpc_server, grpc_thread
 
     logger.system("Shutting down workflow_core_module", action="shutdown")
     try:
+        # Shutdown gRPC server
+        if grpc_server:
+            try:
+                await grpc_server.stop(0)
+                logger.system("gRPC server stopped", action="grpc_shutdown", result="SUCCESS")
+            except Exception as e:
+                logger.warning(f"Error stopping gRPC server: {str(e)}", action="grpc_shutdown")
+
         # Shutdown workflow engine
         if workflow_engine:
             workflow_engine.shutdown()

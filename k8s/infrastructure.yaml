@@ -5,22 +5,11 @@ kind: ConfigMap
 metadata:
   name: waddlebot-config
 data:
-<<<<<<< HEAD
   DATABASE_URL: "postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot"
   REDIS_HOST: "redis"
   REDIS_PORT: "6379"
   LOG_LEVEL: "INFO"
   OPENWHISK_API_HOST: "http://openwhisk:3233"
-=======
-  DATABASE_URL: "postgresql://waddlebot:waddlebot_secret@postgres:5432/waddlebot"
-  REDIS_HOST: "redis"
-  REDIS_PORT: "6379"
-  REDIS_PASSWORD: "waddlebot_redis"
-  LOG_LEVEL: "INFO"
-  MODULE_SECRET_KEY: "waddlebot_test_secret_key_64chars_long_for_jwt_authentication_ok"
-  OPENWHISK_API_HOST: "http://openwhisk:3233"
-  OPENWHISK_AUTH_KEY: "23bc46b1-71f6-4ed5-8c54-816aa4f8c502:123zO3xZCLrMN6v2BKK1dXYFpXlPkccOFqm12CdAsMgRU4VrNZ9lyGVCGuMDGIwP"
->>>>>>> origin/main
   OPENWHISK_NAMESPACE: "guest"
   OPENWHISK_INSECURE: "true"
 ---
@@ -30,17 +19,11 @@ metadata:
   name: waddlebot-secrets
 type: Opaque
 stringData:
-<<<<<<< HEAD
   POSTGRES_PASSWORD: ""
   REDIS_PASSWORD: ""
   JWT_SECRET: ""
   MODULE_SECRET_KEY: ""
   OPENWHISK_AUTH_KEY: ""
-=======
-  POSTGRES_PASSWORD: "waddlebot_secret"
-  REDIS_PASSWORD: "waddlebot_redis"
-  JWT_SECRET: "waddlebot_jwt_secret_for_testing"
->>>>>>> origin/main
 ---
 # PostgreSQL
 apiVersion: v1
@@ -152,11 +135,7 @@ spec:
                   key: REDIS_PASSWORD
           readinessProbe:
             exec:
-<<<<<<< HEAD
               command: ["redis-cli", "-a", "$(REDIS_PASSWORD)", "ping"]
-=======
-              command: ["redis-cli", "-a", "waddlebot_redis", "ping"]
->>>>>>> origin/main
             initialDelaySeconds: 5
             periodSeconds: 5
           resources:

@@ -50,3 +50,75 @@ class Config:
 
     # Workflow core module integration
     WORKFLOW_CORE_URL = os.getenv('WORKFLOW_CORE_URL', 'http://workflow-core:8070')
+
+    # Browser source module (for captions)
+    BROWSER_SOURCE_URL = os.getenv('BROWSER_SOURCE_URL', 'http://browser-source:8050')
+
+    # WaddleAI configuration (for AI-powered translation and decisions)
+    WADDLEAI_BASE_URL = os.getenv('WADDLEAI_BASE_URL', 'http://waddleai-proxy:8090')
+    WADDLEAI_API_KEY = os.getenv('WADDLEAI_API_KEY', '')
+    WADDLEAI_MODEL = os.getenv('WADDLEAI_MODEL', 'tinyllama')
+    WADDLEAI_TEMPERATURE = float(os.getenv('WADDLEAI_TEMPERATURE', '0.7'))
+    WADDLEAI_MAX_TOKENS = int(os.getenv('WADDLEAI_MAX_TOKENS', '500'))
+    WADDLEAI_TIMEOUT = int(os.getenv('WADDLEAI_TIMEOUT', '30'))
+
+    # Emote API Configuration (for translation preprocessing)
+    # Third-party emote APIs (no auth required for public endpoints)
+    BTTV_API_URL = os.getenv('BTTV_API_URL', 'https://api.betterttv.net/3')
+    FFZ_API_URL = os.getenv('FFZ_API_URL', 'https://api.frankerfacez.com/v1')
+    SEVENTV_API_URL = os.getenv('SEVENTV_API_URL', 'https://7tv.io/v3')
+
+    # Twitch API (requires Client-ID for some endpoints)
+    TWITCH_CLIENT_ID = os.getenv('TWITCH_CLIENT_ID', '')
+    TWITCH_CLIENT_SECRET = os.getenv('TWITCH_CLIENT_SECRET', '')
+
+    # Discord API (optional - enables fetching guild emojis)
+    DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN', '')
+
+    # Emote cache TTLs (in seconds)
+    # Default: 30 days for global, 1 day for channel-specific
+    EMOTE_CACHE_TTL_GLOBAL = int(os.getenv('EMOTE_CACHE_TTL_GLOBAL', str(30 * 24 * 60 * 60)))  # 30 days
+    EMOTE_CACHE_TTL_CHANNEL = int(os.getenv('EMOTE_CACHE_TTL_CHANNEL', str(24 * 60 * 60)))  # 1 day
+
+    # AI decision limits for translation preprocessing
+    AI_DECISION_MAX_CALLS_PER_MESSAGE = int(os.getenv('AI_DECISION_MAX_CALLS_PER_MESSAGE', '3'))
+    AI_DECISION_TIMEOUT = int(os.getenv('AI_DECISION_TIMEOUT', '2'))  # seconds
+
+    # gRPC Configuration
+    GRPC_ENABLED = os.getenv('GRPC_ENABLED', 'true').lower() == 'true'
+
+    # Action module gRPC ports
+    DISCORD_GRPC_HOST = os.getenv('DISCORD_GRPC_HOST', 'discord-action:50051')
+    SLACK_GRPC_HOST = os.getenv('SLACK_GRPC_HOST', 'slack-action:50052')
+    TWITCH_GRPC_HOST = os.getenv('TWITCH_GRPC_HOST', 'twitch-action:50053')
+    YOUTUBE_GRPC_HOST = os.getenv('YOUTUBE_GRPC_HOST', 'youtube-action:50054')
+    LAMBDA_GRPC_HOST = os.getenv('LAMBDA_GRPC_HOST', 'lambda-action:50060')
+    GCP_FUNCTIONS_GRPC_HOST = os.getenv('GCP_FUNCTIONS_GRPC_HOST', 'gcp-functions-action:50061')
+    OPENWHISK_GRPC_HOST = os.getenv('OPENWHISK_GRPC_HOST', 'openwhisk-action:50062')
+
+    # Core module gRPC ports
+    REPUTATION_GRPC_HOST = os.getenv('REPUTATION_GRPC_HOST', 'reputation:50021')
+    WORKFLOW_GRPC_HOST = os.getenv('WORKFLOW_GRPC_HOST', 'workflow-core:50070')
+    BROWSER_SOURCE_GRPC_HOST = os.getenv('BROWSER_SOURCE_GRPC_HOST', 'browser-source:50050')
+    IDENTITY_GRPC_HOST = os.getenv('IDENTITY_GRPC_HOST', 'identity-core:50030')
+    HUB_GRPC_HOST = os.getenv('HUB_GRPC_HOST', 'hub:50060')
+
+    # gRPC settings
+    GRPC_KEEPALIVE_TIME_MS = int(os.getenv('GRPC_KEEPALIVE_TIME_MS', '30000'))
+    GRPC_KEEPALIVE_TIMEOUT_MS = int(os.getenv('GRPC_KEEPALIVE_TIMEOUT_MS', '10000'))
+    GRPC_MAX_RETRIES = int(os.getenv('GRPC_MAX_RETRIES', '3'))
+
+    # Redis Streams Pipeline Configuration
+    STREAM_PIPELINE_ENABLED = os.getenv('STREAM_PIPELINE_ENABLED', 'false').lower() == 'true'
+    STREAM_BATCH_SIZE = int(os.getenv('STREAM_BATCH_SIZE', '10'))
+    STREAM_BLOCK_TIME = int(os.getenv('STREAM_BLOCK_TIME', '1000'))  # ms
+    STREAM_MAX_RETRIES = int(os.getenv('STREAM_MAX_RETRIES', '3'))
+    STREAM_CONSUMER_COUNT = int(os.getenv('STREAM_CONSUMER_COUNT', '4'))
+    STREAM_CONSUMER_GROUP = os.getenv('STREAM_CONSUMER_GROUP', 'waddlebot-router')
+    STREAM_CONSUMER_NAME = os.getenv('STREAM_CONSUMER_NAME', f'router-{os.getpid()}')
+
+    # Stream names
+    STREAM_INBOUND = os.getenv('STREAM_INBOUND', 'waddlebot:stream:events:inbound')
+    STREAM_COMMANDS = os.getenv('STREAM_COMMANDS', 'waddlebot:stream:events:commands')
+    STREAM_ACTIONS = os.getenv('STREAM_ACTIONS', 'waddlebot:stream:events:actions')
+    STREAM_RESPONSES = os.getenv('STREAM_RESPONSES', 'waddlebot:stream:events:responses')

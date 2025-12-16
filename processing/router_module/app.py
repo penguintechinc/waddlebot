@@ -1,6 +1,7 @@
 """WaddleBot Router Module (Quart) - Central command routing system"""
 import os
 import sys
+import asyncio
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'libs'))
 
@@ -9,6 +10,7 @@ from flask_core import (  # noqa: E402
     create_health_blueprint,
     init_database,
     setup_aaa_logging,
+    StreamPipeline,
 )
 from config import Config  # noqa: E402
 
@@ -26,11 +28,13 @@ command_processor = None
 cache_manager = None
 rate_limiter = None
 session_manager = None
+stream_pipeline = None
+stream_consumers_tasks = []
 
 
 @app.before_serving
 async def startup():
-    global dal, command_processor, cache_manager, rate_limiter, session_manager
+    global dal, command_processor, cache_manager, rate_limiter, session_manager, stream_pipeline, stream_consumers_tasks
     from services.command_processor import CommandProcessor
     from services.cache_manager import CacheManager
     from services.rate_limiter import RateLimiter
@@ -56,7 +60,118 @@ async def startup():
     app.config['rate_limiter'] = rate_limiter
     app.config['session_manager'] = session_manager
 
+    # Initialize StreamPipeline if enabled
+    if Config.STREAM_PIPELINE_ENABLED:
+        stream_pipeline = StreamPipeline(
+            redis_url=rate_limiter.redis_url,
+            batch_size=Config.STREAM_BATCH_SIZE,
+            block_ms=Config.STREAM_BLOCK_TIME,
+            enabled=True
+        )
+        await stream_pipeline.connect()
+        app.config['stream_pipeline'] = stream_pipeline
+
+        # Start stream consumers as background tasks
+        for i in range(Config.STREAM_CONSUMER_COUNT):
+            consumer_name = f"{Config.STREAM_CONSUMER_NAME}-{i}"
+            task = asyncio.create_task(_stream_consumer_worker(
+                stream_pipeline,
+                Config.STREAM_CONSUMER_GROUP,
+                consumer_name
+            ))
+            stream_consumers_tasks.append(task)
+            logger.system(f"Started stream consumer: {consumer_name}", action="stream_consumer_start")
+
     logger.system("Router module started successfully", result="SUCCESS")
+
+
+async def _stream_consumer_worker(
+    pipeline: StreamPipeline,
+    consumer_group: str,
+    consumer_name: str
+):
+    """
+    Background worker to consume and process stream events.
+    Runs continuously until the stream consumers tasks are cancelled.
+    """
+    while True:
+        try:
+            # Consume events from inbound stream
+            events = await pipeline.consume_events(
+                'events:inbound',
+                consumer_group,
+                consumer_name
+            )
+
+            # Process each event
+            for event in events:
+                try:
+                    logger.debug(
+                        f"Processing stream event: {event['id']}",
+                        data=event['data']
+                    )
+
+                    # Acknowledge successful processing
+                    await pipeline.acknowledge_event(
+                        'events:inbound',
+                        consumer_group,
+                        event['id']
+                    )
+
+                except Exception as e:
+                    logger.error(
+                        f"Error processing stream event {event['id']}: {e}",
+                        error=str(e)
+                    )
+
+                    # Move to DLQ if max retries exceeded
+                    if event.get('retry_count', 0) >= pipeline.max_retries:
+                        await pipeline.move_to_dlq(
+                            'events:inbound',
+                            event['id'],
+                            f"Max retries exceeded: {str(e)}",
+                            event_data=event['data'],
+                            retry_count=event.get('retry_count', 0)
+                        )
+                        # Acknowledge to remove from pending
+                        await pipeline.acknowledge_event(
+                            'events:inbound',
+                            consumer_group,
+                            event['id']
+                        )
+
+        except asyncio.CancelledError:
+            logger.system(f"Stream consumer {consumer_name} shutting down", action="stream_consumer_stop")
+            break
+        except Exception as e:
+            logger.error(f"Error in stream consumer {consumer_name}: {e}")
+            await asyncio.sleep(1)  # Brief delay before retry
+
+
+@app.after_serving
+async def shutdown():
+    """Cleanup handler for graceful shutdown"""
+    global stream_pipeline, stream_consumers_tasks
+
+    logger.system("Shutting down router module", action="shutdown")
+
+    # Stop stream consumers
+    if stream_consumers_tasks:
+        for task in stream_consumers_tasks:
+            task.cancel()
+
+        # Wait for all tasks to complete
+        if stream_consumers_tasks:
+            await asyncio.gather(*stream_consumers_tasks, return_exceptions=True)
+
+        logger.system("Stream consumers stopped", action="stream_consumers_stop")
+
+    # Disconnect stream pipeline
+    if stream_pipeline and stream_pipeline._connected:
+        await stream_pipeline.disconnect()
+        logger.system("Stream pipeline disconnected", action="stream_pipeline_disconnect")
+
+    logger.system("Router module shutdown complete", result="SUCCESS")
 
 
 # Register blueprints

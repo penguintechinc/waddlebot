@@ -1,0 +1,214 @@
+================================================================================
+  WADDLEBOT gRPC PORT CONFIGURATION - VISUAL REFERENCE MAP
+================================================================================
+
+                        PUSH ACTION MODULES (8070-8073 / 50051-50054)
+                        ┌────────────────────────────────────────────┐
+                        │                                            │
+     ┌──────────────┐   │  ┌──────────────┐  ┌──────────────┐       │
+     │   DISCORD    │   │  │    SLACK     │  │    TWITCH    │       │
+     │   50051      │   │  │    50052     │  │    50053     │       │
+     │   8070       │   │  │    8071      │  │    8072      │       │
+     └──────────────┘   │  └──────────────┘  └──────────────┘       │
+                        │                                            │
+     ┌──────────────┐   │                                            │
+     │   YOUTUBE    │   │                                            │
+     │   50054      │   │                                            │
+     │   8073       │   │                                            │
+     └──────────────┘   │                                            │
+                        └────────────────────────────────────────────┘
+
+                    CLOUD ACTION MODULES (8080-8082 / 50060-50062)
+                    ┌──────────────────────────────────────────────┐
+                    │                                              │
+     ┌──────────────┐│  ┌──────────────────┐  ┌──────────────────┐│
+     │   LAMBDA     ││  │  GCP FUNCTIONS   │  │   OPENWHISK      ││
+     │   50060      ││  │     50061        │  │     50062        ││
+     │   8080       ││  │     8081         │  │     8082         ││
+     └──────────────┘│  └──────────────────┘  └──────────────────┘│
+                    │                                              │
+                    └──────────────────────────────────────────────┘
+
+================================================================================
+                        PORT ALLOCATION MATRIX
+================================================================================
+
+  PUSHING ACTIONS (REST/gRPC Port Pairs)
+  ┌─────────────────┬──────────────┬──────────────┐
+  │ Module          │ gRPC Port    │ REST Port    │
+  ├─────────────────┼──────────────┼──────────────┤
+  │ Discord         │ 50051        │ 8070         │
+  │ Slack           │ 50052        │ 8071         │
+  │ Twitch          │ 50053        │ 8072         │
+  │ YouTube         │ 50054        │ 8073         │
+  ├─────────────────┼──────────────┼──────────────┤
+  │ RESERVED        │ 50055-50059  │ 8074-8079    │ (Future)
+  ├─────────────────┼──────────────┼──────────────┤
+  │ Lambda          │ 50060        │ 8080         │
+  │ GCP Functions   │ 50061        │ 8081         │
+  │ OpenWhisk       │ 50062        │ 8082         │
+  └─────────────────┴──────────────┴──────────────┘
+
+================================================================================
+                    GRPC SERVER IMPLEMENTATION TYPES
+================================================================================
+
+  ASYNC PROTO-BASED
+  ┌─────────────────────────────────┐
+  │ Discord (50051)                 │
+  │ Lambda (50060)                  │
+  ├─────────────────────────────────┤
+  │ Uses: grpc.aio.server()         │
+  │ Proto Servicer: YES             │
+  │ Execution: Fully Async          │
+  └─────────────────────────────────┘
+
+  FACTORY PATTERN
+  ┌─────────────────────────────────┐
+  │ Slack (50052)                   │
+  ├─────────────────────────────────┤
+  │ Uses: create_grpc_server()      │
+  │ Lifecycle: Managed              │
+  │ Abstraction: High               │
+  └─────────────────────────────────┘
+
+  CUSTOM CLASS WRAPPER
+  ┌─────────────────────────────────┐
+  │ Twitch (50053)                  │
+  │ GCP Functions (50061)           │
+  │ OpenWhisk (50062)               │
+  ├─────────────────────────────────┤
+  │ Uses: GrpcServer class          │
+  │ Interface: Object-Oriented      │
+  │ Flexibility: High               │
+  └─────────────────────────────────┘
+
+  THREADED IMPLEMENTATION
+  ┌─────────────────────────────────┐
+  │ YouTube (50054)                 │
+  ├─────────────────────────────────┤
+  │ Uses: Background thread         │
+  │ Concurrency: Threading          │
+  │ Lifecycle: Daemon pattern       │
+  └─────────────────────────────────┘
+
+================================================================================
+                        CONFIGURATION HIERARCHY
+================================================================================
+
+  Each Module (Example: Discord)
+  ┌──────────────────────────────────────────┐
+  │ discord_action_module/                   │
+  ├──────────────────────────────────────────┤
+  │ ┌──────────────────────────────────────┐ │
+  │ │ config.py (Line 26)                  │ │
+  │ │ GRPC_PORT = 50051 (default)         │ │
+  │ │ REST_PORT = 8070 (default)          │ │
+  │ └──────────────────────────────────────┘ │
+  │          ↑                                 │
+  │   Environment Variable: GRPC_PORT=50051   │
+  │          ↓ (overrides config.py default)  │
+  │ ┌──────────────────────────────────────┐ │
+  │ │ app.py (lines 378-390)               │ │
+  │ │ Starts gRPC server on GRPC_PORT      │ │
+  │ └──────────────────────────────────────┘ │
+  └──────────────────────────────────────────┘
+
+================================================================================
+                    PORT CONFLICT DETECTION MATRIX
+================================================================================
+
+  Current Allocation Status:
+  
+  Port Range    50051  50052  50053  50054  50055  50056  50057  50058  50059
+  ─────────────────────────────────────────────────────────────────────────────
+  Allocated     [✓]    [✓]    [✓]    [✓]    [ ]    [ ]    [ ]    [ ]    [ ]
+  Module        DIS    SLA    TWI    YOU    FREE   FREE   FREE   FREE   FREE
+  ─────────────────────────────────────────────────────────────────────────────
+
+  Port Range    50060  50061  50062  50063  50064  50065  50066  50067  50068
+  ─────────────────────────────────────────────────────────────────────────────
+  Allocated     [✓]    [✓]    [✓]    [ ]    [ ]    [ ]    [ ]    [ ]    [ ]
+  Module        LAM    GCP    OPE    FREE   FREE   FREE   FREE   FREE   FREE
+  ─────────────────────────────────────────────────────────────────────────────
+
+  Legend: [✓] = Allocated & Verified | [ ] = Available | DIS=Discord | SLA=Slack
+          TWI=Twitch | YOU=YouTube | LAM=Lambda | GCP=GCP Functions | OPE=OpenWhisk
+
+================================================================================
+                        DEPLOYMENT CHECKLIST
+================================================================================
+
+  PRE-DEPLOYMENT VERIFICATION
+  ✓ Discord module: Port 50051 (gRPC) + 8070 (REST) verified
+  ✓ Slack module: Port 50052 (gRPC) + 8071 (REST) verified
+  ✓ Twitch module: Port 50053 (gRPC) + 8072 (REST) verified
+  ✓ YouTube module: Port 50054 (gRPC) + 8073 (REST) verified
+  ✓ Lambda module: Port 50060 (gRPC) + 8080 (REST) verified
+  ✓ GCP Functions module: Port 50061 (gRPC) + 8081 (REST) verified
+  ✓ OpenWhisk module: Port 50062 (gRPC) + 8082 (REST) verified
+
+  DEPLOYMENT VALIDATION
+  □ Firewall: Allow inbound on ports 50051-50054, 50060-50062
+  □ Firewall: Allow inbound on ports 8070-8073, 8080-8082
+  □ Load Balancer: Configure routing rules for all 7 modules
+  □ Monitoring: Set up alerts for all gRPC port availability
+  □ Logging: Verify gRPC startup logs in /var/log/waddlebotlog/
+
+  OPERATIONAL CHECKS
+  □ Health Check: Test gRPC connectivity on all 7 ports
+  □ Load Test: Verify gRPC server capacity under load
+  □ Failover: Test module restart and port rebinding
+  □ Metrics: Collect gRPC server performance metrics
+
+================================================================================
+                    QUICK PORT LOOKUP TABLE
+================================================================================
+
+  Need to find a module's port? Use this quick reference:
+
+  What is Discord's gRPC port? ...................... 50051
+  What is Slack's gRPC port? ........................ 50052
+  What is Twitch's gRPC port? ....................... 50053
+  What is YouTube's gRPC port? ...................... 50054
+  What is Lambda's gRPC port? ....................... 50060
+  What is GCP Functions' gRPC port? ................ 50061
+  What is OpenWhisk's gRPC port? ................... 50062
+
+  What is Discord's REST port? ..................... 8070
+  What is Slack's REST port? ....................... 8071
+  What is Twitch's REST port? ...................... 8072
+  What is YouTube's REST port? ..................... 8073
+  What is Lambda's REST port? ...................... 8080
+  What is GCP Functions' REST port? ............... 8081
+  What is OpenWhisk's REST port? .................. 8082
+
+================================================================================
+                        RELATED DOCUMENTATION
+================================================================================
+
+  Full Verification Report:
+  → /home/penguin/code/WaddleBot/GRPC_PORT_VERIFICATION.md
+
+  Port Registry (Quick Reference):
+  → /home/penguin/code/WaddleBot/action/pushing/GRPC_PORT_REGISTRY.md
+
+  Summary Document:
+  → /home/penguin/code/WaddleBot/action/pushing/PORT_CONFIGURATION_SUMMARY.txt
+
+  This Document:
+  → /home/penguin/code/WaddleBot/GRPC_PORT_VISUAL_REFERENCE.txt
+
+================================================================================
+                              VERIFICATION INFO
+================================================================================
+
+  Date: 2025-12-15
+  Modules Verified: 7/7 (100%)
+  Configurations Correct: 7/7 (100%)
+  gRPC Servers Implemented: 7/7 (100%)
+  Port Conflicts: 0
+
+  Status: ALL MODULES VERIFIED AND READY FOR PRODUCTION ✓
+
+================================================================================

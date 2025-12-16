@@ -12,6 +12,7 @@ class Config:  # noqa: E302
     MODULE_NAME = 'browser_source_core_module'
     MODULE_VERSION = '2.0.0'
     MODULE_PORT = int(os.getenv('MODULE_PORT', '8027'))
+    GRPC_PORT = int(os.getenv('GRPC_PORT', '50050'))
     DATABASE_URL = os.getenv(
         'DATABASE_URL',
         'postgresql://waddlebot:password@localhost:5432/waddlebot'
@@ -29,3 +30,8 @@ class Config:  # noqa: E302
         'SECRET_KEY',
         'change-me-in-production'
     )
+    MODULE_SECRET_KEY = os.getenv(
+        'MODULE_SECRET_KEY',
+        os.getenv('SECRET_KEY', 'change-me-in-production')
+    )
+    JWT_ALGORITHM = 'HS256'

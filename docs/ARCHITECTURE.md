@@ -96,6 +96,45 @@ WaddleBot is a multi-platform chat bot system with a modular, microservices arch
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Communication Protocols
+
+WaddleBot uses a hybrid communication strategy:
+
+### Protocol Matrix
+
+| Communication Path | Protocol | Notes |
+|-------------------|----------|-------|
+| External → Kong Gateway | REST/HTTPS | Public API access |
+| Kong Gateway → Modules | REST/HTTP | Internal routing |
+| Module → Module | **gRPC** | High-performance internal calls |
+| Browser Sources | WebSocket | Real-time overlay updates |
+
+### gRPC Port Assignments
+
+Internal module-to-module communication uses gRPC for better performance and type safety:
+
+| Module | REST Port | gRPC Port | Service |
+|--------|-----------|-----------|---------|
+| discord_action | 8070 | 50051 | DiscordAction |
+| slack_action | 8071 | 50052 | SlackActionService |
+| twitch_action | 8072 | 50053 | TwitchActionService |
+| youtube_action | 8073 | 50054 | YouTubeAction |
+| lambda_action | 8080 | 50060 | LambdaAction |
+| gcp_functions_action | 8081 | 50061 | GCPFunctionsActionService |
+| openwhisk_action | 8082 | 50062 | OpenWhiskActionService |
+| reputation | 8021 | 50021 | ReputationService |
+| workflow_core | 8070 | 50070 | WorkflowService |
+| browser_source | 8050 | 50050 | BrowserSourceService |
+| identity_core | 8030 | 50030 | IdentityService |
+
+### gRPC Features
+
+- **Connection pooling**: Reuses channels for efficiency
+- **JWT authentication**: Service-to-service auth via tokens
+- **Retry logic**: Exponential backoff with configurable retries
+- **REST fallback**: Falls back to REST if gRPC unavailable
+- **Proto definitions**: Shared protos in `libs/grpc_protos/`
+
 ## Data Flow: Chat Message Processing
 
 ```
@@ -392,3 +431,44 @@ CLAIM LIFECYCLE:
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+## Global Community
+
+WaddleBot maintains a mandatory "Global" community for cross-community reputation tracking and platform-wide statistics.
+
+### Key Characteristics
+
+- **Name**: `waddlebot-global`
+- **Membership**: Mandatory and permanent for all users
+- **Purpose**: Cross-community reputation tracking, global stats, bad actor detection
+
+### Membership Rules
+
+1. **Auto-Join**: All new users are automatically added on registration
+2. **Cannot Leave**: Users cannot voluntarily leave the global community
+3. **Cannot Be Removed**: Admins cannot remove members from the global community
+4. **Permanent**: Membership persists for the lifetime of the user account
+
+### Use Cases
+
+- Track users who are banned across multiple communities
+- Aggregate global statistics and activity metrics
+- Enable cross-community reputation sharing
+- Identify patterns of bad behavior across the platform
+
+## Module Controls
+
+Community admins can enable or disable modules for their community, including core modules.
+
+### How It Works
+
+1. **Module Installation Table**: `module_installations` tracks which modules are enabled per community
+2. **Router Enforcement**: Router checks `is_enabled` before executing commands from a module
+3. **Redis Caching**: Module status cached in Redis (5-minute TTL) for performance
+
+### Core vs Non-Core Modules
+
+- **Core modules** (reputation, loyalty, analytics, etc.) are marked with `is_core = true`
+- Community admins can disable ANY module, including core ones
+- Disabling core modules shows a warning in the admin UI
+- This allows communities to use external replacements for built-in features

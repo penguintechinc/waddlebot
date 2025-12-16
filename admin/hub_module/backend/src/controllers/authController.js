@@ -102,7 +102,12 @@ export async function register(req, res, next) {
     const user = result.rows[0];
 
     // Auto-add user to global community
-    await addUserToGlobalCommunity(user.id);
+    try {
+      await addUserToGlobalCommunity(user.id);
+    } catch (err) {
+      logger.error('CRITICAL: Failed to add user to global community', { userId: user.id, error: err.message });
+      // Don't fail registration, but log loudly
+    }
 
     // Send verification email if required
     if (requireVerification) {
@@ -579,7 +584,12 @@ async function findOrCreateUserFromOAuth(platform, userData, mode) {
     logger.auth('Created new user from OAuth', { platform, userId, email });
 
     // Auto-add new user to global community
-    await addUserToGlobalCommunity(userId);
+    try {
+      await addUserToGlobalCommunity(userId);
+    } catch (err) {
+      logger.error('CRITICAL: Failed to add user to global community', { userId, platform, error: err.message });
+      // Don't fail registration, but log loudly
+    }
   }
 
   // Create identity link
@@ -1304,7 +1314,7 @@ async function addUserToGlobalCommunity(userId) {
     );
 
     if (globalCommunity.rows.length === 0) {
-      logger.debug('No global community found, skipping auto-add');
+      logger.warn('CRITICAL: No global community found - user will not be auto-added to community', { userId });
       return;
     }
 
@@ -1328,7 +1338,7 @@ async function addUserToGlobalCommunity(userId) {
 
     logger.debug('User added to global community', { userId, communityId });
   } catch (err) {
-    // Don't fail registration if global community add fails
-    logger.error('Failed to add user to global community', { userId, error: err.message });
+    // Don't fail registration if global community add fails, but log loudly for visibility
+    logger.error('CRITICAL: Failed to add user to global community', { userId, error: err.message, stack: err.stack });
   }
 }

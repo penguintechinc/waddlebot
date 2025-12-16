@@ -13,6 +13,7 @@ class Config:
     MODULE_NAME = 'workflow_core_module'
     MODULE_VERSION = '1.0.0'
     PORT = int(os.getenv('MODULE_PORT', '8070'))
+    GRPC_PORT = int(os.getenv('GRPC_PORT', '50070'))
 
     # Database Configuration
     DATABASE_URI = os.getenv(

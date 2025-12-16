@@ -347,6 +347,10 @@ router.post('/:communityId/shoutout/creators', requireCommunityAdmin, shoutoutCo
 router.delete('/:communityId/shoutout/creators/:creatorId', requireCommunityAdmin, shoutoutController.removeShoutoutCreator);
 router.get('/:communityId/shoutout/history', requireCommunityAdmin, shoutoutController.getShoutoutHistory);
 
+// Translation configuration
+router.get('/:communityId/translation/config', requireCommunityAdmin, adminController.getTranslationConfig);
+router.put('/:communityId/translation/config', requireCommunityAdmin, adminController.updateTranslationConfig);
+
 // Analytics proxy routes
 router.get('/:communityId/analytics/*', requireCommunityAdmin, async (req, res) => {
   try {

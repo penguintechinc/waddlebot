@@ -35,9 +35,10 @@ import AdminHome from './pages/admin/AdminHome';
 import AdminMembers from './pages/admin/AdminMembers';
 import AdminModules from './pages/admin/AdminModules';
 import AdminMarketplace from './pages/admin/AdminMarketplace';
-import AdminBrowserSources from './pages/admin/AdminBrowserSources';
+import AdminStreamOverlays from './pages/admin/AdminStreamOverlays';
 import AdminDomains from './pages/admin/AdminDomains';
 import AdminServers from './pages/admin/AdminServers';
+import AdminConnectedPlatforms from './pages/admin/AdminConnectedPlatforms';
 import AdminMirrorGroups from './pages/admin/AdminMirrorGroups';
 import AdminLeaderboardConfig from './pages/admin/AdminLeaderboardConfig';
 import AdminCommunityProfile from './pages/admin/AdminCommunityProfile';
@@ -45,7 +46,6 @@ import ReputationSettings from './pages/admin/ReputationSettings';
 import AdminAIInsights from './pages/admin/AdminAIInsights';
 import AdminAIResearcherConfig from './pages/admin/AdminAIResearcherConfig';
 import AdminBotDetection from './pages/admin/AdminBotDetection';
-import AdminOverlays from './pages/admin/AdminOverlays';
 import AdminAnnouncements from './pages/admin/AdminAnnouncements';
 import AdminAnalytics from './pages/admin/AdminAnalytics';
 import AdminSecurity from './pages/admin/AdminSecurity';
@@ -56,6 +56,7 @@ import LoyaltyGames from './pages/admin/LoyaltyGames';
 import LoyaltyGear from './pages/admin/LoyaltyGear';
 import AdminWorkflows from './pages/admin/AdminWorkflows';
 import AdminShoutouts from './pages/admin/AdminShoutouts';
+import AdminTranslation from './pages/admin/AdminTranslation';
 
 // Platform admin pages
 import PlatformDashboard from './pages/platform/PlatformDashboard';
@@ -148,9 +149,10 @@ function App() {
         <Route path="/admin/:communityId/workflows" element={<AdminWorkflows />} />
         <Route path="/admin/:communityId/modules" element={<AdminModules />} />
         <Route path="/admin/:communityId/marketplace" element={<AdminMarketplace />} />
-        <Route path="/admin/:communityId/browser-sources" element={<AdminBrowserSources />} />
+        <Route path="/admin/:communityId/stream-overlays" element={<AdminStreamOverlays />} />
         <Route path="/admin/:communityId/domains" element={<AdminDomains />} />
         <Route path="/admin/:communityId/servers" element={<AdminServers />} />
+        <Route path="/admin/:communityId/connected-platforms" element={<AdminConnectedPlatforms />} />
         <Route path="/admin/:communityId/mirror-groups" element={<AdminMirrorGroups />} />
         <Route path="/admin/:communityId/leaderboard" element={<AdminLeaderboardConfig />} />
         <Route path="/admin/:communityId/profile" element={<AdminCommunityProfile />} />
@@ -158,7 +160,6 @@ function App() {
         <Route path="/admin/:communityId/ai-insights" element={<AdminAIInsights />} />
         <Route path="/admin/:communityId/ai-config" element={<AdminAIResearcherConfig />} />
         <Route path="/admin/:communityId/bot-detection" element={<AdminBotDetection />} />
-        <Route path="/admin/:communityId/overlays" element={<AdminOverlays />} />
         <Route path="/admin/:communityId/announcements" element={<AdminAnnouncements />} />
         <Route path="/admin/:communityId/analytics" element={<AdminAnalytics />} />
         <Route path="/admin/:communityId/security" element={<AdminSecurity />} />
@@ -168,6 +169,7 @@ function App() {
         <Route path="/admin/:communityId/loyalty/games" element={<LoyaltyGames />} />
         <Route path="/admin/:communityId/loyalty/gear" element={<LoyaltyGear />} />
         <Route path="/admin/:communityId/shoutouts" element={<AdminShoutouts />} />
+        <Route path="/admin/:communityId/translation" element={<AdminTranslation />} />
       </Route>
 
       {/* Platform admin routes */}

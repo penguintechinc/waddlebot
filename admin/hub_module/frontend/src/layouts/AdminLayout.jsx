@@ -5,7 +5,6 @@ import {
   UserGroupIcon,
   PuzzlePieceIcon,
   GlobeAltIcon,
-  ComputerDesktopIcon,
   ChartBarIcon,
   DocumentTextIcon,
   ArrowLeftOnRectangleIcon,
@@ -13,6 +12,7 @@ import {
   Cog6ToothIcon,
   BuildingStorefrontIcon,
   ServerStackIcon,
+  RectangleGroupIcon,
   ArrowsRightLeftIcon,
   TrophyIcon,
   ScaleIcon,
@@ -23,6 +23,7 @@ import {
   FireIcon,
   CommandLineIcon,
   SpeakerWaveIcon,
+  LanguageIcon,
 } from '@heroicons/react/24/outline';
 
 function AdminLayout() {
@@ -40,6 +41,7 @@ function AdminLayout() {
         { to: `/admin/${communityId}/analytics`, icon: ChartBarIcon, label: 'Analytics' },
         { to: `/admin/${communityId}/security`, icon: FireIcon, label: 'Security' },
         { to: `/admin/${communityId}/servers`, icon: ServerStackIcon, label: 'Linked Servers' },
+        { to: `/admin/${communityId}/connected-platforms`, icon: RectangleGroupIcon, label: 'Connected Platforms' },
         { to: `/admin/${communityId}/mirror-groups`, icon: ArrowsRightLeftIcon, label: 'Chat Mirroring' },
         { to: `/admin/${communityId}/leaderboard`, icon: TrophyIcon, label: 'Leaderboards' },
         { to: `/admin/${communityId}/reputation`, icon: ScaleIcon, label: 'Reputation' },
@@ -47,10 +49,10 @@ function AdminLayout() {
         { to: `/admin/${communityId}/ai-config`, icon: Cog6ToothIcon, label: 'AI Config' },
         { to: `/admin/${communityId}/bot-detection`, icon: ShieldCheckIcon, label: 'Bot Detection' },
         { to: `/admin/${communityId}/modules`, icon: PuzzlePieceIcon, label: 'Modules' },
-        { to: `/admin/${communityId}/browser-sources`, icon: ComputerDesktopIcon, label: 'Browser Sources' },
+        { to: `/admin/${communityId}/stream-overlays`, icon: WindowIcon, label: 'Stream Overlays' },
         { to: `/admin/${communityId}/domains`, icon: GlobeAltIcon, label: 'Custom Domains' },
-        { to: `/admin/${communityId}/overlays`, icon: WindowIcon, label: 'Overlays' },
         { to: `/admin/${communityId}/shoutouts`, icon: SpeakerWaveIcon, label: 'Shoutouts' },
+        { to: `/admin/${communityId}/translation`, icon: LanguageIcon, label: 'Translation & Captions' },
         { to: `/admin/${communityId}/loyalty`, icon: CurrencyDollarIcon, label: 'Loyalty System' },
       ]
     : [];

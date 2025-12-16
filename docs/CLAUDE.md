@@ -39,6 +39,8 @@ WaddleBot is a multi-platform chat bot system with a modular, microservices arch
 - **Routing**: Hub module handles direct routing (Kong removed)
 - **Database**: AsyncDAL wrapper around PyDAL with PostgreSQL and read replicas
 - **Session Management**: Redis for session ID tracking
+- **Internal Communication**: gRPC for module-to-module calls (with REST fallback)
+- **Proto Definitions**: Shared protobuf files in `libs/grpc_protos/`
 - **Containerization**: Docker containers
 - **Orchestration**: Kubernetes (longer term)
 - **Cloud Functions**: AWS Lambda and Apache OpenWhisk (longer term) for actions
@@ -215,6 +217,14 @@ All modules MUST implement Authentication, Authorization, and Auditing logging:
 - No technical debt - address issues properly the first time
 - Use task agents with cheaper models when possible (Haiku or Sonnet if must) to shart out jobs to smartly use tokens
 
+### Global Community
+
+All users are automatically and permanently members of the `waddlebot-global` community for cross-community reputation tracking. Users cannot leave and cannot be removed from this community.
+
+### Module Controls
+
+Community admins can enable/disable any module (including core modules) via the admin UI. The router enforces module status before executing commands.
+
 ### Git Workflow
 - **NEVER commit automatically** unless explicitly requested
 - **NEVER push to remote repositories** under any circumstances
@@ -249,6 +259,16 @@ All WaddleBot APIs route through the Hub Module for centralized routing, authent
 **Authentication**: API Key via `X-API-Key` header with RBAC (roles: trigger, action, core, admin, user)
 
 For complete API reference, see [docs/api-reference.md](docs/api-reference.md).
+
+### Communication Protocols
+
+| Path | Protocol |
+|------|----------|
+| External → Kong | REST |
+| Kong → Module | REST |
+| Module → Module | gRPC |
+
+gRPC ports follow the pattern: 50XXX (e.g., discord_action: 50051, reputation: 50021)
 
 ## License & External Integrations
 

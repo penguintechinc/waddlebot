@@ -309,7 +309,7 @@ export default function SuperAdminPlatformConfig() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-8 h-8 animate-spin text-indigo-500" />
+        <RefreshCw className="w-8 h-8 animate-spin text-gold-400" />
       </div>
     );
   }
@@ -319,16 +319,16 @@ export default function SuperAdminPlatformConfig() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+          <h1 className="text-2xl font-bold text-sky-100">
             Platform Configuration
           </h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">
+          <p className="text-navy-400 mt-1">
             Configure API credentials for Discord, Twitch, Slack, and YouTube integrations
           </p>
         </div>
         <button
           onClick={loadConfigs}
-          className="flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+          className="flex items-center gap-2 px-4 py-2 text-navy-300 hover:bg-navy-700 rounded-lg transition-colors"
         >
           <RefreshCw className="w-4 h-4" />
           Refresh
@@ -337,19 +337,19 @@ export default function SuperAdminPlatformConfig() {
 
       {/* Alerts */}
       {error && (
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 flex items-center gap-3">
-          <AlertCircle className="w-5 h-5 text-red-500" />
-          <span className="text-red-700 dark:text-red-400">{error}</span>
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-400" />
+          <span className="text-red-400">{error}</span>
           <button onClick={() => setError(null)} className="ml-auto">
-            <X className="w-4 h-4 text-red-500" />
+            <X className="w-4 h-4 text-red-400" />
           </button>
         </div>
       )}
 
       {success && (
-        <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4 flex items-center gap-3">
-          <Check className="w-5 h-5 text-green-500" />
-          <span className="text-green-700 dark:text-green-400">{success}</span>
+        <div className="bg-emerald-500/20 border border-emerald-500/30 rounded-lg p-4 flex items-center gap-3">
+          <Check className="w-5 h-5 text-emerald-400" />
+          <span className="text-emerald-400">{success}</span>
         </div>
       )}
 
@@ -364,11 +364,11 @@ export default function SuperAdminPlatformConfig() {
           return (
             <div
               key={platform}
-              className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden"
+              className="card overflow-hidden"
             >
               {/* Platform Header */}
               <div
-                className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                className="flex items-center justify-between p-4 cursor-pointer hover:bg-navy-700/50 transition-colors"
                 onClick={() => setExpandedPlatform(isExpanded ? null : platform)}
               >
                 <div className="flex items-center gap-4">
@@ -376,26 +376,26 @@ export default function SuperAdminPlatformConfig() {
                     <Icon />
                   </div>
                   <div>
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                    <h3 className="text-lg font-semibold text-sky-100">
                       {config.name}
                     </h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                    <p className="text-sm">
                       {platformConfig.configured ? (
-                        <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
+                        <span className="flex items-center gap-1 text-emerald-400">
                           <Check className="w-4 h-4" /> Configured
                         </span>
                       ) : (
-                        <span className="text-yellow-600 dark:text-yellow-400">Not configured</span>
+                        <span className="text-yellow-400">Not configured</span>
                       )}
                     </p>
                   </div>
                 </div>
-                <Settings className={`w-5 h-5 text-gray-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                <Settings className={`w-5 h-5 text-navy-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
               </div>
 
               {/* Expanded Configuration */}
               {isExpanded && (
-                <div className="border-t border-gray-200 dark:border-gray-700 p-6 space-y-4">
+                <div className="card-body border-t border-navy-700 space-y-4">
                   {config.fields.map((field) => {
                     const fieldKey = `${platform}-${field.key}`;
                     const fieldConfig = platformConfig.fields?.[field.key] || {};
@@ -403,10 +403,10 @@ export default function SuperAdminPlatformConfig() {
 
                     return (
                       <div key={field.key}>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        <label className="block text-sm font-medium text-navy-300 mb-1">
                           {field.label}
                           {field.secret && (
-                            <span className="ml-2 text-xs text-gray-500">(encrypted)</span>
+                            <span className="ml-2 text-xs text-navy-500">(encrypted)</span>
                           )}
                         </label>
                         <div className="relative">
@@ -415,20 +415,20 @@ export default function SuperAdminPlatformConfig() {
                             value={formData[platform]?.[field.key] || ''}
                             onChange={(e) => handleInputChange(platform, field.key, e.target.value)}
                             placeholder={fieldConfig.hasValue ? fieldConfig.masked : field.placeholder}
-                            className="w-full px-4 py-2 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                            className="w-full px-4 py-2 pr-10 border border-navy-600 rounded-lg bg-navy-900 text-sky-100 placeholder-navy-500 focus:ring-2 focus:ring-gold-500 focus:border-gold-500"
                           />
                           {field.secret && (
                             <button
                               type="button"
                               onClick={() => toggleShowSecret(platform, field.key)}
-                              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-navy-400 hover:text-sky-300"
                             >
                               {showSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             </button>
                           )}
                         </div>
                         {fieldConfig.source === 'environment' && (
-                          <p className="mt-1 text-xs text-blue-600 dark:text-blue-400">
+                          <p className="mt-1 text-xs text-sky-400">
                             Value from environment variable
                           </p>
                         )}
@@ -438,7 +438,7 @@ export default function SuperAdminPlatformConfig() {
 
                   {/* Test Result */}
                   {testResult && (
-                    <div className={`p-3 rounded-lg ${testResult.success ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400' : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'}`}>
+                    <div className={`p-3 rounded-lg ${testResult.success ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
                       <div className="flex items-center gap-2">
                         {testResult.success ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
                         {testResult.message}
@@ -451,7 +451,7 @@ export default function SuperAdminPlatformConfig() {
                     <button
                       onClick={() => handleSave(platform)}
                       disabled={saving[platform]}
-                      className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                      className="flex items-center gap-2 px-4 py-2 bg-gold-500 hover:bg-gold-600 text-navy-900 font-medium rounded-lg disabled:opacity-50 transition-colors"
                     >
                       {saving[platform] ? (
                         <RefreshCw className="w-4 h-4 animate-spin" />
@@ -463,7 +463,7 @@ export default function SuperAdminPlatformConfig() {
                     <button
                       onClick={() => handleTest(platform)}
                       disabled={testing[platform]}
-                      className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+                      className="flex items-center gap-2 px-4 py-2 border border-navy-600 text-navy-300 rounded-lg hover:bg-navy-700 disabled:opacity-50 transition-colors"
                     >
                       {testing[platform] ? (
                         <RefreshCw className="w-4 h-4 animate-spin" />
@@ -481,29 +481,29 @@ export default function SuperAdminPlatformConfig() {
       </div>
 
       {/* Storage Settings Section */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
-        <div className="flex items-center gap-4 p-4 border-b border-gray-200 dark:border-gray-700">
+      <div className="card overflow-hidden">
+        <div className="card-header flex items-center gap-4">
           <div className="p-3 rounded-lg bg-orange-500 text-white">
             <HardDrive className="w-6 h-6" />
           </div>
           <div>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+            <h3 className="text-lg font-semibold text-sky-100">
               File Storage
             </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
+            <p className="text-sm text-navy-400">
               Configure where profile images and uploads are stored
             </p>
           </div>
         </div>
 
-        <div className="p-6 space-y-6">
+        <div className="card-body space-y-6">
           {/* Storage Type Toggle */}
           <div>
-            <label className="block font-medium text-gray-900 dark:text-white mb-2">
+            <label className="block font-medium text-sky-100 mb-2">
               Storage Type
             </label>
             <div className="flex gap-4">
-              <label className={`flex items-center gap-2 px-4 py-3 border rounded-lg cursor-pointer transition-colors ${storageForm.storage_type === 'local' ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20' : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'}`}>
+              <label className={`flex items-center gap-2 px-4 py-3 border rounded-lg cursor-pointer transition-colors ${storageForm.storage_type === 'local' ? 'border-gold-500 bg-gold-500/10' : 'border-navy-600 hover:border-navy-500'}`}>
                 <input
                   type="radio"
                   name="storage_type"
@@ -512,10 +512,10 @@ export default function SuperAdminPlatformConfig() {
                   onChange={(e) => setStorageForm(prev => ({ ...prev, storage_type: e.target.value }))}
                   className="sr-only"
                 />
-                <HardDrive className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                <span className="text-gray-900 dark:text-white">Local Storage</span>
+                <HardDrive className="w-5 h-5 text-navy-400" />
+                <span className="text-sky-100">Local Storage</span>
               </label>
-              <label className={`flex items-center gap-2 px-4 py-3 border rounded-lg cursor-pointer transition-colors ${storageForm.storage_type === 's3' ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20' : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'}`}>
+              <label className={`flex items-center gap-2 px-4 py-3 border rounded-lg cursor-pointer transition-colors ${storageForm.storage_type === 's3' ? 'border-gold-500 bg-gold-500/10' : 'border-navy-600 hover:border-navy-500'}`}>
                 <input
                   type="radio"
                   name="storage_type"
@@ -524,20 +524,20 @@ export default function SuperAdminPlatformConfig() {
                   onChange={(e) => setStorageForm(prev => ({ ...prev, storage_type: e.target.value }))}
                   className="sr-only"
                 />
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                <svg className="w-5 h-5 text-navy-400" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
                 </svg>
-                <span className="text-gray-900 dark:text-white">S3-Compatible (MinIO/AWS)</span>
+                <span className="text-sky-100">S3-Compatible (MinIO/AWS)</span>
               </label>
             </div>
           </div>
 
           {/* S3 Settings */}
           {storageForm.storage_type === 's3' && (
-            <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <div className="space-y-4 pt-4 border-t border-navy-700">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  <label className="block text-sm font-medium text-navy-300 mb-1">
                     S3 Endpoint
                   </label>
                   <input
@@ -545,11 +545,11 @@ export default function SuperAdminPlatformConfig() {
                     value={storageForm.s3_endpoint}
                     onChange={(e) => setStorageForm(prev => ({ ...prev, s3_endpoint: e.target.value }))}
                     placeholder="http://minio:9000"
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500"
+                    className="w-full px-4 py-2 border border-navy-600 rounded-lg bg-navy-900 text-sky-100 placeholder-navy-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  <label className="block text-sm font-medium text-navy-300 mb-1">
                     Bucket Name
                   </label>
                   <input
@@ -557,14 +557,14 @@ export default function SuperAdminPlatformConfig() {
                     value={storageForm.s3_bucket}
                     onChange={(e) => setStorageForm(prev => ({ ...prev, s3_bucket: e.target.value }))}
                     placeholder="waddlebot-assets"
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500"
+                    className="w-full px-4 py-2 border border-navy-600 rounded-lg bg-navy-900 text-sky-100 placeholder-navy-500"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  <label className="block text-sm font-medium text-navy-300 mb-1">
                     Access Key
                   </label>
                   <input
@@ -572,11 +572,11 @@ export default function SuperAdminPlatformConfig() {
                     value={storageForm.s3_access_key}
                     onChange={(e) => setStorageForm(prev => ({ ...prev, s3_access_key: e.target.value }))}
                     placeholder="Access Key ID"
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500"
+                    className="w-full px-4 py-2 border border-navy-600 rounded-lg bg-navy-900 text-sky-100 placeholder-navy-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  <label className="block text-sm font-medium text-navy-300 mb-1">
                     Secret Key
                   </label>
                   <input
@@ -584,14 +584,14 @@ export default function SuperAdminPlatformConfig() {
                     value={storageForm.s3_secret_key}
                     onChange={(e) => setStorageForm(prev => ({ ...prev, s3_secret_key: e.target.value }))}
                     placeholder="Secret Access Key"
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500"
+                    className="w-full px-4 py-2 border border-navy-600 rounded-lg bg-navy-900 text-sky-100 placeholder-navy-500"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  <label className="block text-sm font-medium text-navy-300 mb-1">
                     Region
                   </label>
                   <input
@@ -599,11 +599,11 @@ export default function SuperAdminPlatformConfig() {
                     value={storageForm.s3_region}
                     onChange={(e) => setStorageForm(prev => ({ ...prev, s3_region: e.target.value }))}
                     placeholder="us-east-1"
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500"
+                    className="w-full px-4 py-2 border border-navy-600 rounded-lg bg-navy-900 text-sky-100 placeholder-navy-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  <label className="block text-sm font-medium text-navy-300 mb-1">
                     Public URL (for links)
                   </label>
                   <input
@@ -611,7 +611,7 @@ export default function SuperAdminPlatformConfig() {
                     value={storageForm.s3_public_url}
                     onChange={(e) => setStorageForm(prev => ({ ...prev, s3_public_url: e.target.value }))}
                     placeholder="http://localhost:9000/waddlebot-assets"
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500"
+                    className="w-full px-4 py-2 border border-navy-600 rounded-lg bg-navy-900 text-sky-100 placeholder-navy-500"
                   />
                 </div>
               </div>
@@ -620,7 +620,7 @@ export default function SuperAdminPlatformConfig() {
 
           {/* Storage Test Result */}
           {storageTestResult && (
-            <div className={`p-3 rounded-lg ${storageTestResult.success ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400' : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'}`}>
+            <div className={`p-3 rounded-lg ${storageTestResult.success ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
               <div className="flex items-center gap-2">
                 {storageTestResult.success ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
                 {storageTestResult.message}
@@ -633,7 +633,7 @@ export default function SuperAdminPlatformConfig() {
             <button
               onClick={handleSaveStorage}
               disabled={savingStorage}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2 bg-gold-500 hover:bg-gold-600 text-navy-900 font-medium rounded-lg disabled:opacity-50 transition-colors"
             >
               {savingStorage ? (
                 <RefreshCw className="w-4 h-4 animate-spin" />
@@ -646,7 +646,7 @@ export default function SuperAdminPlatformConfig() {
               <button
                 onClick={handleTestStorage}
                 disabled={testingStorage}
-                className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+                className="flex items-center gap-2 px-4 py-2 border border-navy-600 text-navy-300 rounded-lg hover:bg-navy-700 disabled:opacity-50 transition-colors"
               >
                 {testingStorage ? (
                   <RefreshCw className="w-4 h-4 animate-spin" />
@@ -661,36 +661,36 @@ export default function SuperAdminPlatformConfig() {
       </div>
 
       {/* Signup Settings Section */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
-        <div className="flex items-center gap-4 p-4 border-b border-gray-200 dark:border-gray-700">
+      <div className="card overflow-hidden">
+        <div className="card-header flex items-center gap-4">
           <div className="p-3 rounded-lg bg-emerald-500 text-white">
             <Shield className="w-6 h-6" />
           </div>
           <div>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+            <h3 className="text-lg font-semibold text-sky-100">
               Signup Settings
             </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
+            <p className="text-sm text-navy-400">
               Control user registration and email verification
             </p>
           </div>
         </div>
 
-        <div className="p-6 space-y-6">
+        <div className="card-body space-y-6">
           {/* Email Status */}
-          <div className={`p-4 rounded-lg ${isEmailConfigured ? 'bg-green-50 dark:bg-green-900/20' : 'bg-yellow-50 dark:bg-yellow-900/20'}`}>
+          <div className={`p-4 rounded-lg ${isEmailConfigured ? 'bg-emerald-500/20' : 'bg-yellow-500/20'}`}>
             <div className="flex items-center gap-2">
               {isEmailConfigured ? (
                 <>
-                  <Check className="w-5 h-5 text-green-600 dark:text-green-400" />
-                  <span className="text-green-700 dark:text-green-400">
+                  <Check className="w-5 h-5 text-emerald-400" />
+                  <span className="text-emerald-400">
                     Email service is configured. You can enable signups.
                   </span>
                 </>
               ) : (
                 <>
-                  <AlertCircle className="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
-                  <span className="text-yellow-700 dark:text-yellow-400">
+                  <AlertCircle className="w-5 h-5 text-yellow-400" />
+                  <span className="text-yellow-400">
                     Configure email settings above and test the connection to enable signups.
                   </span>
                 </>
@@ -701,10 +701,10 @@ export default function SuperAdminPlatformConfig() {
           {/* Enable Signups */}
           <div className="flex items-center justify-between">
             <div>
-              <label className="font-medium text-gray-900 dark:text-white">
+              <label className="font-medium text-sky-100">
                 Enable Public Signups
               </label>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+              <p className="text-sm text-navy-400">
                 Allow new users to register accounts
               </p>
             </div>
@@ -716,17 +716,17 @@ export default function SuperAdminPlatformConfig() {
                 disabled={!isEmailConfigured}
                 className="sr-only peer"
               />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-indigo-600 peer-disabled:opacity-50"></div>
+              <div className="w-11 h-6 bg-navy-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-gold-500/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-navy-400 after:border-navy-600 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-gold-500 peer-checked:after:bg-navy-900 peer-disabled:opacity-50"></div>
             </label>
           </div>
 
           {/* Require Email Verification */}
           <div className="flex items-center justify-between">
             <div>
-              <label className="font-medium text-gray-900 dark:text-white">
+              <label className="font-medium text-sky-100">
                 Require Email Verification
               </label>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+              <p className="text-sm text-navy-400">
                 Users must verify their email before accessing the platform
               </p>
             </div>
@@ -737,16 +737,16 @@ export default function SuperAdminPlatformConfig() {
                 onChange={(e) => setSettingsForm(prev => ({ ...prev, signup_require_email_verification: e.target.checked }))}
                 className="sr-only peer"
               />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-indigo-600"></div>
+              <div className="w-11 h-6 bg-navy-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-gold-500/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-navy-400 after:border-navy-600 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-gold-500 peer-checked:after:bg-navy-900"></div>
             </label>
           </div>
 
           {/* Allowed Domains */}
           <div>
-            <label className="block font-medium text-gray-900 dark:text-white mb-1">
+            <label className="block font-medium text-sky-100 mb-1">
               Allowed Email Domains (optional)
             </label>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+            <p className="text-sm text-navy-400 mb-2">
               Comma-separated list of domains. Leave empty to allow all domains.
             </p>
             <input
@@ -754,7 +754,7 @@ export default function SuperAdminPlatformConfig() {
               value={settingsForm.signup_allowed_domains}
               onChange={(e) => setSettingsForm(prev => ({ ...prev, signup_allowed_domains: e.target.value }))}
               placeholder="example.com, company.org"
-              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              className="w-full px-4 py-2 border border-navy-600 rounded-lg bg-navy-900 text-sky-100 placeholder-navy-500 focus:ring-2 focus:ring-gold-500 focus:border-gold-500"
             />
           </div>
 
@@ -763,7 +763,7 @@ export default function SuperAdminPlatformConfig() {
             <button
               onClick={handleSaveSettings}
               disabled={savingSettings}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2 bg-gold-500 hover:bg-gold-600 text-navy-900 font-medium rounded-lg disabled:opacity-50 transition-colors"
             >
               {savingSettings ? (
                 <RefreshCw className="w-4 h-4 animate-spin" />
@@ -777,9 +777,9 @@ export default function SuperAdminPlatformConfig() {
       </div>
 
       {/* Info Note */}
-      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-        <h4 className="font-medium text-blue-900 dark:text-blue-300 mb-2">Security Note</h4>
-        <p className="text-sm text-blue-700 dark:text-blue-400">
+      <div className="card p-4 border-l-4 border-l-sky-400">
+        <h4 className="font-medium text-sky-300 mb-2">Security Note</h4>
+        <p className="text-sm text-sky-400">
           Secrets are encrypted at rest. Environment variables take precedence over stored values.
           For production deployments, consider using environment variables for sensitive credentials.
         </p>

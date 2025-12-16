@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { adminApi } from '../../services/api';
+import { TrophyIcon } from '@heroicons/react/24/outline';
 
 // FICO-style tier definitions
 const REPUTATION_TIERS = [
@@ -36,6 +37,7 @@ const MODERATION_WEIGHTS = [
 
 function ReputationSettings() {
   const { communityId } = useParams();
+  const [activeTab, setActiveTab] = useState('settings');
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -43,9 +45,19 @@ function ReputationSettings() {
   const [atRiskUsers, setAtRiskUsers] = useState([]);
   const [showAtRisk, setShowAtRisk] = useState(false);
 
+  // Leaderboard state
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+
   useEffect(() => {
     fetchConfig();
   }, [communityId]);
+
+  useEffect(() => {
+    if (activeTab === 'leaderboard') {
+      fetchLeaderboard();
+    }
+  }, [activeTab, communityId]);
 
   async function fetchConfig() {
     setLoading(true);
@@ -72,6 +84,20 @@ function ReputationSettings() {
     } catch (err) {
       console.error('Failed to fetch at-risk users:', err);
       setMessage({ type: 'error', text: 'Failed to load at-risk users' });
+    }
+  }
+
+  async function fetchLeaderboard() {
+    setLeaderboardLoading(true);
+    try {
+      const response = await adminApi.getReputationLeaderboard(communityId, { limit: 50 });
+      if (response.data.success) {
+        setLeaderboard(response.data.users || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch leaderboard:', err);
+    } finally {
+      setLeaderboardLoading(false);
     }
   }
 
@@ -125,30 +151,56 @@ function ReputationSettings() {
 
   const isPremium = config.is_premium;
 
+  const tabs = [
+    { id: 'settings', label: 'Settings' },
+    { id: 'leaderboard', label: 'Leaderboard' },
+  ];
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-sky-100">Reputation Settings</h1>
+          <h1 className="text-2xl font-bold text-sky-100">Reputation</h1>
           <p className="text-navy-400 mt-1">
             FICO-style reputation scoring (300-850 range)
           </p>
         </div>
-        <div className="flex gap-3">
-          <button
-            onClick={fetchAtRiskUsers}
-            className="btn btn-secondary"
-          >
-            View At-Risk Users
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="btn btn-primary disabled:opacity-50"
-          >
-            {saving ? 'Saving...' : 'Save Changes'}
-          </button>
-        </div>
+        {activeTab === 'settings' && (
+          <div className="flex gap-3">
+            <button
+              onClick={fetchAtRiskUsers}
+              className="btn btn-secondary"
+            >
+              View At-Risk Users
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="btn btn-primary disabled:opacity-50"
+            >
+              {saving ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Tab Navigation */}
+      <div className="border-b border-navy-700 mb-6">
+        <nav className="flex space-x-8">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === tab.id
+                  ? 'border-gold-400 text-gold-400'
+                  : 'border-transparent text-navy-400 hover:text-sky-300 hover:border-navy-500'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
       </div>
 
       {message && (
@@ -162,21 +214,24 @@ function ReputationSettings() {
         </div>
       )}
 
-      {!isPremium && (
-        <div className="mb-6 p-4 rounded-lg border bg-gold-500/10 border-gold-500/30">
-          <div className="flex items-center gap-3">
-            <span className="text-2xl">👑</span>
-            <div>
-              <div className="font-medium text-gold-300">Premium Feature</div>
-              <div className="text-sm text-gold-400/80">
-                Weight customization is a premium feature. Upgrade to modify scoring weights.
+      {/* Settings Tab */}
+      {activeTab === 'settings' && (
+        <>
+          {!isPremium && (
+            <div className="mb-6 p-4 rounded-lg border bg-gold-500/10 border-gold-500/30">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">👑</span>
+                <div>
+                  <div className="font-medium text-gold-300">Premium Feature</div>
+                  <div className="text-sm text-gold-400/80">
+                    Weight customization is a premium feature. Upgrade to modify scoring weights.
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+          )}
 
-      <div className="space-y-6">
+          <div className="space-y-6">
         {/* FICO Tier Reference */}
         <div className="card p-6">
           <h2 className="text-lg font-semibold text-sky-100 mb-4">Reputation Tiers</h2>
@@ -368,7 +423,87 @@ function ReputationSettings() {
             </div>
           </div>
         </div>
-      </div>
+          </div>
+        </>
+      )}
+
+      {/* Leaderboard Tab */}
+      {activeTab === 'leaderboard' && (
+        <div className="space-y-6">
+          {leaderboardLoading ? (
+            <div className="flex justify-center py-12">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-400"></div>
+            </div>
+          ) : leaderboard.length === 0 ? (
+            <div className="bg-navy-800 border border-navy-700 rounded-lg p-12 text-center">
+              <TrophyIcon className="w-12 h-12 text-navy-500 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-sky-100 mb-2">No Reputation Data</h3>
+              <p className="text-navy-400">
+                No members with reputation scores yet.
+              </p>
+            </div>
+          ) : (
+            <div className="bg-navy-800 border border-navy-700 rounded-lg overflow-hidden">
+              <table className="w-full">
+                <thead className="bg-navy-900">
+                  <tr>
+                    <th className="text-left py-3 px-4 text-navy-400 font-medium text-sm w-16">Rank</th>
+                    <th className="text-left py-3 px-4 text-navy-400 font-medium text-sm">Member</th>
+                    <th className="text-left py-3 px-4 text-navy-400 font-medium text-sm">Tier</th>
+                    <th className="text-right py-3 px-4 text-navy-400 font-medium text-sm">Score</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-navy-700">
+                  {leaderboard.map((user, index) => {
+                    const tier = getTierForScore(user.reputation?.score || 0);
+                    return (
+                      <tr key={user.userId} className="hover:bg-navy-700/50">
+                        <td className="py-3 px-4">
+                          <span className={`font-bold ${index < 3 ? 'text-gold-400' : 'text-navy-400'}`}>
+                            #{user.rank || index + 1}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-8 h-8 rounded-full bg-navy-700 flex items-center justify-center overflow-hidden">
+                              {user.avatarUrl ? (
+                                <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" />
+                              ) : (
+                                <span className="text-navy-400 text-sm">
+                                  {user.username?.[0]?.toUpperCase()}
+                                </span>
+                              )}
+                            </div>
+                            <span className="font-medium text-sky-100">{user.username}</span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${tier.bg} ${tier.color} border border-white/10`}>
+                            {user.reputation?.label || tier.label}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <div className="flex items-center justify-end space-x-3">
+                            <div className="w-24 h-2 bg-navy-700 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full ${tier.bg.replace('/20', '')}`}
+                                style={{ width: `${((user.reputation?.score || 0) - 300) / 5.5}%` }}
+                              ></div>
+                            </div>
+                            <span className={`font-bold ${tier.color} w-12 text-right`}>
+                              {user.reputation?.score || 0}
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* At-Risk Users Modal */}
       {showAtRisk && (
