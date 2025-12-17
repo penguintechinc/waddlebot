@@ -13,6 +13,7 @@ import platformRoutes from './platform.js';
 import superadminRoutes from './superadmin.js';
 import internalRoutes from './internal.js';
 import cookieConsentRoutes from './cookieConsent.js';
+import vendorRoutes from './vendor.js';
 
 const router = Router();
 
@@ -46,5 +47,8 @@ router.use('/superadmin', superadminRoutes);
 
 // Internal routes (service-to-service, API key auth)
 router.use('/internal', internalRoutes);
+
+// Vendor module submission routes (public and admin)
+router.use('/', vendorRoutes);
 
 export default router;
