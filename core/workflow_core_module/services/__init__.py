@@ -31,6 +31,17 @@ from .schedule_service import (
     ScheduleNotFoundException,
     InvalidScheduleException,
 )
+from .expression_engine import (
+    ExpressionEngine,
+    ExpressionContext,
+    ExpressionResult,
+    ExpressionEngineException,
+    ExpressionSyntaxError,
+    ExpressionEvaluationError,
+    ExpressionSecurityError,
+    BuiltInFunction,
+    create_engine,
+)
 
 __all__ = [
     "LicenseService",
@@ -54,4 +65,13 @@ __all__ = [
     "ScheduleServiceException",
     "ScheduleNotFoundException",
     "InvalidScheduleException",
+    "ExpressionEngine",
+    "ExpressionContext",
+    "ExpressionResult",
+    "ExpressionEngineException",
+    "ExpressionSyntaxError",
+    "ExpressionEvaluationError",
+    "ExpressionSecurityError",
+    "BuiltInFunction",
+    "create_engine",
 ]

@@ -7,6 +7,7 @@ with various music streaming services.
 
 from .base_provider import BaseMusicProvider, MusicTrack
 from .spotify_provider import SpotifyProvider, SpotifyAuthError, SpotifyAPIError
+from .soundcloud_provider import SoundCloudProvider, SoundCloudAuthError, SoundCloudAPIError
 from .youtube_provider import (
     YouTubeProvider,
     YouTubeProviderError,
@@ -20,6 +21,9 @@ __all__ = [
     "SpotifyProvider",
     "SpotifyAuthError",
     "SpotifyAPIError",
+    "SoundCloudProvider",
+    "SoundCloudAuthError",
+    "SoundCloudAPIError",
     "YouTubeProvider",
     "YouTubeProviderError",
     "YouTubeAuthenticationError",

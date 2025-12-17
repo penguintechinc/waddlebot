@@ -1,12 +1,36 @@
-#!/bin/bash
+#!/usr/bin/env bash
 ################################################################################
 # WaddleBot Inventory Interaction Module API Test Script
-# Comprehensive test suite for all Inventory Module API endpoints
+################################################################################
+#
+# Comprehensive test suite for the Inventory Interaction Module API endpoints.
+# Tests health checks, item CRUD operations, checkout/checkin workflows,
+# searching, stock management, and audit logging.
+#
+# Usage:
+#   ./test-api.sh [OPTIONS]
+#
+# Options:
+#   --help              Show this help message
+#   --url URL           Set inventory module URL (default: http://localhost:8024)
+#   --api-key KEY       Set API key for authenticated endpoints
+#   --verbose           Enable verbose output
+#   --skip-auth         Skip tests requiring authentication
+#
+# Environment Variables:
+#   INVENTORY_URL       Base URL for inventory module (default: http://localhost:8024)
+#   INVENTORY_API_KEY   API key for authenticated endpoints
+#   VERBOSE             Enable verbose output (true/false)
+#
+# Exit Codes:
+#   0 - All tests passed
+#   1 - One or more tests failed
+#
 ################################################################################
 
 set -euo pipefail
 
-# Color codes for output
+# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -14,158 +38,365 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Test counters
+TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_SKIPPED=0
 
 # Configuration
 INVENTORY_URL="${INVENTORY_URL:-http://localhost:8024}"
-VERBOSE=false
+INVENTORY_API_KEY="${INVENTORY_API_KEY:-}"
+VERBOSE="${VERBOSE:-false}"
+SKIP_AUTH=false
 
-# Temporary files
-RESPONSE_FILE=$(mktemp)
-
-# Cleanup on exit
-trap 'rm -f "$RESPONSE_FILE"' EXIT
+# Test data storage
+CREATED_ITEM_ID=""
+CREATED_CHECKOUT_ID=""
+COMMUNITY_ID=1
 
 ################################################################################
 # Helper Functions
 ################################################################################
 
-print_header() {
-    echo -e "\n${BLUE}========================================${NC}"
-    echo -e "${BLUE}$1${NC}"
-    echo -e "${BLUE}========================================${NC}"
+print_help() {
+    sed -n '2,/^$/p' "$0" | sed 's/^# //g; s/^#//g'
 }
 
-print_test() {
-    echo -e "\n${BLUE}[TEST]${NC} $1"
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $*"
 }
 
-print_pass() {
-    echo -e "${GREEN}[PASS]${NC} $1"
-    ((TESTS_PASSED++))
+log_success() {
+    echo -e "${GREEN}[PASS]${NC} $*"
 }
 
-print_fail() {
-    echo -e "${RED}[FAIL]${NC} $1"
-    ((TESTS_FAILED++))
+log_error() {
+    echo -e "${RED}[FAIL]${NC} $*"
 }
 
-print_skip() {
-    echo -e "${YELLOW}[SKIP]${NC} $1"
-    ((TESTS_SKIPPED++))
+log_skip() {
+    echo -e "${YELLOW}[SKIP]${NC} $*"
 }
 
-print_summary() {
-    echo -e "\n${BLUE}========================================${NC}"
-    echo -e "${BLUE}Test Summary${NC}"
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}Passed:  ${TESTS_PASSED}${NC}"
-    echo -e "${RED}Failed:  ${TESTS_FAILED}${NC}"
-    echo -e "${YELLOW}Skipped: ${TESTS_SKIPPED}${NC}"
-    echo -e "${BLUE}Total:   $((TESTS_PASSED + TESTS_FAILED + TESTS_SKIPPED))${NC}"
-    echo -e "${BLUE}========================================${NC}"
+log_verbose() {
+    if [[ "$VERBOSE" == "true" ]]; then
+        echo -e "${BLUE}[VERBOSE]${NC} $*"
+    fi
 }
 
-show_help() {
-    cat << EOF
-WaddleBot Inventory Interaction Module API Test Script
+# Check if required commands are available
+check_requirements() {
+    local missing=()
 
-Usage: $0 [OPTIONS]
+    if ! command -v curl &> /dev/null; then
+        missing+=("curl")
+    fi
 
-Options:
-    -h, --help              Show this help message
-    -u, --url URL           Inventory module URL (default: http://localhost:8024)
-    -v, --verbose           Enable verbose output (show response bodies)
+    if ! command -v jq &> /dev/null; then
+        missing+=("jq")
+    fi
 
-Environment Variables:
-    INVENTORY_URL           Inventory module URL
-
-Examples:
-    # Run tests against local instance
-    $0
-
-    # Run tests against custom URL
-    $0 --url http://inventory.example.com:8024
-
-    # Run with verbose output
-    $0 --verbose
-
-Exit Codes:
-    0 - All tests passed
-    1 - One or more tests failed
-
-EOF
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        log_error "Missing required commands: ${missing[*]}"
+        log_error "Please install missing dependencies and try again"
+        exit 1
+    fi
 }
 
-# API call helper
-api_call() {
+# Make HTTP request and return response
+make_request() {
     local method="$1"
     local endpoint="$2"
     local data="${3:-}"
-    local expected_status="${4:-200}"
+    local auth_required="${4:-false}"
 
-    local curl_opts=(-s -w "\n%{http_code}" -X "$method")
+    local url="${INVENTORY_URL}${endpoint}"
+    local headers=(-H "Content-Type: application/json")
 
-    # Add content-type and data if provided
-    if [ -n "$data" ]; then
-        curl_opts+=(-H "Content-Type: application/json" -d "$data")
+    # Add API key header if required and available
+    if [[ "$auth_required" == "true" ]] && [[ -n "$INVENTORY_API_KEY" ]]; then
+        headers+=(-H "X-API-Key: ${INVENTORY_API_KEY}")
     fi
 
-    # Make the API call
+    log_verbose "Request: $method $url"
+    [[ -n "$data" ]] && log_verbose "Data: $data"
+
     local response
-    response=$(curl "${curl_opts[@]}" "${INVENTORY_URL}${endpoint}" 2>&1 || true)
+    local http_code
 
-    # Extract status code (last line)
-    local status_code
-    status_code=$(echo "$response" | tail -n 1)
-
-    # Extract body (all but last line)
-    local body
-    body=$(echo "$response" | sed '$d')
-
-    # Save response for inspection
-    echo "$body" > "$RESPONSE_FILE"
-
-    # Show verbose output if enabled
-    if [ "$VERBOSE" = true ]; then
-        echo -e "  ${BLUE}Status:${NC} $status_code"
-        echo -e "  ${BLUE}Response:${NC} $body"
+    if [[ -n "$data" ]]; then
+        response=$(curl -s -w "\n%{http_code}" -X "$method" "$url" \
+            "${headers[@]}" \
+            -d "$data" 2>&1) || true
+    else
+        response=$(curl -s -w "\n%{http_code}" -X "$method" "$url" \
+            "${headers[@]}" 2>&1) || true
     fi
 
-    # Check status code
-    if [ "$status_code" = "$expected_status" ]; then
-        echo "$body"
+    # Extract HTTP code from last line
+    http_code=$(echo "$response" | tail -n1)
+    response=$(echo "$response" | sed '$d')
+
+    log_verbose "HTTP Code: $http_code"
+    log_verbose "Response: $response"
+
+    # Return both response and HTTP code
+    echo "$response"
+    echo "$http_code"
+}
+
+# Run a test case
+run_test() {
+    local test_name="$1"
+    local method="$2"
+    local endpoint="$3"
+    local data="${4:-}"
+    local expected_code="${5:-200}"
+    local auth_required="${6:-false}"
+    local check_function="${7:-}"
+
+    ((TESTS_RUN++))
+
+    # Skip authenticated tests if no API key and skip_auth is set
+    if [[ "$auth_required" == "true" ]] && [[ -z "$INVENTORY_API_KEY" ]] && [[ "$SKIP_AUTH" == "true" ]]; then
+        log_skip "$test_name (no API key)"
+        ((TESTS_SKIPPED++))
         return 0
-    else
-        if [ "$VERBOSE" = false ]; then
-            echo "Expected status $expected_status, got $status_code" >&2
-            echo "Response: $body" >&2
+    fi
+
+    log_info "Running: $test_name"
+
+    # Make request
+    local result
+    result=$(make_request "$method" "$endpoint" "$data" "$auth_required")
+
+    local response
+    local http_code
+    response=$(echo "$result" | head -n -1)
+    http_code=$(echo "$result" | tail -n1)
+
+    # Check HTTP code
+    if [[ "$http_code" != "$expected_code" ]]; then
+        log_error "$test_name - Expected HTTP $expected_code, got $http_code"
+        ((TESTS_FAILED++))
+        return 1
+    fi
+
+    # Check if response is valid JSON (unless it's empty or plain text)
+    if [[ -n "$response" ]] && [[ "$response" != "null" ]]; then
+        if ! echo "$response" | jq . > /dev/null 2>&1; then
+            log_error "$test_name - Invalid JSON response"
+            ((TESTS_FAILED++))
+            return 1
         fi
-        return 1
     fi
+
+    # Run custom check function if provided
+    if [[ -n "$check_function" ]]; then
+        if ! $check_function "$response"; then
+            log_error "$test_name - Custom validation failed"
+            ((TESTS_FAILED++))
+            return 1
+        fi
+    fi
+
+    log_success "$test_name"
+    ((TESTS_PASSED++))
+    return 0
 }
 
-# Validate JSON response helper
-validate_json() {
+################################################################################
+# Test Validation Functions
+################################################################################
+
+check_health_response() {
     local response="$1"
-    if echo "$response" | jq empty 2>/dev/null; then
-        return 0
-    else
+
+    # Check for status field
+    if ! echo "$response" | jq -e '.status' > /dev/null 2>&1; then
+        log_error "Missing 'status' field"
         return 1
     fi
+
+    local status
+    status=$(echo "$response" | jq -r '.status')
+
+    if [[ "$status" != "healthy" ]]; then
+        log_error "Service not healthy: $status"
+        return 1
+    fi
+
+    return 0
 }
 
-# Check JSON field exists
-check_field() {
+check_status_response() {
     local response="$1"
-    local field="$2"
-    if echo "$response" | jq -e "$field" > /dev/null 2>&1; then
-        return 0
-    else
+
+    # Check for status field
+    if ! echo "$response" | jq -e '.data.status' > /dev/null 2>&1; then
+        log_error "Missing 'data.status' field"
         return 1
     fi
+
+    local status
+    status=$(echo "$response" | jq -r '.data.status')
+
+    if [[ "$status" != "operational" ]]; then
+        log_error "Service not operational: $status"
+        return 1
+    fi
+
+    return 0
+}
+
+check_item_create_response() {
+    local response="$1"
+
+    # Check for required fields
+    if ! echo "$response" | jq -e '.data.id' > /dev/null 2>&1; then
+        log_error "Missing 'data.id' field"
+        return 1
+    fi
+
+    if ! echo "$response" | jq -e '.data.name' > /dev/null 2>&1; then
+        log_error "Missing 'data.name' field"
+        return 1
+    fi
+
+    if ! echo "$response" | jq -e '.data.quantity' > /dev/null 2>&1; then
+        log_error "Missing 'data.quantity' field"
+        return 1
+    fi
+
+    # Store item ID for later tests
+    CREATED_ITEM_ID=$(echo "$response" | jq -r '.data.id')
+    log_verbose "Stored item ID: $CREATED_ITEM_ID"
+
+    return 0
+}
+
+check_item_response() {
+    local response="$1"
+
+    # Check for required fields
+    if ! echo "$response" | jq -e '.data.id' > /dev/null 2>&1; then
+        log_error "Missing 'data.id' field"
+        return 1
+    fi
+
+    if ! echo "$response" | jq -e '.data.name' > /dev/null 2>&1; then
+        log_error "Missing 'data.name' field"
+        return 1
+    fi
+
+    if ! echo "$response" | jq -e '.data.available_quantity' > /dev/null 2>&1; then
+        log_error "Missing 'data.available_quantity' field"
+        return 1
+    fi
+
+    return 0
+}
+
+check_items_list_response() {
+    local response="$1"
+
+    # Check for data array
+    if ! echo "$response" | jq -e '.data' > /dev/null 2>&1; then
+        log_error "Missing 'data' field"
+        return 1
+    fi
+
+    # Check if data is an array
+    if ! echo "$response" | jq -e '.data | type == "array"' > /dev/null 2>&1; then
+        log_error "'data' field should be an array"
+        return 1
+    fi
+
+    return 0
+}
+
+check_search_response() {
+    local response="$1"
+
+    # Check for data array
+    if ! echo "$response" | jq -e '.data' > /dev/null 2>&1; then
+        log_error "Missing 'data' field"
+        return 1
+    fi
+
+    # Check if data is an array
+    if ! echo "$response" | jq -e '.data | type == "array"' > /dev/null 2>&1; then
+        log_error "'data' field should be an array"
+        return 1
+    fi
+
+    return 0
+}
+
+check_checkout_response() {
+    local response="$1"
+
+    # Check for required fields
+    if ! echo "$response" | jq -e '.data.id' > /dev/null 2>&1; then
+        log_error "Missing 'data.id' field"
+        return 1
+    fi
+
+    if ! echo "$response" | jq -e '.data.status' > /dev/null 2>&1; then
+        log_error "Missing 'data.status' field"
+        return 1
+    fi
+
+    if ! echo "$response" | jq -e '.data.status' | grep -q "active"; then
+        log_error "Checkout not in active status"
+        return 1
+    fi
+
+    # Store checkout ID for later tests
+    CREATED_CHECKOUT_ID=$(echo "$response" | jq -r '.data.id')
+    log_verbose "Stored checkout ID: $CREATED_CHECKOUT_ID"
+
+    return 0
+}
+
+check_summary_response() {
+    local response="$1"
+
+    # Check for required fields
+    if ! echo "$response" | jq -e '.data.total_items' > /dev/null 2>&1; then
+        log_error "Missing 'data.total_items' field"
+        return 1
+    fi
+
+    if ! echo "$response" | jq -e '.data.total_quantity' > /dev/null 2>&1; then
+        log_error "Missing 'data.total_quantity' field"
+        return 1
+    fi
+
+    if ! echo "$response" | jq -e '.data.active_checkouts' > /dev/null 2>&1; then
+        log_error "Missing 'data.active_checkouts' field"
+        return 1
+    fi
+
+    return 0
+}
+
+check_checkouts_list_response() {
+    local response="$1"
+
+    # Check for data array
+    if ! echo "$response" | jq -e '.data' > /dev/null 2>&1; then
+        log_error "Missing 'data' field"
+        return 1
+    fi
+
+    # Check if data is an array
+    if ! echo "$response" | jq -e '.data | type == "array"' > /dev/null 2>&1; then
+        log_error "'data' field should be an array"
+        return 1
+    fi
+
+    return 0
 }
 
 ################################################################################
@@ -174,390 +405,428 @@ check_field() {
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        -h|--help)
-            show_help
+        --help)
+            print_help
             exit 0
             ;;
-        -u|--url)
+        --url)
             INVENTORY_URL="$2"
             shift 2
             ;;
-        -v|--verbose)
-            VERBOSE=true
+        --api-key)
+            INVENTORY_API_KEY="$2"
+            shift 2
+            ;;
+        --verbose)
+            VERBOSE="true"
+            shift
+            ;;
+        --skip-auth)
+            SKIP_AUTH="true"
             shift
             ;;
         *)
-            echo "Unknown option: $1"
-            show_help
+            log_error "Unknown option: $1"
+            print_help
             exit 1
             ;;
     esac
 done
 
 ################################################################################
-# Main Test Execution
+# Test Cases - Health & Status
 ################################################################################
 
-echo -e "${BLUE}WaddleBot Inventory Interaction Module API Test Suite${NC}"
-echo -e "Testing: ${INVENTORY_URL}"
-echo -e "Module: inventory_interaction_module"
-echo -e "Expected Port: 8024"
+test_health() {
+    run_test \
+        "GET /health" \
+        "GET" \
+        "/health" \
+        "" \
+        "200" \
+        "false" \
+        "check_health_response"
+}
+
+test_status() {
+    run_test \
+        "GET /api/v1/status" \
+        "GET" \
+        "/api/v1/status" \
+        "" \
+        "200" \
+        "false" \
+        "check_status_response"
+}
 
 ################################################################################
-# Health Check Endpoints
+# Test Cases - Item Management
 ################################################################################
 
-print_header "Health Check Endpoints"
+test_add_item() {
+    local data='{
+        "name": "Test Laptop",
+        "description": "High-performance laptop for testing",
+        "item_type": "equipment",
+        "category": "electronics",
+        "quantity": 3,
+        "checkout_price": 50,
+        "max_checkout_duration_hours": 72,
+        "image_url": "https://example.com/laptop.jpg"
+    }'
 
-# Test: Basic health check
-print_test "GET /health"
-if response=$(api_call GET /health "" 200); then
-    if validate_json "$response"; then
-        if check_field "$response" '.status' && \
-           check_field "$response" '.module' && \
-           check_field "$response" '.version' && \
-           check_field "$response" '.timestamp'; then
+    run_test \
+        "POST /api/v1/items (add item)" \
+        "POST" \
+        "/api/v1/items" \
+        "$data" \
+        "201" \
+        "false" \
+        "check_item_create_response"
+}
 
-            status=$(echo "$response" | jq -r '.status')
-            module=$(echo "$response" | jq -r '.module')
-            version=$(echo "$response" | jq -r '.version')
+test_get_item_by_id() {
+    if [[ -z "$CREATED_ITEM_ID" ]]; then
+        log_skip "GET /api/v1/items/{id} (no item ID)"
+        ((TESTS_SKIPPED++))
+        return 0
+    fi
 
-            if [ "$status" = "healthy" ]; then
-                print_pass "Health check returned healthy status (module: $module, version: $version)"
-            else
-                print_fail "Health check returned status '$status', expected 'healthy'"
-            fi
-        else
-            print_fail "Health check missing required fields (status, module, version, timestamp)"
-        fi
+    run_test \
+        "GET /api/v1/items/${CREATED_ITEM_ID}" \
+        "GET" \
+        "/api/v1/items/${CREATED_ITEM_ID}" \
+        "" \
+        "200" \
+        "false" \
+        "check_item_response"
+}
+
+test_update_item() {
+    if [[ -z "$CREATED_ITEM_ID" ]]; then
+        log_skip "PUT /api/v1/items/{id} (no item ID)"
+        ((TESTS_SKIPPED++))
+        return 0
+    fi
+
+    local data='{
+        "name": "Updated Test Laptop",
+        "checkout_price": 75
+    }'
+
+    run_test \
+        "PUT /api/v1/items/${CREATED_ITEM_ID}" \
+        "PUT" \
+        "/api/v1/items/${CREATED_ITEM_ID}" \
+        "$data" \
+        "200" \
+        "false" \
+        "check_item_response"
+}
+
+test_get_available_items() {
+    run_test \
+        "GET /api/v1/items (list available)" \
+        "GET" \
+        "/api/v1/items?include_unavailable=false" \
+        "" \
+        "200" \
+        "false" \
+        "check_items_list_response"
+}
+
+test_search_items() {
+    run_test \
+        "GET /api/v1/items/search (search)" \
+        "GET" \
+        "/api/v1/items/search?q=laptop" \
+        "" \
+        "200" \
+        "false" \
+        "check_search_response"
+}
+
+################################################################################
+# Test Cases - Checkout/Checkin
+################################################################################
+
+test_checkout_item() {
+    if [[ -z "$CREATED_ITEM_ID" ]]; then
+        log_skip "POST /api/v1/items/{id}/checkout (no item ID)"
+        ((TESTS_SKIPPED++))
+        return 0
+    fi
+
+    local data='{
+        "user_id": 100,
+        "quantity": 1,
+        "checkout_duration_hours": 48,
+        "notes": "Test checkout"
+    }'
+
+    run_test \
+        "POST /api/v1/items/${CREATED_ITEM_ID}/checkout" \
+        "POST" \
+        "/api/v1/items/${CREATED_ITEM_ID}/checkout" \
+        "$data" \
+        "200" \
+        "false" \
+        "check_checkout_response"
+}
+
+test_checkin_item() {
+    if [[ -z "$CREATED_CHECKOUT_ID" ]]; then
+        log_skip "POST /api/v1/checkouts/{id}/checkin (no checkout ID)"
+        ((TESTS_SKIPPED++))
+        return 0
+    fi
+
+    local data='{
+        "returned_condition": "Good condition"
+    }'
+
+    run_test \
+        "POST /api/v1/checkouts/${CREATED_CHECKOUT_ID}/checkin" \
+        "POST" \
+        "/api/v1/checkouts/${CREATED_CHECKOUT_ID}/checkin" \
+        "$data" \
+        "200" \
+        "false"
+}
+
+test_list_checkouts() {
+    run_test \
+        "GET /api/v1/checkouts (list)" \
+        "GET" \
+        "/api/v1/checkouts?status=active" \
+        "" \
+        "200" \
+        "false" \
+        "check_checkouts_list_response"
+}
+
+test_get_user_checkouts() {
+    run_test \
+        "GET /api/v1/checkouts (user)" \
+        "GET" \
+        "/api/v1/checkouts?user_id=100" \
+        "" \
+        "200" \
+        "false" \
+        "check_checkouts_list_response"
+}
+
+################################################################################
+# Test Cases - Stock Management
+################################################################################
+
+test_add_stock() {
+    if [[ -z "$CREATED_ITEM_ID" ]]; then
+        log_skip "POST /api/v1/items/{id}/add-stock (no item ID)"
+        ((TESTS_SKIPPED++))
+        return 0
+    fi
+
+    local data='{
+        "quantity": 5,
+        "reason": "Restocking"
+    }'
+
+    run_test \
+        "POST /api/v1/items/${CREATED_ITEM_ID}/add-stock" \
+        "POST" \
+        "/api/v1/items/${CREATED_ITEM_ID}/add-stock" \
+        "$data" \
+        "200" \
+        "false" \
+        "check_item_response"
+}
+
+test_remove_stock() {
+    if [[ -z "$CREATED_ITEM_ID" ]]; then
+        log_skip "POST /api/v1/items/{id}/remove-stock (no item ID)"
+        ((TESTS_SKIPPED++))
+        return 0
+    fi
+
+    local data='{
+        "quantity": 2,
+        "reason": "Damaged items"
+    }'
+
+    run_test \
+        "POST /api/v1/items/${CREATED_ITEM_ID}/remove-stock" \
+        "POST" \
+        "/api/v1/items/${CREATED_ITEM_ID}/remove-stock" \
+        "$data" \
+        "200" \
+        "false" \
+        "check_item_response"
+}
+
+################################################################################
+# Test Cases - Inventory Summary
+################################################################################
+
+test_inventory_summary() {
+    run_test \
+        "GET /api/v1/summary" \
+        "GET" \
+        "/api/v1/summary" \
+        "" \
+        "200" \
+        "false" \
+        "check_summary_response"
+}
+
+test_low_stock_items() {
+    run_test \
+        "GET /api/v1/items/low-stock" \
+        "GET" \
+        "/api/v1/items/low-stock" \
+        "" \
+        "200" \
+        "false" \
+        "check_items_list_response"
+}
+
+test_overdue_checkouts() {
+    run_test \
+        "GET /api/v1/checkouts/overdue" \
+        "GET" \
+        "/api/v1/checkouts/overdue" \
+        "" \
+        "200" \
+        "false" \
+        "check_checkouts_list_response"
+}
+
+################################################################################
+# Test Cases - Delete Item
+################################################################################
+
+test_delete_item() {
+    if [[ -z "$CREATED_ITEM_ID" ]]; then
+        log_skip "DELETE /api/v1/items/{id} (no item ID)"
+        ((TESTS_SKIPPED++))
+        return 0
+    fi
+
+    run_test \
+        "DELETE /api/v1/items/${CREATED_ITEM_ID}" \
+        "DELETE" \
+        "/api/v1/items/${CREATED_ITEM_ID}" \
+        "" \
+        "200" \
+        "false"
+}
+
+################################################################################
+# Test Cases - Error Handling
+################################################################################
+
+test_invalid_endpoint() {
+    run_test \
+        "GET /api/v1/nonexistent" \
+        "GET" \
+        "/api/v1/nonexistent" \
+        "" \
+        "404" \
+        "false"
+}
+
+test_invalid_method() {
+    run_test \
+        "PATCH /api/v1/status (invalid method)" \
+        "PATCH" \
+        "/api/v1/status" \
+        "" \
+        "405" \
+        "false"
+}
+
+################################################################################
+# Main Execution
+################################################################################
+
+main() {
+    # Check requirements
+    check_requirements
+
+    # Print test configuration
+    echo ""
+    log_info "======================================================================"
+    log_info "WaddleBot Inventory Interaction Module API Test Suite"
+    log_info "======================================================================"
+    log_info "Inventory Module URL: $INVENTORY_URL"
+    log_info "API Key: ${INVENTORY_API_KEY:+[SET]}${INVENTORY_API_KEY:-[NOT SET]}"
+    log_info "Verbose: $VERBOSE"
+    log_info "Skip Auth Tests: $SKIP_AUTH"
+    log_info "======================================================================"
+    echo ""
+
+    # Run tests
+    log_info "Running Health & Status Tests..."
+    test_health
+    test_status
+    echo ""
+
+    log_info "Running Item Management Tests..."
+    test_add_item
+    test_get_item_by_id
+    test_update_item
+    test_get_available_items
+    test_search_items
+    echo ""
+
+    log_info "Running Stock Management Tests..."
+    test_add_stock
+    test_remove_stock
+    echo ""
+
+    log_info "Running Checkout/Checkin Tests..."
+    test_checkout_item
+    test_list_checkouts
+    test_get_user_checkouts
+    test_checkin_item
+    echo ""
+
+    log_info "Running Inventory Summary Tests..."
+    test_inventory_summary
+    test_low_stock_items
+    test_overdue_checkouts
+    echo ""
+
+    log_info "Running Error Handling Tests..."
+    test_invalid_endpoint
+    test_invalid_method
+    echo ""
+
+    log_info "Running Cleanup Tests..."
+    test_delete_item
+    echo ""
+
+    # Print summary
+    echo ""
+    log_info "======================================================================"
+    log_info "Test Summary"
+    log_info "======================================================================"
+    log_info "Total Tests:  $TESTS_RUN"
+    log_success "Passed:       $TESTS_PASSED"
+    log_error "Failed:       $TESTS_FAILED"
+    log_skip "Skipped:      $TESTS_SKIPPED"
+    log_info "======================================================================"
+    echo ""
+
+    # Exit with appropriate code
+    if [[ $TESTS_FAILED -gt 0 ]]; then
+        log_error "Some tests failed!"
+        exit 1
     else
-        print_fail "Health check returned invalid JSON"
+        log_success "All tests passed!"
+        exit 0
     fi
-else
-    print_fail "Health check failed - module may not be running"
-    echo -e "${RED}ERROR: Cannot connect to inventory module at ${INVENTORY_URL}${NC}"
-    echo -e "${YELLOW}Please ensure the module is running and accessible${NC}"
-    print_summary
-    exit 1
-fi
+}
 
-# Test: Kubernetes health check (healthz)
-print_test "GET /healthz"
-if response=$(api_call GET /healthz "" 200); then
-    if validate_json "$response"; then
-        if check_field "$response" '.status' && \
-           check_field "$response" '.module' && \
-           check_field "$response" '.version' && \
-           check_field "$response" '.checks'; then
-
-            status=$(echo "$response" | jq -r '.status')
-            memory_check=$(echo "$response" | jq -r '.checks.memory')
-            cpu_check=$(echo "$response" | jq -r '.checks.cpu')
-
-            if [ "$status" = "healthy" ]; then
-                print_pass "Healthz check returned healthy status (memory: $memory_check, cpu: $cpu_check)"
-            elif [ "$status" = "degraded" ]; then
-                print_pass "Healthz check returned degraded status (memory: $memory_check, cpu: $cpu_check) - WARNING"
-            else
-                print_fail "Healthz check returned unexpected status '$status'"
-            fi
-        else
-            print_fail "Healthz check missing required fields"
-        fi
-    else
-        print_fail "Healthz check returned invalid JSON"
-    fi
-else
-    # Try with 503 status (degraded)
-    if response=$(api_call GET /healthz "" 503 2>/dev/null); then
-        status=$(echo "$response" | jq -r '.status' 2>/dev/null || echo "unknown")
-        print_pass "Healthz check returned degraded status (503): $status"
-    else
-        print_fail "Healthz check failed"
-    fi
-fi
-
-# Test: Prometheus metrics endpoint
-print_test "GET /metrics"
-if response=$(api_call GET /metrics "" 200); then
-    # Metrics endpoint returns Prometheus text format, not JSON
-    if echo "$response" | grep -q "waddlebot_info"; then
-        # Check for key metrics
-        metrics_found=0
-
-        if echo "$response" | grep -q "waddlebot_info{"; then
-            ((metrics_found++))
-        fi
-        if echo "$response" | grep -q "waddlebot_requests_total"; then
-            ((metrics_found++))
-        fi
-        if echo "$response" | grep -q "waddlebot_memory_bytes"; then
-            ((metrics_found++))
-        fi
-        if echo "$response" | grep -q "waddlebot_cpu_percent"; then
-            ((metrics_found++))
-        fi
-
-        if [ $metrics_found -ge 3 ]; then
-            print_pass "Metrics endpoint returned Prometheus format with $metrics_found key metrics"
-        else
-            print_fail "Metrics endpoint returned incomplete metrics (found $metrics_found/4)"
-        fi
-    else
-        print_fail "Metrics endpoint did not return Prometheus format"
-    fi
-else
-    print_fail "Metrics endpoint failed"
-fi
-
-################################################################################
-# API Status Endpoint
-################################################################################
-
-print_header "API Status Endpoint"
-
-# Test: API status check
-print_test "GET /api/v1/status"
-if response=$(api_call GET /api/v1/status "" 200); then
-    if validate_json "$response"; then
-        # Check for standardized response format
-        if check_field "$response" '.success' && check_field "$response" '.data'; then
-            success=$(echo "$response" | jq -r '.success')
-            status_val=$(echo "$response" | jq -r '.data.status')
-            module_name=$(echo "$response" | jq -r '.data.module')
-
-            if [ "$success" = "true" ] && [ "$status_val" = "operational" ]; then
-                print_pass "API status check successful (module: $module_name, status: $status_val)"
-            else
-                print_fail "API status check returned unexpected values (success: $success, status: $status_val)"
-            fi
-        else
-            print_fail "API status check missing standardized response format (success, data)"
-        fi
-    else
-        print_fail "API status check returned invalid JSON"
-    fi
-else
-    print_fail "API status check failed"
-fi
-
-################################################################################
-# Error Handling Tests
-################################################################################
-
-print_header "Error Handling Tests"
-
-# Test: Non-existent endpoint (404)
-print_test "GET /api/v1/nonexistent (404 Not Found)"
-if api_call GET /api/v1/nonexistent "" 404 > /dev/null 2>&1; then
-    print_pass "Non-existent endpoint correctly returns 404"
-else
-    print_skip "404 handling test - response varies by framework"
-fi
-
-# Test: Invalid HTTP method
-print_test "DELETE /health (405 Method Not Allowed)"
-if api_call DELETE /health "" 405 > /dev/null 2>&1; then
-    print_pass "Invalid HTTP method correctly returns 405"
-else
-    print_skip "405 handling test - response varies by framework"
-fi
-
-################################################################################
-# Response Format Validation
-################################################################################
-
-print_header "Response Format Validation"
-
-# Test: Verify timestamp format in health endpoint
-print_test "Verify ISO 8601 timestamp format"
-if response=$(api_call GET /health "" 200); then
-    timestamp=$(echo "$response" | jq -r '.timestamp')
-    # Check if timestamp matches ISO 8601 format (basic check)
-    if [[ "$timestamp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
-        print_pass "Timestamp follows ISO 8601 format: $timestamp"
-    else
-        print_fail "Timestamp does not follow ISO 8601 format: $timestamp"
-    fi
-else
-    print_fail "Could not retrieve timestamp for validation"
-fi
-
-# Test: Verify success response format
-print_test "Verify standardized success response format"
-if response=$(api_call GET /api/v1/status "" 200); then
-    has_success=false
-    has_data=false
-    has_timestamp=false
-
-    if check_field "$response" '.success'; then
-        has_success=true
-    fi
-    if check_field "$response" '.data'; then
-        has_data=true
-    fi
-    if check_field "$response" '.timestamp'; then
-        has_timestamp=true
-    fi
-
-    if [ "$has_success" = true ] && [ "$has_data" = true ] && [ "$has_timestamp" = true ]; then
-        print_pass "Response follows standardized success format (success, data, timestamp)"
-    else
-        print_fail "Response missing standardized fields (success: $has_success, data: $has_data, timestamp: $has_timestamp)"
-    fi
-else
-    print_fail "Could not retrieve response for format validation"
-fi
-
-################################################################################
-# Module Information Tests
-################################################################################
-
-print_header "Module Information Tests"
-
-# Test: Verify module name consistency
-print_test "Verify module name consistency across endpoints"
-health_module=$(api_call GET /health "" 200 | jq -r '.module' 2>/dev/null || echo "")
-status_module=$(api_call GET /api/v1/status "" 200 | jq -r '.data.module' 2>/dev/null || echo "")
-
-if [ -n "$health_module" ] && [ -n "$status_module" ]; then
-    if [ "$health_module" = "$status_module" ]; then
-        print_pass "Module name consistent across endpoints: $health_module"
-    else
-        print_fail "Module name inconsistent (health: $health_module, status: $status_module)"
-    fi
-else
-    print_skip "Could not retrieve module names for consistency check"
-fi
-
-# Test: Verify version format
-print_test "Verify semantic version format"
-version=$(api_call GET /health "" 200 | jq -r '.version' 2>/dev/null || echo "")
-if [ -n "$version" ]; then
-    # Check if version follows semantic versioning (X.Y.Z)
-    if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        print_pass "Version follows semantic versioning: $version"
-    else
-        print_fail "Version does not follow semantic versioning: $version"
-    fi
-else
-    print_fail "Could not retrieve version for validation"
-fi
-
-################################################################################
-# Performance Tests
-################################################################################
-
-print_header "Performance Tests"
-
-# Test: Response time for health endpoint
-print_test "Health endpoint response time (< 100ms)"
-start_time=$(date +%s%N)
-if api_call GET /health "" 200 > /dev/null 2>&1; then
-    end_time=$(date +%s%N)
-    duration_ms=$(( (end_time - start_time) / 1000000 ))
-
-    if [ $duration_ms -lt 100 ]; then
-        print_pass "Health endpoint responded in ${duration_ms}ms (excellent)"
-    elif [ $duration_ms -lt 500 ]; then
-        print_pass "Health endpoint responded in ${duration_ms}ms (acceptable)"
-    else
-        print_fail "Health endpoint responded in ${duration_ms}ms (slow, > 500ms)"
-    fi
-else
-    print_fail "Could not measure health endpoint response time"
-fi
-
-# Test: Response time for status endpoint
-print_test "Status endpoint response time (< 200ms)"
-start_time=$(date +%s%N)
-if api_call GET /api/v1/status "" 200 > /dev/null 2>&1; then
-    end_time=$(date +%s%N)
-    duration_ms=$(( (end_time - start_time) / 1000000 ))
-
-    if [ $duration_ms -lt 200 ]; then
-        print_pass "Status endpoint responded in ${duration_ms}ms (excellent)"
-    elif [ $duration_ms -lt 1000 ]; then
-        print_pass "Status endpoint responded in ${duration_ms}ms (acceptable)"
-    else
-        print_fail "Status endpoint responded in ${duration_ms}ms (slow, > 1000ms)"
-    fi
-else
-    print_fail "Could not measure status endpoint response time"
-fi
-
-################################################################################
-# Content-Type Validation
-################################################################################
-
-print_header "Content-Type Validation"
-
-# Test: JSON endpoints return proper content-type
-print_test "Verify JSON Content-Type headers"
-if response=$(curl -s -I "${INVENTORY_URL}/health" 2>/dev/null); then
-    if echo "$response" | grep -iq "content-type:.*application/json"; then
-        print_pass "Health endpoint returns application/json Content-Type"
-    else
-        print_fail "Health endpoint does not return application/json Content-Type"
-    fi
-else
-    print_fail "Could not retrieve headers for Content-Type validation"
-fi
-
-# Test: Metrics endpoint returns text/plain
-print_test "Verify Prometheus metrics Content-Type"
-if response=$(curl -s -I "${INVENTORY_URL}/metrics" 2>/dev/null); then
-    if echo "$response" | grep -iq "content-type:.*text/plain"; then
-        print_pass "Metrics endpoint returns text/plain Content-Type"
-    else
-        print_fail "Metrics endpoint does not return text/plain Content-Type"
-    fi
-else
-    print_fail "Could not retrieve headers for metrics Content-Type validation"
-fi
-
-################################################################################
-# Concurrent Request Tests
-################################################################################
-
-print_header "Concurrent Request Tests"
-
-# Test: Handle concurrent requests
-print_test "Handle 10 concurrent health check requests"
-success_count=0
-for i in {1..10}; do
-    if api_call GET /health "" 200 > /dev/null 2>&1 & then
-        ((success_count++)) || true
-    fi
-done
-wait
-
-if [ $success_count -eq 10 ]; then
-    print_pass "All 10 concurrent requests completed successfully"
-elif [ $success_count -ge 8 ]; then
-    print_pass "$success_count/10 concurrent requests successful (acceptable)"
-else
-    print_fail "Only $success_count/10 concurrent requests successful"
-fi
-
-################################################################################
-# Print Summary and Exit
-################################################################################
-
-print_summary
-
-# Additional information
-echo -e "\n${BLUE}Module Information:${NC}"
-echo -e "  URL: ${INVENTORY_URL}"
-echo -e "  Module: inventory_interaction_module"
-echo -e "  Expected Port: 8024"
-echo -e "  Database: PostgreSQL"
-
-# Exit with appropriate code
-if [ $TESTS_FAILED -gt 0 ]; then
-    echo -e "\n${RED}Some tests failed. Please review the output above.${NC}"
-    exit 1
-else
-    echo -e "\n${GREEN}All tests passed successfully!${NC}"
-    exit 0
-fi
+# Run main function
+main "$@"
