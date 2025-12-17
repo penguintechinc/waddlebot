@@ -1,5 +1,6 @@
 import { Outlet, Link, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import VendorRequestFooter from '../components/VendorRequestFooter';
 import {
   HomeIcon,
   UserGroupIcon,
@@ -14,17 +15,16 @@ import {
   ShieldCheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  CodeBracketSquareIcon,
-  ServerStackIcon,
+  ShoppingCartIcon,
 } from '@heroicons/react/24/outline';
 import { useState } from 'react';
 
 function DashboardLayout() {
-  const { user, logout, isPlatformAdmin, isSuperAdmin } = useAuth();
+  const { user, logout, isSuperAdmin, isVendor } = useAuth();
   const location = useLocation();
   const { id: communityId } = useParams();
   const [adminCollapsed, setAdminCollapsed] = useState(false);
-  const [softwareCollapsed, setSoftwareCollapsed] = useState(false);
+  const [vendorCollapsed, setVendorCollapsed] = useState(false);
 
   const mainNav = [
     { to: '/dashboard', icon: HomeIcon, label: 'My Communities' },
@@ -37,14 +37,17 @@ function DashboardLayout() {
     { to: '/superadmin', icon: ChartBarIcon, label: 'Dashboard', exact: true },
     { to: '/superadmin/communities', icon: HomeIcon, label: 'Communities' },
     { to: '/superadmin/modules', icon: BuildingStorefrontIcon, label: 'Module Registry' },
+    { to: '/superadmin/users', icon: UserIcon, label: 'User Management' },
+    { to: '/superadmin/vendor-requests', icon: ShoppingCartIcon, label: 'Vendor Requests' },
     { to: '/superadmin/platform-config', icon: Cog6ToothIcon, label: 'Platform Config' },
     { to: '/superadmin/kong', icon: ShieldCheckIcon, label: 'Kong Gateway' },
   ];
 
-  // Software & Services navigation (Super Admin only)
-  const softwareNav = [
-    { to: '/superadmin/software-discovery', icon: CodeBracketSquareIcon, label: 'Git Repositories' },
-    { to: '/superadmin/services', icon: ServerStackIcon, label: 'Service Discovery' },
+  // Vendor navigation (standalone - vendors are not admins)
+  const vendorNav = [
+    { to: '/vendor/dashboard', icon: ChartBarIcon, label: 'Dashboard', exact: true },
+    { to: '/vendor/submissions', icon: BuildingStorefrontIcon, label: 'My Submissions' },
+    { to: '/vendor/submit', icon: ShoppingCartIcon, label: 'Submit New Module' },
   ];
 
   const communityNav = communityId
@@ -140,7 +143,50 @@ function DashboardLayout() {
               </>
             )}
 
-            {/* Super Admin Section - Role-based */}
+            {/* Vendor Section - Standalone for vendors (appears first) */}
+            {isVendor && (
+              <div className="mt-6">
+                <button
+                  onClick={() => setVendorCollapsed(!vendorCollapsed)}
+                  className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-navy-500 uppercase tracking-wider hover:text-navy-400 transition-colors"
+                >
+                  <span className="flex items-center space-x-2">
+                    <ShoppingCartIcon className="w-4 h-4" />
+                    <span>Vendor</span>
+                  </span>
+                  {vendorCollapsed ? (
+                    <ChevronRightIcon className="w-4 h-4" />
+                  ) : (
+                    <ChevronDownIcon className="w-4 h-4" />
+                  )}
+                </button>
+                {!vendorCollapsed && (
+                  <div className="mt-1 space-y-1">
+                    {vendorNav.map((item) => {
+                      const isActive = item.exact
+                        ? location.pathname === item.to
+                        : location.pathname.startsWith(item.to);
+                      return (
+                        <Link
+                          key={item.to}
+                          to={item.to}
+                          className={`flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
+                            isActive
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                              : 'text-navy-300 hover:bg-navy-800 hover:text-emerald-300'
+                          }`}
+                        >
+                          <item.icon className="w-5 h-5" />
+                          <span className="text-sm font-medium">{item.label}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Super Admin Section - Role-based (appears second) */}
             {isSuperAdmin && (
               <div className="mt-6">
                 <button
@@ -182,47 +228,6 @@ function DashboardLayout() {
                 )}
               </div>
             )}
-
-            {/* Software & Services Section - Super Admin only */}
-            {isSuperAdmin && (
-              <div className="mt-4">
-                <button
-                  onClick={() => setSoftwareCollapsed(!softwareCollapsed)}
-                  className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-navy-500 uppercase tracking-wider hover:text-navy-400 transition-colors"
-                >
-                  <span className="flex items-center space-x-2">
-                    <CodeBracketSquareIcon className="w-4 h-4" />
-                    <span>Software & Services</span>
-                  </span>
-                  {softwareCollapsed ? (
-                    <ChevronRightIcon className="w-4 h-4" />
-                  ) : (
-                    <ChevronDownIcon className="w-4 h-4" />
-                  )}
-                </button>
-                {!softwareCollapsed && (
-                  <div className="mt-1 space-y-1">
-                    {softwareNav.map((item) => {
-                      const isActive = location.pathname.startsWith(item.to);
-                      return (
-                        <Link
-                          key={item.to}
-                          to={item.to}
-                          className={`flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
-                            isActive
-                              ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
-                              : 'text-navy-300 hover:bg-navy-800 hover:text-sky-300'
-                          }`}
-                        >
-                          <item.icon className="w-5 h-5" />
-                          <span className="text-sm font-medium">{item.label}</span>
-                        </Link>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
           </nav>
         </aside>
 
@@ -231,6 +236,7 @@ function DashboardLayout() {
           <Outlet />
         </main>
       </div>
+      <VendorRequestFooter />
     </div>
   );
 }

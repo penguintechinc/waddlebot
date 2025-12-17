@@ -61,6 +61,14 @@ import AdminMusicDashboard from './pages/admin/AdminMusicDashboard';
 import AdminMusicSettings from './pages/admin/AdminMusicSettings';
 import AdminMusicProviders from './pages/admin/AdminMusicProviders';
 import AdminRadioStations from './pages/admin/AdminRadioStations';
+import AdminVendorReview from './pages/admin/AdminVendorReview';
+
+// Vendor pages
+import VendorSubmissionForm from './pages/vendor/VendorSubmissionForm';
+import VendorSubmissionStatus from './pages/vendor/VendorSubmissionStatus';
+import VendorDashboard from './pages/vendor/VendorDashboard';
+import VendorSubmissions from './pages/vendor/VendorSubmissions';
+import VendorRequest from './pages/vendor/VendorRequest';
 
 // Platform admin pages
 import PlatformDashboard from './pages/platform/PlatformDashboard';
@@ -76,6 +84,8 @@ import SuperAdminPlatformConfig from './pages/superadmin/SuperAdminPlatformConfi
 import SuperAdminKongGateway from './pages/superadmin/SuperAdminKongGateway';
 import SuperAdminSoftwareDiscovery from './pages/superadmin/SuperAdminSoftwareDiscovery';
 import SuperAdminServiceDiscovery from './pages/superadmin/SuperAdminServiceDiscovery';
+import SuperAdminVendorRequests from './pages/superadmin/SuperAdminVendorRequests';
+import SuperAdminUsers from './pages/superadmin/SuperAdminUsers';
 
 // Loading spinner
 function LoadingSpinner() {
@@ -88,7 +98,7 @@ function LoadingSpinner() {
 
 // Protected route wrapper
 function ProtectedRoute({ children, requireAdmin = false, requirePlatformAdmin = false, requireSuperAdmin = false }) {
-  const { user, loading, isSuperAdmin } = useAuth();
+  const { user, loading, hasRole } = useAuth();
 
   if (loading) {
     return <LoadingSpinner />;
@@ -98,11 +108,11 @@ function ProtectedRoute({ children, requireAdmin = false, requirePlatformAdmin =
     return <Navigate to="/login" replace />;
   }
 
-  if (requireSuperAdmin && !isSuperAdmin) {
+  if (requireSuperAdmin && !hasRole('super_admin')) {
     return <Navigate to="/dashboard" replace />;
   }
 
-  if (requirePlatformAdmin && !user.roles?.includes('platform-admin')) {
+  if (requirePlatformAdmin && !hasRole('platform-admin')) {
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -122,6 +132,10 @@ function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/auth/callback" element={<OAuthCallback />} />
         <Route path="/cookie-policy" element={<CookiePolicy />} />
+
+        {/* Vendor submission routes (public) */}
+        <Route path="/vendor/submit" element={<VendorSubmissionForm />} />
+        <Route path="/vendor/submission-status" element={<VendorSubmissionStatus />} />
       </Route>
 
       {/* Dashboard routes (authenticated) */}
@@ -140,6 +154,11 @@ function App() {
         <Route path="/dashboard/community/:id/chat" element={<CommunityChat />} />
         <Route path="/dashboard/community/:id/leaderboard" element={<CommunityLeaderboard />} />
         <Route path="/dashboard/community/:id/members" element={<CommunityMembers />} />
+
+        {/* Vendor dashboard routes (authenticated vendors) */}
+        <Route path="/vendor/dashboard" element={<VendorDashboard />} />
+        <Route path="/vendor/submissions" element={<VendorSubmissions />} />
+        <Route path="/vendor/request" element={<VendorRequest />} />
       </Route>
 
       {/* Admin routes (community admin) */}
@@ -207,6 +226,10 @@ function App() {
         <Route path="/superadmin/communities" element={<SuperAdminCommunities />} />
         <Route path="/superadmin/communities/new" element={<SuperAdminCreateCommunity />} />
         <Route path="/superadmin/modules" element={<SuperAdminModuleRegistry />} />
+        <Route path="/superadmin/vendor-submissions" element={<AdminVendorReview />} />
+        <Route path="/superadmin/vendor-submissions/:submissionId" element={<AdminVendorReview />} />
+        <Route path="/superadmin/vendor-requests" element={<SuperAdminVendorRequests />} />
+        <Route path="/superadmin/users" element={<SuperAdminUsers />} />
         <Route path="/superadmin/platform-config" element={<SuperAdminPlatformConfig />} />
         <Route path="/superadmin/kong" element={<SuperAdminKongGateway />} />
         <Route path="/superadmin/software-discovery" element={<SuperAdminSoftwareDiscovery />} />

@@ -379,7 +379,7 @@ async function initializeDatabase() {
     // Check if default admin exists in hub_users (unified auth system)
     const adminCheck = await query(
       'SELECT id FROM hub_users WHERE email = $1',
-      ['admin@localhost']
+      ['admin@localhost.net']
     );
 
     if (adminCheck.rows.length === 0) {
@@ -389,10 +389,10 @@ async function initializeDatabase() {
         `INSERT INTO hub_users (email, username, password_hash, is_super_admin, is_active, email_verified)
          VALUES ($1, $2, $3, true, true, true)
          RETURNING id`,
-        ['admin@localhost', 'admin', passwordHash]
+        ['admin@localhost.net', 'admin', passwordHash]
       );
       const adminId = adminResult.rows[0].id;
-      logger.system('Default admin user created (email: admin@localhost, password: admin123)');
+      logger.system('Default admin user created (email: admin@localhost.net, password: admin123)');
 
       // Add admin to global community if it exists
       const globalCommunity = await query(
@@ -535,20 +535,18 @@ app.get('/metrics', async (req, res) => {
 // API routes
 app.use('/api/v1', routes);
 
-// Serve frontend static files in production
-if (config.env === 'production') {
-  // In Docker, frontend is built to /app/public; in dev, use relative path
-  const frontendPath = process.env.STATIC_PATH || path.join(__dirname, '../public');
-  app.use(express.static(frontendPath));
+// Serve frontend static files (both production and development)
+// In Docker, frontend is built to /app/public; in dev, use relative path
+const frontendPath = process.env.STATIC_PATH || path.join(__dirname, '../public');
+app.use(express.static(frontendPath));
 
-  // SPA fallback - serve index.html for all non-API routes
-  app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api/')) {
-      return next();
-    }
-    res.sendFile(path.join(frontendPath, 'index.html'));
-  });
-}
+// SPA fallback - serve index.html for all non-API routes
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) {
+    return next();
+  }
+  res.sendFile(path.join(frontendPath, 'index.html'));
+});
 
 // 404 handler for API routes
 app.use('/api/', notFoundHandler);

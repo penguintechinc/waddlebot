@@ -170,9 +170,12 @@ export function AuthProvider({ children }) {
     logout,
     refreshToken,
     isAuthenticated: !!user,
-    isAdmin: user?.isAdmin || user?.roles?.includes('admin'),
-    isSuperAdmin: user?.isSuperAdmin || user?.roles?.includes('super_admin'),
+    // Role checks - use roles array directly
+    hasRole: (role) => user?.roles?.includes(role),
+    isAdmin: user?.roles?.includes('admin'),
+    isSuperAdmin: user?.roles?.includes('super_admin'),
     isPlatformAdmin: user?.roles?.includes('platform-admin'),
+    isVendor: user?.roles?.includes('vendor'),
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

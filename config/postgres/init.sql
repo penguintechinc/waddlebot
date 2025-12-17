@@ -107,9 +107,12 @@ CREATE TABLE IF NOT EXISTS hub_users (
     avatar_url TEXT,
     is_active BOOLEAN DEFAULT TRUE,
     is_super_admin BOOLEAN DEFAULT FALSE,
+    is_vendor BOOLEAN DEFAULT FALSE,
     email_verified BOOLEAN DEFAULT FALSE,
     email_verification_token VARCHAR(100),
     email_verification_expires TIMESTAMP,
+    password_reset_token VARCHAR(255),
+    password_reset_expires TIMESTAMP,
     last_login TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -126,6 +129,7 @@ CREATE TABLE IF NOT EXISTS hub_settings (
 
 CREATE INDEX IF NOT EXISTS idx_hub_users_email ON hub_users(email);
 CREATE INDEX IF NOT EXISTS idx_hub_users_username ON hub_users(username);
+CREATE INDEX IF NOT EXISTS idx_hub_users_is_vendor ON hub_users(is_vendor);
 
 -- Initialize default hub settings for signup configuration
 INSERT INTO hub_settings (setting_key, setting_value, updated_at) VALUES

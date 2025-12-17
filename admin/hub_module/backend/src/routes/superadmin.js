@@ -5,8 +5,7 @@ import { Router } from 'express';
 import * as superadminController from '../controllers/superadminController.js';
 import * as platformConfigController from '../controllers/platformConfigController.js';
 import * as kongController from '../controllers/kongController.js';
-import * as softwareController from '../controllers/softwareController.js';
-import * as serviceDiscoveryController from '../controllers/serviceDiscoveryController.js';
+import * as userManagementController from '../controllers/userManagementController.js';
 import { requireAuth, requireSuperAdmin } from '../middleware/auth.js';
 import { validators, validationRules, validateRequest } from '../middleware/validation.js';
 
@@ -151,23 +150,32 @@ router.get('/kong/snis', kongController.getSNIs);
 router.post('/kong/snis', kongController.createSNI);
 router.delete('/kong/snis/:id', kongController.deleteSNI);
 
-// Software & Repository Discovery
-router.get('/software/repositories', softwareController.getRepositories);
-router.get('/software/repositories/:id', softwareController.getRepository);
-router.post('/software/repositories', softwareController.addRepository);
-router.put('/software/repositories/:id', softwareController.updateRepository);
-router.delete('/software/repositories/:id', softwareController.deleteRepository);
-router.post('/software/repositories/:id/scan', softwareController.scanRepository);
-router.post('/software/repositories/test', softwareController.testConnection);
-router.get('/software/repositories/:id/dependencies', softwareController.getDependencies);
-
-// Service Discovery
-router.get('/services', serviceDiscoveryController.getServices);
-router.get('/services/:id', serviceDiscoveryController.getService);
-router.post('/services', serviceDiscoveryController.addService);
-router.put('/services/:id', serviceDiscoveryController.updateService);
-router.delete('/services/:id', serviceDiscoveryController.deleteService);
-router.post('/services/:id/refresh', serviceDiscoveryController.refreshService);
-router.post('/services/refresh-all', serviceDiscoveryController.refreshAllServices);
+// User management
+router.get('/users', userManagementController.listUsers);
+router.get('/users/:userId', userManagementController.getUser);
+router.post('/users',
+  validators.text('email', { min: 5, max: 255 }),
+  validators.text('password', { min: 8, max: 255 }),
+  validateRequest,
+  userManagementController.createUser
+);
+router.put('/users/:userId',
+  validators.text('email', { min: 5, max: 255, required: false }),
+  validators.boolean('isActive', { required: false }),
+  validateRequest,
+  userManagementController.updateUser
+);
+router.delete('/users/:userId', userManagementController.deleteUser);
+router.post('/users/:userId/super-admin-role',
+  validators.boolean('grant'),
+  validateRequest,
+  userManagementController.assignSuperAdminRole
+);
+router.post('/users/:userId/vendor-role',
+  validators.boolean('grant'),
+  validateRequest,
+  userManagementController.assignVendorRole
+);
+router.post('/users/:userId/password-reset', userManagementController.generatePasswordReset);
 
 export default router;

@@ -421,6 +421,18 @@ export const superAdminApi = {
   deleteService: (id) => api.delete(`/api/v1/superadmin/services/${id}`),
   refreshService: (id) => api.post(`/api/v1/superadmin/services/${id}/refresh`),
   refreshAllServices: () => api.post('/api/v1/superadmin/services/refresh-all'),
+  // User management
+  listUsers: (params) => api.get('/api/v1/superadmin/users', { params }),
+  getUser: (userId) => api.get(`/api/v1/superadmin/users/${userId}`),
+  createUser: (data) => api.post('/api/v1/superadmin/users', data),
+  updateUser: (userId, data) => api.put(`/api/v1/superadmin/users/${userId}`, data),
+  deleteUser: (userId) => api.delete(`/api/v1/superadmin/users/${userId}`),
+  assignSuperAdminRole: (userId, grant) =>
+    api.post(`/api/v1/superadmin/users/${userId}/super-admin-role`, { grant }),
+  assignVendorRole: (userId, grant) =>
+    api.post(`/api/v1/superadmin/users/${userId}/vendor-role`, { grant }),
+  generatePasswordReset: (userId) =>
+    api.post(`/api/v1/superadmin/users/${userId}/password-reset`),
 };
 
 // Marketplace API
