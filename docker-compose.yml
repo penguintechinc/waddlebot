@@ -909,140 +909,145 @@ services:
   # PUSHING ACTION MODULES (Platform Integration)
   # =============================================================================
 
-  discord-action:
-    build:
-      context: .
-      dockerfile: action/pushing/discord_action_module/Dockerfile
-    container_name: waddlebot-discord-action
-    environment:
-      MODULE_NAME: discord-action
-      GRPC_PORT: 50051
-      REST_PORT: 8070
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
-      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    networks:
-      - waddlebot-internal
-    depends_on:
-      - router
-      - postgres
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8070/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
+  # discord-action disabled temporarily - build issues
+  # discord-action:
+  #   build:
+  #     context: .
+  #     dockerfile: action/pushing/discord_action_module/Dockerfile
+  #   container_name: waddlebot-discord-action
+  #   environment:
+  #     MODULE_NAME: discord-action
+  #     GRPC_PORT: 50051
+  #     REST_PORT: 8070
+  #     DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+  #     DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+  #     MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+  #     LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  #   networks:
+  #     - waddlebot-internal
+  #   depends_on:
+  #     - router
+  #     - postgres
+  #   healthcheck:
+  #     test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8070/health')"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #   restart: unless-stopped
 
-  slack-action:
-    build:
-      context: .
-      dockerfile: action/pushing/slack_action_module/Dockerfile
-    container_name: waddlebot-slack-action
-    environment:
-      MODULE_NAME: slack-action
-      GRPC_PORT: 50052
-      REST_PORT: 8071
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
-      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    networks:
-      - waddlebot-internal
-    depends_on:
-      - router
-      - postgres
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8071/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
+  # slack-action disabled temporarily - missing proto file dependencies
+  # slack-action:
+  #   build:
+  #     context: .
+  #     dockerfile: action/pushing/slack_action_module/Dockerfile
+  #   container_name: waddlebot-slack-action
+  #   environment:
+  #     MODULE_NAME: slack-action
+  #     GRPC_PORT: 50052
+  #     REST_PORT: 8071
+  #     DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+  #     SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+  #     MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+  #     LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  #   networks:
+  #     - waddlebot-internal
+  #   depends_on:
+  #     - router
+  #     - postgres
+  #   healthcheck:
+  #     test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8071/health')"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #   restart: unless-stopped
 
-  twitch-action:
-    build:
-      context: .
-      dockerfile: action/pushing/twitch_action_module/Dockerfile
-    container_name: waddlebot-twitch-action
-    environment:
-      MODULE_NAME: twitch-action
-      GRPC_PORT: 50053
-      REST_PORT: 8072
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID}
-      TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET}
-      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    networks:
-      - waddlebot-internal
-    depends_on:
-      - router
-      - postgres
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8072/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
+  # twitch-action disabled temporarily - build issues
+  # twitch-action:
+  #   build:
+  #     context: .
+  #     dockerfile: action/pushing/twitch_action_module/Dockerfile
+  #   container_name: waddlebot-twitch-action
+  #   environment:
+  #     MODULE_NAME: twitch-action
+  #     GRPC_PORT: 50053
+  #     REST_PORT: 8072
+  #     DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+  #     TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID}
+  #     TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET}
+  #     MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+  #     LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  #   networks:
+  #     - waddlebot-internal
+  #   depends_on:
+  #     - router
+  #     - postgres
+  #   healthcheck:
+  #     test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8072/health')"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #   restart: unless-stopped
 
-  youtube-action:
-    build:
-      context: .
-      dockerfile: action/pushing/youtube_action_module/Dockerfile
-    container_name: waddlebot-youtube-action
-    environment:
-      MODULE_NAME: youtube-action
-      GRPC_PORT: 50054
-      REST_PORT: 8073
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
-      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID}
-      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET}
-      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    networks:
-      - waddlebot-internal
-    depends_on:
-      - router
-      - postgres
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8073/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
+  # youtube-action disabled temporarily - build issues
+  # youtube-action:
+  #   build:
+  #     context: .
+  #     dockerfile: action/pushing/youtube_action_module/Dockerfile
+  #   container_name: waddlebot-youtube-action
+  #   environment:
+  #     MODULE_NAME: youtube-action
+  #     GRPC_PORT: 50054
+  #     REST_PORT: 8073
+  #     DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+  #     YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
+  #     YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID}
+  #     YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET}
+  #     MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+  #     LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  #   networks:
+  #     - waddlebot-internal
+  #   depends_on:
+  #     - router
+  #     - postgres
+  #   healthcheck:
+  #     test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8073/health')"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #   restart: unless-stopped
 
   # =============================================================================
   # SERVERLESS PLATFORM ACTION MODULES
   # =============================================================================
 
-  lambda-action:
-    build:
-      context: .
-      dockerfile: action/pushing/lambda_action_module/Dockerfile
-    container_name: waddlebot-lambda-action
-    environment:
-      MODULE_NAME: lambda-action
-      GRPC_PORT: 50060
-      REST_PORT: 8080
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-      AWS_REGION: ${AWS_REGION:-us-east-1}
-      AWS_LAMBDA_ROLE_ARN: ${AWS_LAMBDA_ROLE_ARN:-}
-      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    networks:
-      - waddlebot-internal
-    depends_on:
-      - router
-      - postgres
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
+  # lambda-action disabled temporarily - build issues
+  # lambda-action:
+  #   build:
+  #     context: .
+  #     dockerfile: action/pushing/lambda_action_module/Dockerfile
+  #   container_name: waddlebot-lambda-action
+  #   environment:
+  #     MODULE_NAME: lambda-action
+  #     GRPC_PORT: 50060
+  #     REST_PORT: 8080
+  #     DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+  #     AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+  #     AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+  #     AWS_REGION: ${AWS_REGION:-us-east-1}
+  #     AWS_LAMBDA_ROLE_ARN: ${AWS_LAMBDA_ROLE_ARN:-}
+  #     MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+  #     LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  #   networks:
+  #     - waddlebot-internal
+  #   depends_on:
+  #     - router
+  #     - postgres
+  #   healthcheck:
+  #     test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #   restart: unless-stopped
 
   gcp-functions-action:
     build:
