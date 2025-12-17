@@ -57,6 +57,10 @@ import LoyaltyGear from './pages/admin/LoyaltyGear';
 import AdminWorkflows from './pages/admin/AdminWorkflows';
 import AdminShoutouts from './pages/admin/AdminShoutouts';
 import AdminTranslation from './pages/admin/AdminTranslation';
+import AdminMusicDashboard from './pages/admin/AdminMusicDashboard';
+import AdminMusicSettings from './pages/admin/AdminMusicSettings';
+import AdminMusicProviders from './pages/admin/AdminMusicProviders';
+import AdminRadioStations from './pages/admin/AdminRadioStations';
 
 // Platform admin pages
 import PlatformDashboard from './pages/platform/PlatformDashboard';
@@ -70,6 +74,8 @@ import SuperAdminCreateCommunity from './pages/superadmin/SuperAdminCreateCommun
 import SuperAdminModuleRegistry from './pages/superadmin/SuperAdminModuleRegistry';
 import SuperAdminPlatformConfig from './pages/superadmin/SuperAdminPlatformConfig';
 import SuperAdminKongGateway from './pages/superadmin/SuperAdminKongGateway';
+import SuperAdminSoftwareDiscovery from './pages/superadmin/SuperAdminSoftwareDiscovery';
+import SuperAdminServiceDiscovery from './pages/superadmin/SuperAdminServiceDiscovery';
 
 // Loading spinner
 function LoadingSpinner() {
@@ -170,6 +176,10 @@ function App() {
         <Route path="/admin/:communityId/loyalty/gear" element={<LoyaltyGear />} />
         <Route path="/admin/:communityId/shoutouts" element={<AdminShoutouts />} />
         <Route path="/admin/:communityId/translation" element={<AdminTranslation />} />
+        <Route path="/admin/:communityId/music" element={<AdminMusicDashboard />} />
+        <Route path="/admin/:communityId/music/settings" element={<AdminMusicSettings />} />
+        <Route path="/admin/:communityId/music/providers" element={<AdminMusicProviders />} />
+        <Route path="/admin/:communityId/music/radio" element={<AdminRadioStations />} />
       </Route>
 
       {/* Platform admin routes */}
@@ -199,6 +209,8 @@ function App() {
         <Route path="/superadmin/modules" element={<SuperAdminModuleRegistry />} />
         <Route path="/superadmin/platform-config" element={<SuperAdminPlatformConfig />} />
         <Route path="/superadmin/kong" element={<SuperAdminKongGateway />} />
+        <Route path="/superadmin/software-discovery" element={<SuperAdminSoftwareDiscovery />} />
+        <Route path="/superadmin/services" element={<SuperAdminServiceDiscovery />} />
       </Route>
 
       {/* Catch all - redirect to home */}

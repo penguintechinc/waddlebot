@@ -336,6 +336,33 @@ export const adminApi = {
     api.get(`/api/v1/admin/${communityId}/translation/config`),
   updateTranslationConfig: (communityId, config) =>
     api.put(`/api/v1/admin/${communityId}/translation/config`, config),
+  // Music module
+  getMusicSettings: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/music/settings`),
+  updateMusicSettings: (communityId, settings) =>
+    api.put(`/api/v1/admin/${communityId}/music/settings`, settings),
+  getMusicProviders: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/music/providers`),
+  initiateMusicProviderOAuth: (communityId, provider) =>
+    api.post(`/api/v1/admin/${communityId}/music/providers/${provider}/oauth`),
+  disconnectMusicProvider: (communityId, provider) =>
+    api.delete(`/api/v1/admin/${communityId}/music/providers/${provider}`),
+  updateMusicProviderConfig: (communityId, provider, config) =>
+    api.put(`/api/v1/admin/${communityId}/music/providers/${provider}/config`, config),
+  getRadioStations: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/music/radio-stations`),
+  addRadioStation: (communityId, station) =>
+    api.post(`/api/v1/admin/${communityId}/music/radio-stations`, station),
+  deleteRadioStation: (communityId, stationId) =>
+    api.delete(`/api/v1/admin/${communityId}/music/radio-stations/${stationId}`),
+  testRadioStreamUrl: (communityId, stationId) =>
+    api.post(`/api/v1/admin/${communityId}/music/radio-stations/${stationId}/test`),
+  setDefaultRadioStation: (communityId, stationId) =>
+    api.put(`/api/v1/admin/${communityId}/music/radio-stations/${stationId}/default`),
+  getMusicDashboard: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/music/dashboard`),
+  controlPlayback: (communityId, action) =>
+    api.post(`/api/v1/admin/${communityId}/music/playback/control`, { action }),
 };
 
 export const platformApi = {
@@ -377,6 +404,23 @@ export const superAdminApi = {
   updateHubSettings: (data) => api.put('/api/v1/superadmin/settings', data),
   // Storage testing
   testStorageConnection: () => api.post('/api/v1/superadmin/platform-config/storage/test'),
+  // Software & Repository Discovery
+  getSoftwareRepositories: () => api.get('/api/v1/superadmin/software/repositories'),
+  getSoftwareRepository: (id) => api.get(`/api/v1/superadmin/software/repositories/${id}`),
+  addSoftwareRepository: (data) => api.post('/api/v1/superadmin/software/repositories', data),
+  updateSoftwareRepository: (id, data) => api.put(`/api/v1/superadmin/software/repositories/${id}`, data),
+  deleteSoftwareRepository: (id) => api.delete(`/api/v1/superadmin/software/repositories/${id}`),
+  scanSoftwareRepository: (id) => api.post(`/api/v1/superadmin/software/repositories/${id}/scan`),
+  testRepositoryConnection: (data) => api.post('/api/v1/superadmin/software/repositories/test', data),
+  getRepositoryDependencies: (id) => api.get(`/api/v1/superadmin/software/repositories/${id}/dependencies`),
+  // Service Discovery
+  getServices: () => api.get('/api/v1/superadmin/services'),
+  getService: (id) => api.get(`/api/v1/superadmin/services/${id}`),
+  addService: (data) => api.post('/api/v1/superadmin/services', data),
+  updateService: (id, data) => api.put(`/api/v1/superadmin/services/${id}`, data),
+  deleteService: (id) => api.delete(`/api/v1/superadmin/services/${id}`),
+  refreshService: (id) => api.post(`/api/v1/superadmin/services/${id}/refresh`),
+  refreshAllServices: () => api.post('/api/v1/superadmin/services/refresh-all'),
 };
 
 // Marketplace API

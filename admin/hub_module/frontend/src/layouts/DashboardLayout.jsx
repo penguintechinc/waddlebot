@@ -14,6 +14,8 @@ import {
   ShieldCheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  CodeBracketSquareIcon,
+  ServerStackIcon,
 } from '@heroicons/react/24/outline';
 import { useState } from 'react';
 
@@ -22,6 +24,7 @@ function DashboardLayout() {
   const location = useLocation();
   const { id: communityId } = useParams();
   const [adminCollapsed, setAdminCollapsed] = useState(false);
+  const [softwareCollapsed, setSoftwareCollapsed] = useState(false);
 
   const mainNav = [
     { to: '/dashboard', icon: HomeIcon, label: 'My Communities' },
@@ -36,6 +39,12 @@ function DashboardLayout() {
     { to: '/superadmin/modules', icon: BuildingStorefrontIcon, label: 'Module Registry' },
     { to: '/superadmin/platform-config', icon: Cog6ToothIcon, label: 'Platform Config' },
     { to: '/superadmin/kong', icon: ShieldCheckIcon, label: 'Kong Gateway' },
+  ];
+
+  // Software & Services navigation (Super Admin only)
+  const softwareNav = [
+    { to: '/superadmin/software-discovery', icon: CodeBracketSquareIcon, label: 'Git Repositories' },
+    { to: '/superadmin/services', icon: ServerStackIcon, label: 'Service Discovery' },
   ];
 
   const communityNav = communityId
@@ -162,6 +171,47 @@ function DashboardLayout() {
                             isActive
                               ? 'bg-gold-500/20 text-gold-400 border border-gold-500/30'
                               : 'text-navy-300 hover:bg-navy-800 hover:text-gold-300'
+                          }`}
+                        >
+                          <item.icon className="w-5 h-5" />
+                          <span className="text-sm font-medium">{item.label}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Software & Services Section - Super Admin only */}
+            {isSuperAdmin && (
+              <div className="mt-4">
+                <button
+                  onClick={() => setSoftwareCollapsed(!softwareCollapsed)}
+                  className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-navy-500 uppercase tracking-wider hover:text-navy-400 transition-colors"
+                >
+                  <span className="flex items-center space-x-2">
+                    <CodeBracketSquareIcon className="w-4 h-4" />
+                    <span>Software & Services</span>
+                  </span>
+                  {softwareCollapsed ? (
+                    <ChevronRightIcon className="w-4 h-4" />
+                  ) : (
+                    <ChevronDownIcon className="w-4 h-4" />
+                  )}
+                </button>
+                {!softwareCollapsed && (
+                  <div className="mt-1 space-y-1">
+                    {softwareNav.map((item) => {
+                      const isActive = location.pathname.startsWith(item.to);
+                      return (
+                        <Link
+                          key={item.to}
+                          to={item.to}
+                          className={`flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
+                            isActive
+                              ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
+                              : 'text-navy-300 hover:bg-navy-800 hover:text-sky-300'
                           }`}
                         >
                           <item.icon className="w-5 h-5" />
