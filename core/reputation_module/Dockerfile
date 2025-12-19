@@ -1,4 +1,4 @@
-# Build from parent directory: docker build -f reputation_module_flask/Dockerfile -t waddlebot/reputation:latest .
+# Build from project root: docker build -f core/reputation_module/Dockerfile -t waddlebot/reputation:latest .
 
 FROM python:3.13-slim
 
@@ -11,8 +11,8 @@ COPY libs/flask_core /app/libs/flask_core
 RUN cd /app/libs/flask_core && pip install --no-cache-dir .
 
 # Copy module files
-COPY reputation_module_flask/requirements.txt /app/
-COPY reputation_module_flask /app/
+COPY core/reputation_module/requirements.txt /app/
+COPY core/reputation_module /app/
 
 # Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt

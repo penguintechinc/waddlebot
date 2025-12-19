@@ -62,6 +62,9 @@ import AdminMusicSettings from './pages/admin/AdminMusicSettings';
 import AdminMusicProviders from './pages/admin/AdminMusicProviders';
 import AdminRadioStations from './pages/admin/AdminRadioStations';
 import AdminVendorReview from './pages/admin/AdminVendorReview';
+import AdminCalendarTicketing from './pages/admin/AdminCalendarTicketing';
+import AdminCalendarScanner from './pages/admin/AdminCalendarScanner';
+import AdminCalendarAttendance from './pages/admin/AdminCalendarAttendance';
 
 // Vendor pages
 import VendorSubmissionForm from './pages/vendor/VendorSubmissionForm';
@@ -199,6 +202,9 @@ function App() {
         <Route path="/admin/:communityId/music/settings" element={<AdminMusicSettings />} />
         <Route path="/admin/:communityId/music/providers" element={<AdminMusicProviders />} />
         <Route path="/admin/:communityId/music/radio" element={<AdminRadioStations />} />
+        <Route path="/admin/:communityId/calendar/events/:eventId/tickets" element={<AdminCalendarTicketing />} />
+        <Route path="/admin/:communityId/calendar/events/:eventId/scanner" element={<AdminCalendarScanner />} />
+        <Route path="/admin/:communityId/calendar/events/:eventId/attendance" element={<AdminCalendarAttendance />} />
       </Route>
 
       {/* Platform admin routes */}

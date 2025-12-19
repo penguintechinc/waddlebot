@@ -5,7 +5,6 @@ Supports event CRUD, RSVP, recurring events, platform sync, and multi-community 
 import asyncio
 import os
 import sys
-from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)),
                                 'libs'))
@@ -14,7 +13,7 @@ from quart import Blueprint, Quart, request
 
 from config import Config
 from flask_core import (
-    async_endpoint, auth_required, create_health_blueprint, init_database,
+    async_endpoint, create_health_blueprint, init_database,
     setup_aaa_logging, success_response, error_response)
 from flask_core.validation import validate_json, validate_query
 
@@ -23,7 +22,14 @@ from validation_models import (
     EventApprovalRequest, RSVPRequest, AttendeeSearchParams,
     EventFullTextSearchParams, UpcomingEventsParams,
     PermissionsConfigRequest, CategoryCreateRequest,
-    ContextSwitchRequest
+    ContextSwitchRequest,
+    # Ticketing models
+    TicketTypeCreateRequest, TicketTypeUpdateRequest,
+    TicketCreateRequest, TicketVerifyRequest, TicketCheckInRequest,
+    TicketUndoCheckInRequest, TicketTransferRequest,
+    TicketSearchParams, CheckInLogParams, TicketingConfigRequest,
+    # Event admin models
+    EventAdminAssignRequest, EventAdminUpdateRequest
 )
 
 
@@ -35,6 +41,7 @@ app.register_blueprint(health_bp)
 
 calendar_bp = Blueprint('calendar', __name__, url_prefix='/api/v1/calendar')
 context_bp = Blueprint('context', __name__, url_prefix='/api/v1/context')
+ticket_bp = Blueprint('ticket', __name__, url_prefix='/api/v1/calendar')
 logger = setup_aaa_logging(Config.MODULE_NAME, Config.MODULE_VERSION)
 
 dal = None
@@ -42,6 +49,8 @@ calendar_service = None
 permission_service = None
 context_service = None
 rsvp_service = None
+ticket_service = None
+event_admin_service = None
 
 
 def get_user_context():
@@ -65,7 +74,7 @@ def get_user_context():
 
 def init_services():
     """Initialize database and services (can be called from startup or tests)."""
-    global dal, calendar_service, permission_service, context_service, rsvp_service
+    global dal, calendar_service, permission_service, context_service, rsvp_service, ticket_service, event_admin_service
 
     if calendar_service is not None:
         return  # Already initialized
@@ -74,21 +83,29 @@ def init_services():
     from services.permission_service import PermissionService
     from services.context_service import ContextService
     from services.rsvp_service import RSVPService
+    from services.ticket_service import TicketService
+    from services.event_admin_service import EventAdminService
 
     logger.system("Starting calendar module", action="startup")
     dal = init_database(Config.DATABASE_URL)
     app.config['dal'] = dal
 
     # Initialize services
+    # Note: Order matters - ticket_service must be created before rsvp_service
+    # so RSVP can auto-generate tickets on confirmation
     permission_service = PermissionService(dal)
     context_service = ContextService(dal)
     calendar_service = CalendarService(dal, permission_service)
-    rsvp_service = RSVPService(dal)
+    event_admin_service = EventAdminService(dal, permission_service)
+    ticket_service = TicketService(dal, permission_service)
+    rsvp_service = RSVPService(dal, ticket_service=ticket_service)
 
     app.config['calendar_service'] = calendar_service
     app.config['permission_service'] = permission_service
     app.config['context_service'] = context_service
     app.config['rsvp_service'] = rsvp_service
+    app.config['ticket_service'] = ticket_service
+    app.config['event_admin_service'] = event_admin_service
 
     logger.system("Calendar module started", result="SUCCESS")
 
@@ -549,9 +566,553 @@ async def available_communities(entity_id):
     return success_response({'communities': communities, 'count': len(communities)})
 
 
+# ============================================================================
+# TICKETING ENDPOINTS
+# ============================================================================
+
+@ticket_bp.route('/verify-ticket', methods=['POST'])
+@async_endpoint
+@validate_json(TicketVerifyRequest)
+async def verify_ticket(validated_data: TicketVerifyRequest):
+    """
+    Verify and optionally check-in a ticket via QR code.
+    This is the main endpoint called by QR scanners.
+    """
+    from services.ticket_service import CheckInMethod
+
+    user_context = get_user_context()
+
+    result = await ticket_service.verify_ticket(
+        ticket_code=validated_data.ticket_code,
+        perform_checkin=validated_data.perform_checkin,
+        operator_context=user_context,
+        check_in_method=CheckInMethod.QR_SCAN,
+        location=validated_data.location,
+        ip_address=request.remote_addr,
+        user_agent=request.headers.get('User-Agent')
+    )
+
+    if result.success:
+        return success_response({
+            'valid': True,
+            'result': result.result_code.value,
+            'ticket': result.ticket,
+            'event': result.event_info,
+            'message': result.message
+        })
+    else:
+        return success_response({
+            'valid': False,
+            'result': result.result_code.value,
+            'ticket': result.ticket,
+            'message': result.message
+        })
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/ticket-types', methods=['GET'])
+@async_endpoint
+async def list_ticket_types(community_id, event_id):
+    """List ticket types for an event."""
+    types = await ticket_service.list_ticket_types(event_id)
+    return success_response({'ticket_types': types, 'count': len(types)})
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/ticket-types', methods=['POST'])
+@async_endpoint
+@validate_json(TicketTypeCreateRequest)
+async def create_ticket_type(validated_data: TicketTypeCreateRequest, community_id, event_id):
+    """Create a new ticket type for an event."""
+    user_context = get_user_context()
+
+    # Check permission (event admin with manage_ticket_types or community admin)
+    can_manage = await event_admin_service.has_permission(
+        event_id, user_context,
+        event_admin_service.EventAdminPermission.MANAGE_TICKET_TYPES
+    ) if event_admin_service else True
+
+    if not can_manage:
+        return error_response("Permission denied", status_code=403)
+
+    data = validated_data.dict()
+    ticket_type = await ticket_service.create_ticket_type(
+        event_id=event_id,
+        name=data['name'],
+        description=data.get('description'),
+        max_quantity=data.get('max_quantity'),
+        price_cents=data.get('price_cents', 0),
+        currency=data.get('currency', 'USD'),
+        sales_start=data.get('sales_start'),
+        sales_end=data.get('sales_end'),
+        display_order=data.get('display_order', 0)
+    )
+
+    if ticket_type:
+        return success_response(ticket_type, status_code=201)
+    else:
+        return error_response("Failed to create ticket type", status_code=400)
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/ticket-types/<int:type_id>', methods=['PUT'])
+@async_endpoint
+@validate_json(TicketTypeUpdateRequest)
+async def update_ticket_type(validated_data: TicketTypeUpdateRequest, community_id, event_id, type_id):
+    """Update a ticket type (admin/event admin)."""
+    user_context = get_user_context()
+
+    # Check permission
+    can_manage = await event_admin_service.can_manage_ticket_types(
+        event_id, user_context
+    ) if event_admin_service else True
+
+    if not can_manage:
+        return error_response("Permission denied", status_code=403)
+
+    data = validated_data.dict(exclude_unset=True)
+    ticket_type = await ticket_service.update_ticket_type(
+        ticket_type_id=type_id,
+        user_context=user_context,
+        **data
+    )
+
+    if ticket_type:
+        return success_response(ticket_type)
+    else:
+        return error_response("Failed to update ticket type", status_code=400)
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/ticket-types/<int:type_id>', methods=['DELETE'])
+@async_endpoint
+async def delete_ticket_type(community_id, event_id, type_id):
+    """Delete a ticket type (admin/event admin)."""
+    user_context = get_user_context()
+
+    # Check permission
+    can_manage = await event_admin_service.can_manage_ticket_types(
+        event_id, user_context
+    ) if event_admin_service else True
+
+    if not can_manage:
+        return error_response("Permission denied", status_code=403)
+
+    success = await ticket_service.delete_ticket_type(
+        ticket_type_id=type_id,
+        user_context=user_context
+    )
+
+    if success:
+        return success_response({"deleted": True})
+    else:
+        return error_response("Failed to delete ticket type or type has existing tickets", status_code=400)
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/ticketing/enable', methods=['POST'])
+@async_endpoint
+@validate_json(TicketingConfigRequest)
+async def enable_ticketing(validated_data: TicketingConfigRequest, community_id, event_id):
+    """Enable ticketing for an event (admin/event admin)."""
+    user_context = get_user_context()
+
+    # Check permission
+    can_configure = await event_admin_service.can_configure_ticketing(
+        event_id, user_context
+    ) if event_admin_service else True
+
+    if not can_configure:
+        return error_response("Permission denied", status_code=403)
+
+    data = validated_data.dict(exclude_unset=True)
+    config = await ticket_service.enable_ticketing(
+        event_id=event_id,
+        user_context=user_context,
+        **data
+    )
+
+    if config:
+        return success_response(config)
+    else:
+        return error_response("Failed to enable ticketing", status_code=400)
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/ticketing/disable', methods=['POST'])
+@async_endpoint
+async def disable_ticketing(community_id, event_id):
+    """Disable ticketing for an event (admin/event admin)."""
+    user_context = get_user_context()
+
+    # Check permission
+    can_configure = await event_admin_service.can_configure_ticketing(
+        event_id, user_context
+    ) if event_admin_service else True
+
+    if not can_configure:
+        return error_response("Permission denied", status_code=403)
+
+    success = await ticket_service.disable_ticketing(
+        event_id=event_id,
+        user_context=user_context
+    )
+
+    if success:
+        return success_response({"ticketing_enabled": False})
+    else:
+        return error_response("Failed to disable ticketing", status_code=400)
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/tickets', methods=['GET'])
+@async_endpoint
+@validate_query(TicketSearchParams)
+async def list_tickets(community_id, event_id, query_params: TicketSearchParams):
+    """List tickets for an event (admin/event admin only)."""
+    user_context = get_user_context()
+
+    # Check permission
+    can_view = await event_admin_service.can_view_tickets(
+        event_id, user_context
+    ) if event_admin_service else True
+
+    if not can_view:
+        return error_response("Permission denied", status_code=403)
+
+    result = await ticket_service.list_tickets(
+        event_id=event_id,
+        status=query_params.status,
+        is_checked_in=query_params.is_checked_in,
+        ticket_type_id=query_params.ticket_type_id,
+        search=query_params.search,
+        limit=query_params.limit,
+        offset=query_params.offset
+    )
+    return success_response(result)
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/tickets', methods=['POST'])
+@async_endpoint
+@validate_json(TicketCreateRequest)
+async def create_ticket(validated_data: TicketCreateRequest, community_id, event_id):
+    """Create a ticket manually (admin/event admin)."""
+    user_context = get_user_context()
+
+    # Check permission
+    can_view = await event_admin_service.can_view_tickets(
+        event_id, user_context
+    ) if event_admin_service else True
+
+    if not can_view:
+        return error_response("Permission denied", status_code=403)
+
+    data = validated_data.dict()
+    ticket_user_context = {
+        'user_id': data.get('hub_user_id'),
+        'platform': data['platform'],
+        'platform_user_id': data['platform_user_id'],
+        'username': data['username']
+    }
+
+    ticket = await ticket_service.create_ticket(
+        event_id=event_id,
+        user_context=ticket_user_context,
+        ticket_type_id=data.get('ticket_type_id'),
+        holder_name=data.get('holder_name'),
+        holder_email=data.get('holder_email')
+    )
+
+    if ticket:
+        return success_response(ticket, status_code=201)
+    else:
+        return error_response("Failed to create ticket", status_code=400)
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/check-in', methods=['POST'])
+@async_endpoint
+@validate_json(TicketCheckInRequest)
+async def check_in_ticket(validated_data: TicketCheckInRequest, community_id, event_id):
+    """Check in a ticket manually."""
+    from services.ticket_service import CheckInMethod
+
+    user_context = get_user_context()
+
+    # Check permission
+    can_check_in = await event_admin_service.can_check_in(
+        event_id, user_context
+    ) if event_admin_service else True
+
+    if not can_check_in:
+        return error_response("Permission denied", status_code=403)
+
+    data = validated_data.dict()
+
+    if data.get('ticket_code'):
+        result = await ticket_service.verify_ticket(
+            ticket_code=data['ticket_code'],
+            perform_checkin=True,
+            operator_context=user_context,
+            check_in_method=CheckInMethod.MANUAL,
+            location=data.get('location'),
+            ip_address=request.remote_addr
+        )
+    else:
+        return error_response("ticket_code required for check-in", status_code=400)
+
+    if result.success:
+        return success_response({
+            'checked_in': True,
+            'ticket': result.ticket,
+            'message': result.message
+        })
+    else:
+        return success_response({
+            'checked_in': False,
+            'result': result.result_code.value,
+            'message': result.message
+        })
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/check-in/undo', methods=['POST'])
+@async_endpoint
+@validate_json(TicketUndoCheckInRequest)
+async def undo_check_in(validated_data: TicketUndoCheckInRequest, community_id, event_id):
+    """Undo a ticket check-in."""
+    user_context = get_user_context()
+
+    # Check permission
+    can_check_in = await event_admin_service.can_check_in(
+        event_id, user_context
+    ) if event_admin_service else True
+
+    if not can_check_in:
+        return error_response("Permission denied", status_code=403)
+
+    success = await ticket_service.undo_check_in(
+        ticket_id=validated_data.ticket_id,
+        operator_context=user_context,
+        reason=validated_data.reason
+    )
+
+    if success:
+        return success_response({'message': 'Check-in undone successfully'})
+    else:
+        return error_response("Failed to undo check-in", status_code=400)
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/attendance', methods=['GET'])
+@async_endpoint
+async def get_attendance_stats(community_id, event_id):
+    """Get attendance statistics for an event."""
+    user_context = get_user_context()
+
+    # Check permission
+    can_view = await event_admin_service.can_view_tickets(
+        event_id, user_context
+    ) if event_admin_service else True
+
+    if not can_view:
+        return error_response("Permission denied", status_code=403)
+
+    stats = await ticket_service.get_attendance_stats(event_id)
+    return success_response(stats)
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/check-in-log', methods=['GET'])
+@async_endpoint
+@validate_query(CheckInLogParams)
+async def get_check_in_log(community_id, event_id, query_params: CheckInLogParams):
+    """Get check-in audit log for an event."""
+    user_context = get_user_context()
+
+    # Check permission
+    can_view = await event_admin_service.can_view_tickets(
+        event_id, user_context
+    ) if event_admin_service else True
+
+    if not can_view:
+        return error_response("Permission denied", status_code=403)
+
+    result = await ticket_service.get_check_in_log(
+        event_id=event_id,
+        limit=query_params.limit,
+        offset=query_params.offset,
+        success_only=query_params.success_only
+    )
+    return success_response(result)
+
+
+@ticket_bp.route('/<int:community_id>/tickets/<int:ticket_id>/transfer', methods=['POST'])
+@async_endpoint
+@validate_json(TicketTransferRequest)
+async def transfer_ticket(validated_data: TicketTransferRequest, community_id, ticket_id):
+    """Transfer a ticket to a new holder (admin only)."""
+    user_context = get_user_context()
+
+    # Get ticket to check event_id
+    ticket = await ticket_service.get_ticket(ticket_id)
+    if not ticket:
+        return error_response("Ticket not found", status_code=404)
+
+    event_id = ticket['event_id']
+
+    # Check permission
+    can_transfer = await event_admin_service.can_transfer_tickets(
+        event_id, user_context
+    ) if event_admin_service else True
+
+    if not can_transfer:
+        return error_response("Permission denied", status_code=403)
+
+    data = validated_data.dict()
+    new_holder_context = {
+        'user_id': data.get('new_holder_user_id'),
+        'platform': data['new_holder_platform'],
+        'platform_user_id': data['new_holder_platform_user_id'],
+        'username': data['new_holder_username'],
+        'holder_name': data['new_holder_name'],
+        'holder_email': data.get('new_holder_email')
+    }
+
+    new_ticket = await ticket_service.transfer_ticket(
+        ticket_id=ticket_id,
+        new_holder_context=new_holder_context,
+        operator_context=user_context,
+        notes=data.get('notes')
+    )
+
+    if new_ticket:
+        return success_response(new_ticket)
+    else:
+        return error_response("Failed to transfer ticket", status_code=400)
+
+
+@ticket_bp.route('/<int:community_id>/tickets/<int:ticket_id>', methods=['DELETE'])
+@async_endpoint
+async def cancel_ticket(community_id, ticket_id):
+    """Cancel a ticket."""
+    user_context = get_user_context()
+
+    # Get ticket to check event_id
+    ticket = await ticket_service.get_ticket(ticket_id)
+    if not ticket:
+        return error_response("Ticket not found", status_code=404)
+
+    event_id = ticket['event_id']
+
+    # Check permission
+    can_cancel = await event_admin_service.can_cancel_tickets(
+        event_id, user_context
+    ) if event_admin_service else True
+
+    if not can_cancel:
+        return error_response("Permission denied", status_code=403)
+
+    # Get reason from query params
+    reason = request.args.get('reason')
+
+    success = await ticket_service.cancel_ticket(
+        ticket_id=ticket_id,
+        cancelled_by=user_context,
+        reason=reason
+    )
+
+    if success:
+        return success_response({'message': 'Ticket cancelled successfully'})
+    else:
+        return error_response("Failed to cancel ticket", status_code=400)
+
+
+# ============================================================================
+# EVENT ADMIN ENDPOINTS
+# ============================================================================
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/admins', methods=['GET'])
+@async_endpoint
+async def list_event_admins(community_id, event_id):
+    """List event admins for an event."""
+    user_context = get_user_context()
+
+    # Check if user can view (event creator, community admin, or has assign permission)
+    can_view = await event_admin_service.can_assign_event_admins(
+        event_id, user_context
+    ) if event_admin_service else True
+
+    if not can_view:
+        return error_response("Permission denied", status_code=403)
+
+    admins = await event_admin_service.list_event_admins(event_id)
+    return success_response({'admins': admins, 'count': len(admins)})
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/admins', methods=['POST'])
+@async_endpoint
+@validate_json(EventAdminAssignRequest)
+async def assign_event_admin(validated_data: EventAdminAssignRequest, community_id, event_id):
+    """Assign a user as an event admin."""
+    user_context = get_user_context()
+
+    result = await event_admin_service.assign_event_admin(
+        event_id=event_id,
+        assignee_data=validated_data.dict(),
+        assigner_context=user_context
+    )
+
+    if result:
+        return success_response(result, status_code=201)
+    else:
+        return error_response("Failed to assign event admin", status_code=400)
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/admins/<int:admin_id>', methods=['PUT'])
+@async_endpoint
+@validate_json(EventAdminUpdateRequest)
+async def update_event_admin(validated_data: EventAdminUpdateRequest, community_id, event_id, admin_id):
+    """Update an event admin's permissions."""
+    user_context = get_user_context()
+
+    success = await event_admin_service.update_event_admin(
+        event_admin_id=admin_id,
+        updates=validated_data.dict(exclude_unset=True),
+        operator_context=user_context
+    )
+
+    if success:
+        return success_response({'message': 'Event admin updated successfully'})
+    else:
+        return error_response("Failed to update event admin", status_code=400)
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/admins/<int:admin_id>', methods=['DELETE'])
+@async_endpoint
+async def revoke_event_admin(community_id, event_id, admin_id):
+    """Revoke an event admin's access."""
+    user_context = get_user_context()
+    reason = request.args.get('reason')
+
+    success = await event_admin_service.revoke_event_admin(
+        event_admin_id=admin_id,
+        operator_context=user_context,
+        reason=reason
+    )
+
+    if success:
+        return success_response({'message': 'Event admin revoked successfully'})
+    else:
+        return error_response("Failed to revoke event admin", status_code=400)
+
+
+@ticket_bp.route('/<int:community_id>/events/<int:event_id>/my-permissions', methods=['GET'])
+@async_endpoint
+async def get_my_permissions(community_id, event_id):
+    """Get current user's permissions for an event."""
+    user_context = get_user_context()
+
+    permissions = await event_admin_service.get_user_permissions(
+        event_id, user_context
+    ) if event_admin_service else {}
+
+    return success_response({'permissions': permissions})
+
+
 # Register blueprints
 app.register_blueprint(calendar_bp)
 app.register_blueprint(context_bp)
+app.register_blueprint(ticket_bp)
 
 if __name__ == '__main__':
     import hypercorn.asyncio

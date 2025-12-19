@@ -1,29 +1,42 @@
 """
-RSVP Service - Stub implementation for Phase 1
-Full implementation will be completed in Phase 2
+RSVP Service - Event attendance management with automatic ticket generation
 
-This stub provides minimal working functionality to support app.py endpoints
+Handles RSVP functionality with integrated ticketing:
+- RSVP status management (yes/no/maybe)
+- Waitlist processing when at capacity
+- Automatic ticket generation for ticketed events
+- Capacity checking and guest count management
 """
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .ticket_service import TicketService
 
 logger = logging.getLogger(__name__)
 
 
 class RSVPService:
     """
-    RSVP service for event attendance management (Phase 1 stub).
+    RSVP service for event attendance management with integrated ticketing.
 
-    Phase 2 will implement:
+    Features:
     - Full RSVP functionality (yes/no/maybe)
-    - Waitlist processing
-    - Capacity checking
-    - Guest count management
+    - Waitlist processing when event is at capacity
+    - Automatic ticket generation on RSVP 'yes' for ticketed events
+    - Capacity checking with guest count support
     """
 
-    def __init__(self, dal):
-        """Initialize RSVP service with database abstraction layer."""
+    def __init__(self, dal, ticket_service: Optional['TicketService'] = None):
+        """
+        Initialize RSVP service with database abstraction layer.
+
+        Args:
+            dal: Database abstraction layer
+            ticket_service: Optional ticket service for auto-generating tickets
+        """
         self.dal = dal
+        self.ticket_service = ticket_service
 
     async def rsvp_event(
         self,
@@ -126,7 +139,10 @@ class RSVPService:
                 await self._update_event_counts(event_id)
 
                 rsvp_data = result[0]
+                rsvp_id = rsvp_data.get('id')
                 message = 'RSVP updated successfully'
+                ticket_info = None
+
                 if rsvp_data.get('is_waitlisted'):
                     message = f"Added to waitlist at position {rsvp_data.get('waitlist_position')}"
 
@@ -136,8 +152,18 @@ class RSVPService:
                     f"waitlisted={rsvp_data.get('is_waitlisted')}"
                 )
 
-                return {
-                    'id': rsvp_data.get('id'),
+                # Auto-generate ticket for 'yes' RSVPs on ticketed events (not waitlisted)
+                if (rsvp_status == 'yes'
+                        and not rsvp_data.get('is_waitlisted')
+                        and self.ticket_service):
+                    ticket_info = await self._auto_generate_ticket(
+                        event_id=event_id,
+                        rsvp_id=rsvp_id,
+                        user_context=user_context
+                    )
+
+                response = {
+                    'id': rsvp_id,
                     'event_id': event_id,
                     'status': rsvp_data.get('rsvp_status'),
                     'guest_count': rsvp_data.get('guest_count'),
@@ -145,6 +171,13 @@ class RSVPService:
                     'waitlist_position': rsvp_data.get('waitlist_position'),
                     'message': message
                 }
+
+                # Include ticket info if generated
+                if ticket_info:
+                    response['ticket'] = ticket_info
+                    response['message'] = 'RSVP confirmed - ticket generated!'
+
+                return response
             else:
                 return None
 
@@ -223,7 +256,7 @@ class RSVPService:
         status: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Get attendee list for event (stub).
+        Get attendee list for event.
 
         Args:
             event_id: Event ID
@@ -399,7 +432,7 @@ class RSVPService:
 
             # Get waitlisted RSVPs ordered by waitlist_position
             waitlist_query = """
-                SELECT id, platform, platform_user_id, username, waitlist_position
+                SELECT id, hub_user_id, platform, platform_user_id, username, waitlist_position
                 FROM calendar_rsvps
                 WHERE event_id = $1 AND is_waitlisted = true
                 ORDER BY waitlist_position ASC
@@ -409,18 +442,31 @@ class RSVPService:
 
             promoted_count = 0
             for rsvp in waitlisted:
+                rsvp_id = rsvp['id']
+
                 # Promote from waitlist
                 update_query = """
                     UPDATE calendar_rsvps
                     SET is_waitlisted = false, waitlist_position = NULL, updated_at = NOW()
                     WHERE id = $1
                 """
-                await self.dal.execute(update_query, [rsvp['id']])
+                await self.dal.execute(update_query, [rsvp_id])
 
                 logger.info(
                     f"[AUDIT] Promoted from waitlist: event={event_id}, "
                     f"user={rsvp['username']}, position={rsvp['waitlist_position']}"
                 )
+
+                # Generate ticket for promoted user if event has ticketing
+                if self.ticket_service:
+                    await self._generate_ticket_for_promoted_user(
+                        event_id=event_id,
+                        rsvp_id=rsvp_id,
+                        platform=rsvp['platform'],
+                        platform_user_id=rsvp['platform_user_id'],
+                        username=rsvp['username'],
+                        hub_user_id=rsvp.get('hub_user_id')
+                    )
 
                 promoted_count += 1
 
@@ -471,3 +517,111 @@ class RSVPService:
         except Exception as e:
             logger.error(f"Error getting RSVP counts: {e}")
             return {'yes': 0, 'no': 0, 'maybe': 0, 'waitlisted': 0}
+
+    async def _auto_generate_ticket(
+        self,
+        event_id: int,
+        rsvp_id: int,
+        user_context: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Auto-generate a ticket for an RSVP on a ticketed event.
+
+        Args:
+            event_id: Event ID
+            rsvp_id: RSVP ID to link to ticket
+            user_context: User information
+
+        Returns:
+            Ticket info dict or None if event doesn't have ticketing
+        """
+        try:
+            if not self.ticket_service:
+                return None
+
+            # Check if event has ticketing enabled
+            event_query = """
+                SELECT ticketing_enabled, require_ticket
+                FROM calendar_events
+                WHERE id = $1
+            """
+            result = await self.dal.execute(event_query, [event_id])
+
+            if not result or len(result) == 0:
+                return None
+
+            event = result[0]
+            if not event.get('ticketing_enabled'):
+                # Event doesn't use ticketing - no ticket needed
+                return None
+
+            # Get default ticket type for this event (first active one)
+            type_query = """
+                SELECT id FROM calendar_ticket_types
+                WHERE event_id = $1 AND is_active = TRUE AND is_visible = TRUE
+                ORDER BY display_order ASC, id ASC
+                LIMIT 1
+            """
+            type_result = await self.dal.execute(type_query, [event_id])
+            default_ticket_type_id = None
+            if type_result and len(type_result) > 0:
+                default_ticket_type_id = type_result[0].get('id')
+
+            # Create ticket via ticket service
+            ticket = await self.ticket_service.create_ticket(
+                event_id=event_id,
+                user_context=user_context,
+                ticket_type_id=default_ticket_type_id,
+                rsvp_id=rsvp_id,
+                is_paid=False  # Free ticket via RSVP
+            )
+
+            if ticket:
+                logger.info(
+                    f"[AUDIT] AUTO_TICKET_GENERATED: event={event_id}, "
+                    f"rsvp={rsvp_id}, ticket_number={ticket.get('ticket_number')}, "
+                    f"user={user_context.get('username')}"
+                )
+
+            return ticket
+
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to auto-generate ticket: {e}", exc_info=True)
+            # Don't fail the RSVP if ticket generation fails
+            return None
+
+    async def _generate_ticket_for_promoted_user(
+        self,
+        event_id: int,
+        rsvp_id: int,
+        platform: str,
+        platform_user_id: str,
+        username: str,
+        hub_user_id: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Generate ticket for a user promoted from the waitlist.
+
+        Args:
+            event_id: Event ID
+            rsvp_id: RSVP ID
+            platform: User's platform
+            platform_user_id: User's platform ID
+            username: User's username
+            hub_user_id: Optional hub user ID
+
+        Returns:
+            Ticket info or None
+        """
+        user_context = {
+            'user_id': hub_user_id,
+            'platform': platform,
+            'platform_user_id': platform_user_id,
+            'username': username
+        }
+
+        return await self._auto_generate_ticket(
+            event_id=event_id,
+            rsvp_id=rsvp_id,
+            user_context=user_context
+        )

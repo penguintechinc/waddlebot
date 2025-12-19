@@ -1,4 +1,4 @@
-# Build from parent directory: docker build -f discord_module_flask/Dockerfile -t waddlebot/discord:latest .
+# Build from project root: docker build -f trigger/receiver/discord_module/Dockerfile -t waddlebot/discord:latest .
 
 FROM python:3.13-slim
 
@@ -11,8 +11,8 @@ COPY libs/flask_core /app/libs/flask_core
 RUN cd /app/libs/flask_core && pip install --no-cache-dir .
 
 # Copy module files
-COPY discord_module_flask/requirements.txt /app/
-COPY discord_module_flask /app/
+COPY trigger/receiver/discord_module/requirements.txt /app/
+COPY trigger/receiver/discord_module /app/
 
 # Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt

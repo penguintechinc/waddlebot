@@ -363,6 +363,63 @@ export const adminApi = {
     api.get(`/api/v1/admin/${communityId}/music/dashboard`),
   controlPlayback: (communityId, action) =>
     api.post(`/api/v1/admin/${communityId}/music/playback/control`, { action }),
+
+  // ===== Calendar Ticketing =====
+  // Ticket types
+  getTicketTypes: (communityId, eventId) =>
+    api.get(`/api/v1/admin/${communityId}/calendar/events/${eventId}/ticket-types`),
+  createTicketType: (communityId, eventId, data) =>
+    api.post(`/api/v1/admin/${communityId}/calendar/events/${eventId}/ticket-types`, data),
+  updateTicketType: (communityId, eventId, typeId, data) =>
+    api.put(`/api/v1/admin/${communityId}/calendar/events/${eventId}/ticket-types/${typeId}`, data),
+  deleteTicketType: (communityId, eventId, typeId) =>
+    api.delete(`/api/v1/admin/${communityId}/calendar/events/${eventId}/ticket-types/${typeId}`),
+
+  // Tickets
+  getTickets: (communityId, eventId, params) =>
+    api.get(`/api/v1/admin/${communityId}/calendar/events/${eventId}/tickets`, { params }),
+  createTicket: (communityId, eventId, data) =>
+    api.post(`/api/v1/admin/${communityId}/calendar/events/${eventId}/tickets`, data),
+  getTicket: (communityId, eventId, ticketId) =>
+    api.get(`/api/v1/admin/${communityId}/calendar/events/${eventId}/tickets/${ticketId}`),
+  cancelTicket: (communityId, eventId, ticketId, data) =>
+    api.post(`/api/v1/admin/${communityId}/calendar/events/${eventId}/tickets/${ticketId}/cancel`, data),
+  transferTicket: (communityId, eventId, ticketId, data) =>
+    api.post(`/api/v1/admin/${communityId}/calendar/events/${eventId}/tickets/${ticketId}/transfer`, data),
+
+  // Check-in
+  verifyTicket: (ticketCode, performCheckin = true) =>
+    api.post('/api/v1/admin/calendar/verify-ticket', { ticket_code: ticketCode, perform_checkin: performCheckin }),
+  checkIn: (communityId, eventId, data) =>
+    api.post(`/api/v1/admin/${communityId}/calendar/events/${eventId}/check-in`, data),
+  undoCheckIn: (communityId, eventId, ticketId, data) =>
+    api.post(`/api/v1/admin/${communityId}/calendar/events/${eventId}/tickets/${ticketId}/undo-check-in`, data),
+
+  // Attendance & Reporting
+  getAttendanceStats: (communityId, eventId) =>
+    api.get(`/api/v1/admin/${communityId}/calendar/events/${eventId}/attendance`),
+  getCheckInLog: (communityId, eventId, params) =>
+    api.get(`/api/v1/admin/${communityId}/calendar/events/${eventId}/check-in-log`, { params }),
+  exportAttendance: (communityId, eventId, format = 'json') =>
+    api.get(`/api/v1/admin/${communityId}/calendar/events/${eventId}/attendance/export`, { params: { format } }),
+
+  // Event admins
+  getEventAdmins: (communityId, eventId) =>
+    api.get(`/api/v1/admin/${communityId}/calendar/events/${eventId}/admins`),
+  assignEventAdmin: (communityId, eventId, data) =>
+    api.post(`/api/v1/admin/${communityId}/calendar/events/${eventId}/admins`, data),
+  updateEventAdmin: (communityId, eventId, adminId, data) =>
+    api.put(`/api/v1/admin/${communityId}/calendar/events/${eventId}/admins/${adminId}`, data),
+  revokeEventAdmin: (communityId, eventId, adminId, data) =>
+    api.delete(`/api/v1/admin/${communityId}/calendar/events/${eventId}/admins/${adminId}`, { data }),
+  getMyEventPermissions: (communityId, eventId) =>
+    api.get(`/api/v1/admin/${communityId}/calendar/events/${eventId}/my-permissions`),
+
+  // Ticketing configuration
+  enableTicketing: (communityId, eventId, data) =>
+    api.post(`/api/v1/admin/${communityId}/calendar/events/${eventId}/ticketing/enable`, data),
+  disableTicketing: (communityId, eventId) =>
+    api.post(`/api/v1/admin/${communityId}/calendar/events/${eventId}/ticketing/disable`),
 };
 
 export const platformApi = {

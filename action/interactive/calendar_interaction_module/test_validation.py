@@ -11,7 +11,7 @@ Tests the Pydantic validation models for the Calendar Module to ensure:
 
 import sys
 from datetime import datetime, timedelta
-from pydantic import ValidationError
+from pydantic.v1 import ValidationError
 
 # Import validation models
 from validation_models import (

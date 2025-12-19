@@ -61,12 +61,13 @@ resources:
   - ingress.yaml
 
 # ConfigMap generator for environment-specific overrides
-configMapGenerator:
-  - name: waddlebot-config
-    behavior: merge
-    literals:
-      - LOG_LEVEL=INFO
-      - RELEASE_MODE=false
+# Disabled due to conflict with configmap.yaml in resources list
+# configMapGenerator:
+#   - name: waddlebot-config
+#     behavior: merge
+#     literals:
+#       - LOG_LEVEL=INFO
+#       - RELEASE_MODE=false
 
 # Images to use (can be overridden with kustomize edit set image)
 images:

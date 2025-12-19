@@ -1,4 +1,4 @@
-# Build from parent directory: docker build -f twitch_module_flask/Dockerfile -t waddlebot/twitch:latest .
+# Build from project root: docker build -f trigger/receiver/twitch_module/Dockerfile -t waddlebot/twitch:latest .
 
 FROM python:3.13-slim
 
@@ -11,8 +11,8 @@ COPY libs/flask_core /app/libs/flask_core
 RUN cd /app/libs/flask_core && pip install --no-cache-dir .
 
 # Copy module files
-COPY twitch_module_flask/requirements.txt /app/
-COPY twitch_module_flask /app/
+COPY trigger/receiver/twitch_module/requirements.txt /app/
+COPY trigger/receiver/twitch_module /app/
 
 # Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt

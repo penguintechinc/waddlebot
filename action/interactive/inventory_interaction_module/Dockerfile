@@ -1,4 +1,4 @@
-# Build from parent directory: docker build -f inventory_interaction_module_flask/Dockerfile -t waddlebot/inventory-interaction:latest .
+# Build from project root: docker build -f action/interactive/inventory_interaction_module/Dockerfile -t waddlebot/inventory-interaction:latest .
 
 FROM python:3.13-slim
 
@@ -11,8 +11,8 @@ COPY libs/flask_core /app/libs/flask_core
 RUN cd /app/libs/flask_core && pip install --no-cache-dir .
 
 # Copy module files
-COPY inventory_interaction_module_flask/requirements.txt /app/
-COPY inventory_interaction_module_flask /app/
+COPY action/interactive/inventory_interaction_module/requirements.txt /app/
+COPY action/interactive/inventory_interaction_module /app/
 
 # Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt

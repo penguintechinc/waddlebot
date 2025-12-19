@@ -2,7 +2,34 @@
 
 ## Overview
 
-This document defines comprehensive development standards for WaddleBot's microservices architecture. All modules, services, and contributions must adhere to these standards to ensure consistency, maintainability, and quality across the 24+ service ecosystem.
+This document consolidates all development standards, patterns, and requirements for WaddleBot's microservices architecture. All modules, services, and contributions must adhere to these standards to ensure consistency, maintainability, and quality across the 24+ service ecosystem.
+
+**Standards are organized as:**
+1. Coding conventions per language
+2. File and module structure
+3. Logging and monitoring
+4. Error handling
+5. Docker and containerization
+6. Testing requirements
+7. Security standards
+8. Documentation standards
+9. CI/CD and deployment
+10. Quality checklist
+
+---
+
+## Table of Contents
+
+1. [Coding Conventions](#coding-conventions)
+2. [File Naming Conventions](#file-naming-conventions)
+3. [Logging Standards](#logging-standards)
+4. [Error Handling Standards](#error-handling-standards)
+5. [Docker Standards](#docker-standards)
+6. [Testing Requirements](#testing-requirements)
+7. [Security Standards](#security-standards)
+8. [Documentation Standards](#documentation-standards)
+9. [CI/CD Standards](#cicd-standards)
+10. [Quality Checklist](#quality-checklist)
 
 ---
 
@@ -12,7 +39,7 @@ This document defines comprehensive development standards for WaddleBot's micros
 
 **Version**: Python 3.13+
 
-**Style Guide**: PEP 8 with Black formatting
+**Style Guide**: PEP 8 with Black formatting for all WaddleBot modules
 
 **Formatting**:
 ```bash

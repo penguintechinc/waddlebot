@@ -6,62 +6,120 @@ global:
   imageRegistry: "localhost:32000/waddlebot"
   imagePullPolicy: Always
   storageClass: "microk8s-hostpath"
+  jwtSecret: "local-dev-jwt-secret-change-in-production"
+  moduleSecretKey: "local-dev-module-secret-change-in-production"
+  serviceApiKey: "local-dev-api-key-change-in-production"
 
-# Namespace remains the same
+# Top-level infrastructure for template compatibility
+redis:
+  enabled: false
+  replicas: 1
+  image:
+    repository: redis
+    tag: 7-alpine
+    pullPolicy: IfNotPresent
+  maxMemory: "256mb"
+  maxMemoryPolicy: "allkeys-lru"
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+postgresql:
+  enabled: false
+  replicas: 1
+
+postgres:
+  enabled: false
+  replicas: 1
+
+minio:
+  enabled: false
+  replicas: 1
+
+ollama:
+  enabled: false
+  replicas: 1
+
+qdrant:
+  enabled: false
+  replicas: 1
+
+# Namespace configuration
 namespace:
   create: true
   name: waddlebot
 
-# Infrastructure Services - Local Configuration
+# Service port configuration for ingress
+hub:
+  service:
+    port: 8060
+
+router:
+  service:
+    port: 8000
+
+identityCore:
+  service:
+    port: 8050
+
+labelsCore:
+  service:
+    port: 8023
+
+browserSource:
+  service:
+    port: 8027
+
+reputation:
+  service:
+    port: 8021
+
+community:
+  service:
+    port: 8020
+
+twitchCollector:
+  service:
+    port: 8002
+
+discordCollector:
+  service:
+    port: 8003
+
+slackCollector:
+  service:
+    port: 8004
+
+# Infrastructure Services - Local Configuration (disabled for now due to chart issues)
 infrastructure:
   # PostgreSQL - Single instance for local
   postgresql:
-    enabled: true
+    enabled: false
     replicas: 1
-    resourcePreset: medium
-    persistence:
-      enabled: true
-      size: 5Gi
-    readReplicas:
-      enabled: false
 
   # Redis - Single instance for local
   redis:
-    enabled: true
+    enabled: false
     replicas: 1
-    resourcePreset: small
-    persistence:
-      enabled: true
-      size: 2Gi
 
   # MinIO - Single instance for local
   minio:
-    enabled: true
+    enabled: false
     replicas: 1
-    resourcePreset: small
-    persistence:
-      enabled: true
-      size: 10Gi
 
   # Ollama - With GPU support if available
   ollama:
-    enabled: true
+    enabled: false
     replicas: 1
-    resourcePreset: medium
-    persistence:
-      enabled: true
-      size: 20Gi
-    gpu:
-      enabled: false  # Set to true if GPU available
 
   # Qdrant - Single instance for local
   qdrant:
-    enabled: true
+    enabled: false
     replicas: 1
-    resourcePreset: small
-    persistence:
-      enabled: true
-      size: 5Gi
 
   # OpenWhisk - Disabled for local
   openwhisk:
@@ -266,6 +324,71 @@ ingress:
           port: 8004
   tls: []  # No TLS for local development
 
+# Database credentials for secrets
+postgres:
+  password: "postgres"
+
+redis:
+  password: "redis-password"
+
+# MinIO credentials
+minio:
+  rootUser: "minioadmin"
+  rootPassword: "minioadmin"
+
+# AWS credentials (for Lambda)
+aws:
+  accessKeyId: ""
+  secretAccessKey: ""
+  region: "us-east-1"
+  lambdaRoleArn: ""
+
+# GCP credentials (for Cloud Functions)
+gcp:
+  projectId: ""
+  serviceAccount: ""
+
+# OpenWhisk credentials (for OpenWhisk functions)
+openwhisk:
+  apiHost: ""
+  authKey: ""
+  namespace: ""
+  insecure: "true"
+
+# WaddleAI Integration
+waddleai:
+  baseUrl: ""
+  apiKey: ""
+
+# OAuth Configuration - Placeholders for local development
+oauth:
+  discord:
+    clientId: ""
+    clientSecret: ""
+    botToken: ""
+    applicationId: ""
+  twitch:
+    clientId: ""
+    clientSecret: ""
+    webhookSecret: ""
+  slack:
+    clientId: ""
+    clientSecret: ""
+    botToken: ""
+    signingSecret: ""
+  youtube:
+    apiKey: ""
+    clientId: ""
+    clientSecret: ""
+    webhookCallbackUrl: ""
+  spotify:
+    clientId: ""
+    clientSecret: ""
+  kick:
+    clientId: ""
+    clientSecret: ""
+    webhookSecret: ""
+
 # Shared Environment Variables - Local Overrides
 sharedEnv:
   # Database Configuration
@@ -371,3 +494,115 @@ securityContext:
   capabilities:
     drop:
       - ALL
+
+# Modules - Map action structure to modules structure for template compatibility
+modules:
+  # Default service configuration for all modules
+  _defaults: &module_defaults
+    replicas: 1
+    imageTag: latest
+    resources: {}
+    service:
+      type: ClusterIP
+    image:
+      tag: latest
+      pullPolicy: IfNotPresent
+
+  router:
+    <<: *module_defaults
+    enabled: true
+
+  # Core modules
+  identityCore:
+    <<: *module_defaults
+    enabled: true
+
+  labelsCore:
+    <<: *module_defaults
+    enabled: true
+
+  browserSource:
+    <<: *module_defaults
+    enabled: true
+
+  reputation:
+    <<: *module_defaults
+    enabled: true
+
+  community:
+    <<: *module_defaults
+    enabled: true
+
+  aiResearcher:
+    <<: *module_defaults
+    enabled: false
+
+  # Trigger modules (collectors) - nested under collectors
+  collectors:
+    twitch:
+      <<: *module_defaults
+      enabled: true
+
+    discord:
+      <<: *module_defaults
+      enabled: true
+
+    slack:
+      <<: *module_defaults
+      enabled: true
+
+    youtubeLive:
+      <<: *module_defaults
+      enabled: true
+
+    kick:
+      <<: *module_defaults
+      enabled: true
+
+  # Admin modules
+  hub:
+    <<: *module_defaults
+    enabled: true
+
+  interactive:
+    ai:
+      <<: *module_defaults
+      enabled: true
+    alias:
+      <<: *module_defaults
+      enabled: true
+    shoutout:
+      <<: *module_defaults
+      enabled: true
+    inventory:
+      <<: *module_defaults
+      enabled: true
+    calendar:
+      <<: *module_defaults
+      enabled: true
+    memories:
+      <<: *module_defaults
+      enabled: true
+    youtubeMusic:
+      <<: *module_defaults
+      enabled: true
+    spotify:
+      <<: *module_defaults
+      enabled: true
+    loyalty:
+      <<: *module_defaults
+      enabled: true
+
+  pushing:
+    discordAction:
+      <<: *module_defaults
+      enabled: false
+    slackAction:
+      <<: *module_defaults
+      enabled: false
+    twitchAction:
+      <<: *module_defaults
+      enabled: false
+    youtubeAction:
+      <<: *module_defaults
+      enabled: false

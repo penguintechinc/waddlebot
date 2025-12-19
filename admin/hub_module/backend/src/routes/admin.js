@@ -11,6 +11,7 @@ import * as overlayController from '../controllers/overlayController.js';
 import * as loyaltyController from '../controllers/loyaltyController.js';
 import * as announcementController from '../controllers/announcementController.js';
 import * as shoutoutController from '../controllers/shoutoutController.js';
+import * as ticketController from '../controllers/ticketController.js';
 import workflowRoutes from './workflow.js';
 import { requireAuth, requireCommunityAdmin } from '../middleware/auth.js';
 import { validators, validateRequest } from '../middleware/validation.js';
@@ -469,6 +470,44 @@ router.delete('/:communityId/security/*', requireCommunityAdmin, async (req, res
     });
   }
 });
+
+// ===== Calendar Ticketing Routes =====
+
+// Ticket verification (public endpoint for QR scanning)
+router.post('/calendar/verify-ticket', ticketController.verifyTicket);
+
+// Ticket types management
+router.get('/:communityId/calendar/events/:eventId/ticket-types', requireCommunityAdmin, ticketController.listTicketTypes);
+router.post('/:communityId/calendar/events/:eventId/ticket-types', requireCommunityAdmin, ticketController.createTicketType);
+router.put('/:communityId/calendar/events/:eventId/ticket-types/:typeId', requireCommunityAdmin, ticketController.updateTicketType);
+router.delete('/:communityId/calendar/events/:eventId/ticket-types/:typeId', requireCommunityAdmin, ticketController.deleteTicketType);
+
+// Ticket management
+router.get('/:communityId/calendar/events/:eventId/tickets', requireCommunityAdmin, ticketController.listTickets);
+router.post('/:communityId/calendar/events/:eventId/tickets', requireCommunityAdmin, ticketController.createTicket);
+router.get('/:communityId/calendar/events/:eventId/tickets/:ticketId', requireCommunityAdmin, ticketController.getTicket);
+router.post('/:communityId/calendar/events/:eventId/tickets/:ticketId/cancel', requireCommunityAdmin, ticketController.cancelTicket);
+router.post('/:communityId/calendar/events/:eventId/tickets/:ticketId/transfer', requireCommunityAdmin, ticketController.transferTicket);
+
+// Check-in operations
+router.post('/:communityId/calendar/events/:eventId/check-in', requireCommunityAdmin, ticketController.checkIn);
+router.post('/:communityId/calendar/events/:eventId/tickets/:ticketId/undo-check-in', requireCommunityAdmin, ticketController.undoCheckIn);
+
+// Attendance & Reporting
+router.get('/:communityId/calendar/events/:eventId/attendance', requireCommunityAdmin, ticketController.getAttendanceStats);
+router.get('/:communityId/calendar/events/:eventId/check-in-log', requireCommunityAdmin, ticketController.getCheckInLog);
+router.get('/:communityId/calendar/events/:eventId/attendance/export', requireCommunityAdmin, ticketController.exportAttendance);
+
+// Event admin management
+router.get('/:communityId/calendar/events/:eventId/admins', requireCommunityAdmin, ticketController.listEventAdmins);
+router.post('/:communityId/calendar/events/:eventId/admins', requireCommunityAdmin, ticketController.assignEventAdmin);
+router.put('/:communityId/calendar/events/:eventId/admins/:adminId', requireCommunityAdmin, ticketController.updateEventAdmin);
+router.delete('/:communityId/calendar/events/:eventId/admins/:adminId', requireCommunityAdmin, ticketController.revokeEventAdmin);
+router.get('/:communityId/calendar/events/:eventId/my-permissions', requireCommunityAdmin, ticketController.getMyPermissions);
+
+// Ticketing configuration
+router.post('/:communityId/calendar/events/:eventId/ticketing/enable', requireCommunityAdmin, ticketController.enableTicketing);
+router.post('/:communityId/calendar/events/:eventId/ticketing/disable', requireCommunityAdmin, ticketController.disableTicketing);
 
 // Workflow routes
 router.use('/:communityId/workflows', workflowRoutes);

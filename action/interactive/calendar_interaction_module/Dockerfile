@@ -1,4 +1,4 @@
-# Build from parent directory: docker build -f calendar_interaction_module_flask/Dockerfile -t waddlebot/calendar-interaction:latest .
+# Build from project root: docker build -f action/interactive/calendar_interaction_module/Dockerfile -t waddlebot/calendar-interaction:latest .
 
 FROM python:3.13-slim
 
