@@ -87,7 +87,7 @@ class PlatformRequired(BaseModel):
     """Base model requiring a valid platform."""
     platform: str = Field(
         ...,
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
