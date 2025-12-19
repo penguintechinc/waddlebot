@@ -206,3 +206,29 @@ We welcome contributions! See [docs/development-rules.md](docs/development-rules
 **Made with ❤️ by the WaddleBot team**
 
 *Want to see WaddleBot in action? [Schedule a demo](mailto:demo@waddlebot.com)*
+
+## Testing
+
+### Comprehensive Test Suite
+
+WaddleBot includes a comprehensive test suite that runs build tests, API tests, and WebUI load tests in parallel:
+
+```bash
+# Run all tests
+./test-all.sh
+
+# Run with custom timeout (default: 300s)
+TIMEOUT=120 ./test-all.sh
+
+# Run with more parallel jobs (default: 8)
+PARALLEL_JOBS=16 ./test-all.sh
+```
+
+**Test Results:** All logs are saved to `/tmp/waddlebot-tests-<timestamp>/` with:
+- Build test logs (Python syntax validation)
+- API test logs (REST & gRPC endpoint tests)
+- WebUI test logs (Page load and accessibility tests)
+- Summary report with pass/fail statistics
+
+For detailed testing documentation, see [Testing Guide](docs/testing/test-all-guide.md).
+

@@ -3,10 +3,9 @@
 # Excludes: Frontend, webhook receivers, OBS overlays (separate systems)
 
 _format_version: "3.0"
-_transform: true
 
 # =============================================================================
-# SERVICES - Backend API Modules
+# SERVICES - Backend API Modules with Nested Routes
 # =============================================================================
 
 services:
@@ -21,6 +20,107 @@ services:
       - waddlebot
       - hub
       - core
+    routes:
+      - name: hub-public
+        paths:
+          - /api/v1/public
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - public
+          - no-auth
+      - name: hub-auth
+        paths:
+          - /api/v1/auth
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - auth
+          - no-auth
+      - name: hub-user
+        paths:
+          - /api/v1/user
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - user
+          - jwt-auth
+      - name: hub-community
+        paths:
+          - /api/v1/community
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - community
+          - jwt-auth
+      - name: hub-communities
+        paths:
+          - /api/v1/communities
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - communities
+          - jwt-auth
+      - name: hub-admin
+        paths:
+          - /api/v1/admin
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - admin
+          - jwt-auth
+      - name: hub-marketplace
+        paths:
+          - /api/v1/marketplace
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - marketplace
+          - jwt-auth
+      - name: hub-platform
+        paths:
+          - /api/v1/platform
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - platform
+          - jwt-auth
+      - name: hub-superadmin
+        paths:
+          - /api/v1/superadmin
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - superadmin
+          - jwt-auth
+      - name: hub-internal
+        paths:
+          - /api/v1/internal
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - internal
+          - api-key-auth
 
   # Router Module - Internal Event Bus
   - name: router-service
@@ -32,6 +132,17 @@ services:
       - waddlebot
       - router
       - internal
+    routes:
+      - name: router-api
+        paths:
+          - /api/v1/router
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - router
+          - api-key-auth
 
   # Core Modules
   - name: identity-service
@@ -42,6 +153,17 @@ services:
       - waddlebot
       - core
       - identity
+    routes:
+      - name: identity-api
+        paths:
+          - /api/v1/identity
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - identity
+          - jwt-auth
 
   - name: labels-service
     url: http://labels-core:8023
@@ -51,24 +173,57 @@ services:
       - waddlebot
       - core
       - labels
+    routes:
+      - name: labels-api
+        paths:
+          - /api/v1/labels
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - labels
+          - jwt-auth
 
   - name: reputation-service
-    url: http://reputation-core:8021
+    url: http://reputation:8021
     connect_timeout: 5000
     read_timeout: 30000
     tags:
       - waddlebot
       - core
       - reputation
+    routes:
+      - name: reputation-api
+        paths:
+          - /api/v1/reputation
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - reputation
+          - jwt-auth
 
   - name: community-service
-    url: http://community-core:8020
+    url: http://community:8020
     connect_timeout: 5000
     read_timeout: 30000
     tags:
       - waddlebot
       - core
       - community
+    routes:
+      - name: community-api
+        paths:
+          - /api/v1/community-core
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - community
+          - jwt-auth
 
   # Interactive Modules
   - name: ai-service
@@ -79,6 +234,17 @@ services:
       - waddlebot
       - interactive
       - ai
+    routes:
+      - name: ai-api
+        paths:
+          - /api/v1/ai
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - ai
+          - jwt-auth
 
   - name: ai-researcher-service
     url: http://ai-researcher:8070
@@ -88,51 +254,137 @@ services:
       - waddlebot
       - interactive
       - ai-researcher
+    routes:
+      - name: ai-researcher-api
+        paths:
+          - /api/v1/ai-researcher
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - ai-researcher
+          - jwt-auth
 
   - name: alias-service
-    url: http://alias:8010
+    url: http://alias-interaction:8010
     connect_timeout: 5000
     read_timeout: 30000
     tags:
       - waddlebot
       - interactive
       - alias
+    routes:
+      - name: alias-api
+        paths:
+          - /api/v1/alias
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - alias
+          - api-key-auth
 
   - name: shoutout-service
-    url: http://shoutout:8011
+    url: http://shoutout-interaction:8011
     connect_timeout: 5000
     read_timeout: 30000
     tags:
       - waddlebot
       - interactive
       - shoutout
+    routes:
+      - name: shoutout-api
+        paths:
+          - /api/v1/shoutout
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - shoutout
+          - api-key-auth
 
   - name: inventory-service
-    url: http://inventory:8024
+    url: http://inventory-interaction:8024
     connect_timeout: 5000
     read_timeout: 30000
     tags:
       - waddlebot
       - interactive
       - inventory
+    routes:
+      - name: inventory-api
+        paths:
+          - /api/v1/inventory
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - inventory
+          - jwt-auth
 
   - name: calendar-service
-    url: http://calendar:8030
+    url: http://calendar-interaction:8030
     connect_timeout: 5000
     read_timeout: 30000
     tags:
       - waddlebot
       - interactive
       - calendar
+    routes:
+      - name: calendar-api
+        paths:
+          - /api/v1/calendar
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - calendar
+          - jwt-auth
 
   - name: memories-service
-    url: http://memories:8031
+    url: http://memories-interaction:8031
     connect_timeout: 5000
     read_timeout: 30000
     tags:
       - waddlebot
       - interactive
       - memories
+    routes:
+      - name: memories-api
+        paths:
+          - /api/v1/memories
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - memories
+          - jwt-auth
+
+  - name: loyalty-service
+    url: http://loyalty-interaction:8032
+    connect_timeout: 5000
+    read_timeout: 30000
+    tags:
+      - waddlebot
+      - interactive
+      - loyalty
+    routes:
+      - name: loyalty-api
+        paths:
+          - /api/v1/loyalty
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - loyalty
+          - jwt-auth
 
   - name: youtube-music-service
     url: http://youtube-music:8025
@@ -142,288 +394,37 @@ services:
       - waddlebot
       - interactive
       - youtube-music
+    routes:
+      - name: youtube-music-api
+        paths:
+          - /api/v1/youtube-music
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - youtube-music
+          - jwt-auth
 
   - name: spotify-service
-    url: http://spotify:8026
+    url: http://spotify-interaction:8026
     connect_timeout: 5000
     read_timeout: 30000
     tags:
       - waddlebot
       - interactive
       - spotify
-
-# =============================================================================
-# ROUTES - API Path Mappings
-# =============================================================================
-
-routes:
-  # --- Hub Module Routes (Main API) ---
-  - name: hub-public
-    service: hub-service
-    paths:
-      - /api/v1/public
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - public
-      - no-auth
-
-  - name: hub-auth
-    service: hub-service
-    paths:
-      - /api/v1/auth
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - auth
-      - no-auth
-
-  - name: hub-user
-    service: hub-service
-    paths:
-      - /api/v1/user
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - user
-      - jwt-auth
-
-  - name: hub-community
-    service: hub-service
-    paths:
-      - /api/v1/community
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - community
-      - jwt-auth
-
-  - name: hub-admin
-    service: hub-service
-    paths:
-      - /api/v1/admin
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - admin
-      - jwt-auth
-
-  - name: hub-marketplace
-    service: hub-service
-    paths:
-      - /api/v1/marketplace
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - marketplace
-      - jwt-auth
-
-  - name: hub-platform
-    service: hub-service
-    paths:
-      - /api/v1/platform
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - platform
-      - jwt-auth
-
-  - name: hub-superadmin
-    service: hub-service
-    paths:
-      - /api/v1/superadmin
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - superadmin
-      - jwt-auth
-
-  - name: hub-internal
-    service: hub-service
-    paths:
-      - /api/v1/internal
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - internal
-      - api-key-auth
-
-  # --- Router Module ---
-  - name: router-api
-    service: router-service
-    paths:
-      - /api/v1/router
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - router
-      - api-key-auth
-
-  # --- Core Module Routes ---
-  - name: identity-api
-    service: identity-service
-    paths:
-      - /api/v1/identity
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - identity
-      - jwt-auth
-
-  - name: labels-api
-    service: labels-service
-    paths:
-      - /api/v1/labels
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - labels
-      - jwt-auth
-
-  - name: reputation-api
-    service: reputation-service
-    paths:
-      - /api/v1/reputation
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - reputation
-      - jwt-auth
-
-  # --- Interactive Module Routes ---
-  - name: ai-api
-    service: ai-service
-    paths:
-      - /api/v1/ai
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - ai
-      - jwt-auth
-
-  - name: ai-researcher-api
-    service: ai-researcher-service
-    paths:
-      - /api/v1/ai-researcher
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - ai-researcher
-      - jwt-auth
-
-  - name: alias-api
-    service: alias-service
-    paths:
-      - /api/v1/alias
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - alias
-      - api-key-auth
-
-  - name: shoutout-api
-    service: shoutout-service
-    paths:
-      - /api/v1/shoutout
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - shoutout
-      - api-key-auth
-
-  - name: inventory-api
-    service: inventory-service
-    paths:
-      - /api/v1/inventory
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - inventory
-      - jwt-auth
-
-  - name: calendar-api
-    service: calendar-service
-    paths:
-      - /api/v1/calendar
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - calendar
-      - jwt-auth
-
-  - name: memories-api
-    service: memories-service
-    paths:
-      - /api/v1/memories
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - memories
-      - jwt-auth
-
-  - name: youtube-music-api
-    service: youtube-music-service
-    paths:
-      - /api/v1/youtube-music
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - youtube-music
-      - jwt-auth
-
-  - name: spotify-api
-    service: spotify-service
-    paths:
-      - /api/v1/spotify
-    strip_path: false
-    protocols:
-      - http
-      - https
-    tags:
-      - spotify
-      - jwt-auth
+    routes:
+      - name: spotify-api
+        paths:
+          - /api/v1/spotify
+        strip_path: false
+        protocols:
+          - http
+          - https
+        tags:
+          - spotify
+          - jwt-auth
 
 # =============================================================================
 # CONSUMERS - API Consumers for Auth & Rate Limiting
@@ -520,169 +521,3 @@ plugins:
     tags:
       - global
       - tracing
-
-  # ==========================================================================
-  # JWT AUTHENTICATION - Protected Routes
-  # ==========================================================================
-
-  # JWT for user routes
-  - name: jwt
-    route: hub-user
-    config:
-      claims_to_verify:
-        - exp
-      header_names:
-        - Authorization
-      key_claim_name: iss
-      secret_is_base64: false
-      run_on_preflight: false
-
-  # JWT for community routes
-  - name: jwt
-    route: hub-community
-    config:
-      claims_to_verify:
-        - exp
-      header_names:
-        - Authorization
-      run_on_preflight: false
-
-  # JWT for admin routes
-  - name: jwt
-    route: hub-admin
-    config:
-      claims_to_verify:
-        - exp
-      header_names:
-        - Authorization
-      run_on_preflight: false
-
-  # JWT for marketplace routes
-  - name: jwt
-    route: hub-marketplace
-    config:
-      claims_to_verify:
-        - exp
-      header_names:
-        - Authorization
-      run_on_preflight: false
-
-  # JWT for platform admin routes
-  - name: jwt
-    route: hub-platform
-    config:
-      claims_to_verify:
-        - exp
-      header_names:
-        - Authorization
-      run_on_preflight: false
-
-  # JWT for superadmin routes
-  - name: jwt
-    route: hub-superadmin
-    config:
-      claims_to_verify:
-        - exp
-      header_names:
-        - Authorization
-      run_on_preflight: false
-
-  # JWT for core module routes
-  - name: jwt
-    route: identity-api
-    config:
-      claims_to_verify:
-        - exp
-
-  - name: jwt
-    route: labels-api
-    config:
-      claims_to_verify:
-        - exp
-
-  - name: jwt
-    route: reputation-api
-    config:
-      claims_to_verify:
-        - exp
-
-  # JWT for interactive module routes
-  - name: jwt
-    route: ai-api
-    config:
-      claims_to_verify:
-        - exp
-
-  - name: jwt
-    route: ai-researcher-api
-    config:
-      claims_to_verify:
-        - exp
-
-  - name: jwt
-    route: inventory-api
-    config:
-      claims_to_verify:
-        - exp
-
-  - name: jwt
-    route: calendar-api
-    config:
-      claims_to_verify:
-        - exp
-
-  - name: jwt
-    route: memories-api
-    config:
-      claims_to_verify:
-        - exp
-
-  - name: jwt
-    route: youtube-music-api
-    config:
-      claims_to_verify:
-        - exp
-
-  - name: jwt
-    route: spotify-api
-    config:
-      claims_to_verify:
-        - exp
-
-  # ==========================================================================
-  # API KEY AUTHENTICATION - Service Routes
-  # ==========================================================================
-
-  # API Key for internal hub routes (service-to-service)
-  - name: key-auth
-    route: hub-internal
-    config:
-      key_names:
-        - X-API-Key
-        - apikey
-      hide_credentials: true
-
-  # API Key for router API (service-to-service)
-  - name: key-auth
-    route: router-api
-    config:
-      key_names:
-        - X-API-Key
-        - apikey
-      hide_credentials: true
-
-  # API Key for alias (internal module)
-  - name: key-auth
-    route: alias-api
-    config:
-      key_names:
-        - X-API-Key
-      hide_credentials: true
-
-  # API Key for shoutout (internal module)
-  - name: key-auth
-    route: shoutout-api
-    config:
-      key_names:
-        - X-API-Key
-      hide_credentials: true

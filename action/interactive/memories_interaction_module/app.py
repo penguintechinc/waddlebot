@@ -49,7 +49,7 @@ app = Quart(__name__)
 health_bp = create_health_blueprint(Config.MODULE_NAME, Config.MODULE_VERSION)
 app.register_blueprint(health_bp)
 
-api_bp = Blueprint('api', __name__, url_prefix='/api/v1')
+api_bp = Blueprint('api', __name__, url_prefix='/api/v1/memories')
 logger = setup_aaa_logging(Config.MODULE_NAME, Config.MODULE_VERSION)
 
 dal = None

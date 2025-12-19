@@ -18,8 +18,11 @@ TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_SKIPPED=0
 
-# Configuration
-LOYALTY_URL="${LOYALTY_URL:-http://localhost:8025}"
+# Configuration - Use Kong gateway for REST API tests, direct URL for health checks
+# Kong URL for API endpoints (default for REST API testing)
+LOYALTY_URL="${LOYALTY_URL:-http://localhost:8000/api/v1/loyalty}"
+# Direct URL for health/metrics endpoints (bypasses Kong)
+LOYALTY_DIRECT_URL="${LOYALTY_DIRECT_URL:-http://localhost:8032}"
 VERBOSE=false
 
 # Temporary files
@@ -120,9 +123,20 @@ api_call() {
         curl_opts+=(-H "Content-Type: application/json" -d "$data")
     fi
 
+    # Use direct URL for health/metrics endpoints, Kong URL for API endpoints
+    local base_url
+    if [[ "$endpoint" == "/health" ]] || [[ "$endpoint" == "/healthz" ]] || \
+       [[ "$endpoint" == "/ready" ]] || [[ "$endpoint" == "/metrics" ]] || [[ "$endpoint" == "/" ]]; then
+        base_url="${LOYALTY_DIRECT_URL}"
+    else
+        # Strip /api/v1 prefix since Kong URL already includes /api/v1/loyalty
+        endpoint="${endpoint#/api/v1}"
+        base_url="${LOYALTY_URL}"
+    fi
+
     # Make the API call
     local response
-    response=$(curl "${curl_opts[@]}" "${LOYALTY_URL}${endpoint}" 2>&1 || true)
+    response=$(curl "${curl_opts[@]}" "${base_url}${endpoint}" 2>&1 || true)
 
     # Extract status code (last line)
     local status_code

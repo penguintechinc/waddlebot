@@ -20,20 +20,22 @@ TESTS_SKIPPED=0
 
 # Configuration
 HUB_URL="${HUB_URL:-http://localhost:8060}"
-ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}"
+ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost.net}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
 AUTH_TOKEN=""
 COMMUNITY_ID=""
 TEST_USER_ID=""
 TEST_SERVER_ID=""
 TEST_MIRROR_GROUP_ID=""
+CREATED_COMMUNITY_ID=""
 
 # Temporary files
 RESPONSE_FILE=$(mktemp)
 HEADERS_FILE=$(mktemp)
+COOKIE_JAR=$(mktemp)
 
 # Cleanup on exit
-trap 'rm -f "$RESPONSE_FILE" "$HEADERS_FILE"' EXIT
+trap 'rm -f "$RESPONSE_FILE" "$HEADERS_FILE" "$COOKIE_JAR"' EXIT
 
 ################################################################################
 # Helper Functions
@@ -84,7 +86,7 @@ Usage: $0 [OPTIONS]
 Options:
     -h, --help              Show this help message
     -u, --url URL           Hub module URL (default: http://localhost:8060)
-    -e, --email EMAIL       Admin email (default: admin@localhost)
+    -e, --email EMAIL       Admin email (default: admin@localhost.net)
     -p, --password PASS     Admin password (default: admin123)
     -v, --verbose           Enable verbose output (show response bodies)
 
@@ -118,7 +120,7 @@ api_call() {
     local expected_status="${4:-200}"
     local use_auth="${5:-true}"
 
-    local curl_opts=(-s -w "\n%{http_code}" -X "$method")
+    local curl_opts=(-s -w "\n%{http_code}" -X "$method" -c "$COOKIE_JAR" -b "$COOKIE_JAR")
 
     # Add authentication header if required
     if [ "$use_auth" = "true" ] && [ -n "$AUTH_TOKEN" ]; then
@@ -128,6 +130,16 @@ api_call() {
     # Add content-type and data if provided
     if [ -n "$data" ]; then
         curl_opts+=(-H "Content-Type: application/json" -d "$data")
+    fi
+
+    # For state-changing methods without Bearer token, add CSRF token from cookie
+    if [[ "$method" =~ ^(POST|PUT|PATCH|DELETE)$ ]] && [ "$use_auth" != "true" -o -z "$AUTH_TOKEN" ]; then
+        # Extract CSRF token from cookie jar
+        local csrf_token
+        csrf_token=$(grep -o 'XSRF-TOKEN[[:space:]]*[^[:space:]]*' "$COOKIE_JAR" 2>/dev/null | awk '{print $NF}' || echo "")
+        if [ -n "$csrf_token" ]; then
+            curl_opts+=(-H "X-XSRF-TOKEN: $csrf_token")
+        fi
     fi
 
     # Make the API call
@@ -223,6 +235,19 @@ fi
 ################################################################################
 
 print_header "Authentication API Tests"
+
+# Initialize CSRF token by making a GET request to any endpoint
+print_test "Initialize CSRF token"
+if api_call GET /health "" 200 false > /dev/null 2>&1; then
+    # Check if CSRF token was set in cookie
+    if grep -q 'XSRF-TOKEN' "$COOKIE_JAR" 2>/dev/null; then
+        print_pass "CSRF token initialized successfully"
+    else
+        print_fail "CSRF token not set in cookie"
+    fi
+else
+    print_fail "Failed to initialize CSRF token"
+fi
 
 # Test: Login as admin
 print_test "POST /api/v1/auth/login (admin credentials)"

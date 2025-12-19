@@ -42,8 +42,11 @@ TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_SKIPPED=0
 
-# Configuration
-MEMORIES_URL="${MEMORIES_URL:-http://localhost:8031}"
+# Configuration - Use Kong gateway for REST API tests, direct URL for health checks
+# Kong URL for API endpoints (default for REST API testing)
+MEMORIES_URL="${MEMORIES_URL:-http://localhost:8000/api/v1/memories}"
+# Direct URL for health/metrics endpoints (bypasses Kong)
+MEMORIES_DIRECT_URL="${MEMORIES_DIRECT_URL:-http://localhost:8031}"
 MEMORIES_API_KEY="${MEMORIES_API_KEY:-}"
 VERBOSE="${VERBOSE:-false}"
 SKIP_AUTH=false
@@ -104,7 +107,18 @@ make_request() {
     local data="${3:-}"
     local auth_required="${4:-false}"
 
-    local url="${MEMORIES_URL}${endpoint}"
+    # Use direct URL for health/metrics endpoints, Kong URL for API endpoints
+    local base_url
+    if [[ "$endpoint" == "/health" ]] || [[ "$endpoint" == "/healthz" ]] || \
+       [[ "$endpoint" == "/ready" ]] || [[ "$endpoint" == "/metrics" ]]; then
+        base_url="${MEMORIES_DIRECT_URL}"
+    else
+        # Strip /api/v1 prefix from endpoint since Kong URL already includes it
+        endpoint="${endpoint#/api/v1/memories}"
+        endpoint="${endpoint#/api/v1}"
+        base_url="${MEMORIES_URL}"
+    fi
+    local url="${base_url}${endpoint}"
     local headers=(-H "Content-Type: application/json")
 
     # Add API key header if required and available

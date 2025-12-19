@@ -42,8 +42,11 @@ TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_SKIPPED=0
 
-# Configuration
-AI_URL="${AI_URL:-http://localhost:8005}"
+# Configuration - Use Kong gateway for REST API tests, direct URL for health checks
+# Kong URL for API endpoints (default for REST API testing)
+AI_URL="${AI_URL:-http://localhost:8000/api/v1/ai}"
+# Direct URL for health/metrics endpoints (bypasses Kong)
+AI_DIRECT_URL="${AI_DIRECT_URL:-http://localhost:8005}"
 AI_API_KEY="${AI_API_KEY:-}"
 VERBOSE="${VERBOSE:-false}"
 SKIP_AUTH=false
@@ -104,7 +107,18 @@ make_request() {
     local data="${3:-}"
     local auth_required="${4:-false}"
 
-    local url="${AI_URL}${endpoint}"
+    # Use direct URL for health/metrics endpoints, Kong URL for API endpoints
+    local base_url
+    if [[ "$endpoint" == "/health" ]] || [[ "$endpoint" == "/healthz" ]] || \
+       [[ "$endpoint" == "/ready" ]] || [[ "$endpoint" == "/metrics" ]]; then
+        base_url="${AI_DIRECT_URL}"
+    else
+        # Strip /api/v1/ai prefix from endpoint since Kong URL already includes it
+        endpoint="${endpoint#/api/v1/ai}"
+        endpoint="${endpoint#/api/v1}"
+        base_url="${AI_URL}"
+    fi
+    local url="${base_url}${endpoint}"
     local headers=(-H "Content-Type: application/json")
 
     # Add API key header if required and available

@@ -97,7 +97,7 @@ async def shutdown():
     logger.system("Shutting down AI interaction module", action="shutdown")
 
 
-# Module info endpoint
+# Module info endpoint at root (direct access)
 @app.route('/', methods=['GET'])
 @app.route('/index', methods=['GET'])
 async def index():
@@ -110,12 +110,35 @@ async def index():
         "status": "operational",
         "endpoints": [
             "/health",
+            "/api/v1/ai/status",
             "/api/v1/ai/interaction",
             "/api/v1/ai/chat/completions",
             "/api/v1/ai/models",
             "/api/v1/ai/config",
             "/api/v1/ai/test"
         ]
+    })
+
+
+# Status endpoint (follows standard module pattern for Kong routing)
+@ai_bp.route('/status', methods=['GET'])
+@async_endpoint
+async def status():
+    """Module status endpoint - follows standard pattern for Kong routing"""
+    provider_healthy = False
+    if ai_service:
+        try:
+            provider_healthy = await ai_service.health_check()
+        except Exception:
+            pass
+
+    return success_response({
+        "module": Config.MODULE_NAME,
+        "version": Config.MODULE_VERSION,
+        "status": "operational" if provider_healthy else "degraded",
+        "provider": Config.AI_PROVIDER,
+        "model": Config.AI_MODEL,
+        "provider_healthy": provider_healthy
     })
 
 

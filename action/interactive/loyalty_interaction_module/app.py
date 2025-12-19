@@ -69,14 +69,14 @@ app = Quart(__name__)
 health_bp = create_health_blueprint(Config.MODULE_NAME, Config.MODULE_VERSION)
 app.register_blueprint(health_bp)
 
-# Create API blueprints
-currency_bp = Blueprint('currency', __name__, url_prefix='/api/v1/currency')
-config_bp = Blueprint('earning_config', __name__, url_prefix='/api/v1')
-giveaway_bp = Blueprint('giveaway', __name__, url_prefix='/api/v1/giveaways')
-games_bp = Blueprint('games', __name__, url_prefix='/api/v1/games')
-duel_bp = Blueprint('duels', __name__, url_prefix='/api/v1/duels')
-gear_bp = Blueprint('gear', __name__, url_prefix='/api/v1/gear')
-command_bp = Blueprint('command', __name__, url_prefix='/api/v1')
+# Create API blueprints - all nested under /api/v1/loyalty for Kong routing
+currency_bp = Blueprint('currency', __name__, url_prefix='/api/v1/loyalty/currency')
+config_bp = Blueprint('earning_config', __name__, url_prefix='/api/v1/loyalty')
+giveaway_bp = Blueprint('giveaway', __name__, url_prefix='/api/v1/loyalty/giveaways')
+games_bp = Blueprint('games', __name__, url_prefix='/api/v1/loyalty/games')
+duel_bp = Blueprint('duels', __name__, url_prefix='/api/v1/loyalty/duels')
+gear_bp = Blueprint('gear', __name__, url_prefix='/api/v1/loyalty/gear')
+command_bp = Blueprint('command', __name__, url_prefix='/api/v1/loyalty')
 
 # Setup logging
 logger = setup_aaa_logging(
