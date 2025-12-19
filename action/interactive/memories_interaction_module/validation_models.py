@@ -134,7 +134,7 @@ class QuoteVoteRequest(BaseModel):
     )
     vote_type: str = Field(
         ...,
-        regex=r'^(up|down|upvote|downvote)$',
+        pattern=r'^(up|down|upvote|downvote)$',
         description="Vote type: 'up', 'down', 'upvote', or 'downvote'"
     )
 
@@ -355,7 +355,7 @@ class ReminderCreateRequest(BaseModel):
     )
     channel: Optional[str] = Field(
         'twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform channel"
     )
     platform_channel_id: Optional[str] = Field(

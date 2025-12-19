@@ -8,7 +8,7 @@ provider configuration, and conversation search parameters.
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List, Dict
 from datetime import datetime
-from flask_core.sanitization import sanitized_input, sanitized_url_validator
+from flask_core.sanitization import sanitize_input, sanitize_url
 
 
 # ============================================================================
@@ -103,7 +103,7 @@ class ChatRequest(BaseModel):
             raise ValueError('prompt cannot be empty')
 
         # Sanitize input (strip HTML, prevent XSS)
-        sanitized = sanitized_input(v, allow_html=False)
+        sanitized = sanitize_input(v, allow_html=False)
 
         if not sanitized or len(sanitized.strip()) == 0:
             raise ValueError('prompt cannot be empty after sanitization')
@@ -134,7 +134,7 @@ class ChatRequest(BaseModel):
                     )
                 # Sanitize content in context
                 if isinstance(item.get('content'), str):
-                    item['content'] = sanitized_input(
+                    item['content'] = sanitize_input(
                         item['content'],
                         allow_html=False
                     )
@@ -229,8 +229,8 @@ class ProviderConfigRequest(BaseModel):
             v = v.strip()
             if not v:
                 return None
-            # Use sanitized_url_validator to prevent XSS
-            return sanitized_url_validator(v)
+            # Use sanitize_url to prevent XSS
+            return sanitize_url(v)
         return v
 
     @field_validator('model')
@@ -242,7 +242,7 @@ class ProviderConfigRequest(BaseModel):
             if not v:
                 return None
             # Sanitize to prevent injection
-            v = sanitized_input(v, allow_html=False)
+            v = sanitize_input(v, allow_html=False)
         return v
 
     @field_validator('system_prompt')
@@ -254,7 +254,7 @@ class ProviderConfigRequest(BaseModel):
             if not v:
                 return None
             # Sanitize but preserve formatting
-            v = sanitized_input(v, allow_html=False)
+            v = sanitize_input(v, allow_html=False)
             if len(v) > 2000:
                 raise ValueError('system_prompt exceeds maximum length')
         return v
@@ -324,7 +324,7 @@ class ConversationSearchParams(BaseModel):
             v = v.strip()
             if not v:
                 return None
-            v = sanitized_input(v, allow_html=False)
+            v = sanitize_input(v, allow_html=False)
         return v
 
     model_config = ConfigDict(extra='forbid')
@@ -391,14 +391,14 @@ class InteractionRequest(BaseModel):
         """Validate and sanitize required string fields."""
         if not v or not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
-        return sanitized_input(v.strip(), allow_html=False)
+        return sanitize_input(v.strip(), allow_html=False)
 
     @field_validator('message_content')
     @classmethod
     def sanitize_message_content(cls, v):
         """Sanitize message content to prevent injection attacks."""
         if v:
-            return sanitized_input(v, allow_html=False)
+            return sanitize_input(v, allow_html=False)
         return ''
 
     @field_validator('message_type')
@@ -407,7 +407,7 @@ class InteractionRequest(BaseModel):
         """Validate and sanitize message type."""
         if v:
             v = v.strip()
-            return sanitized_input(v, allow_html=False)
+            return sanitize_input(v, allow_html=False)
         return 'chatMessage'
 
     @field_validator('display_name')
@@ -418,7 +418,7 @@ class InteractionRequest(BaseModel):
             v = v.strip()
             if not v:
                 return None
-            return sanitized_input(v, allow_html=False)
+            return sanitize_input(v, allow_html=False)
         return v
 
     model_config = ConfigDict(extra='ignore')
