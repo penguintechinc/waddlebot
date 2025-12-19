@@ -5,7 +5,6 @@ quart==0.19.4
 hypercorn==0.16.0
 
 # gRPC
-<<<<<<< HEAD
 grpcio>=1.67.0,<2.0.0
 grpcio-tools>=1.67.0,<2.0.0
 protobuf>=5.28.0,<6.0.0
@@ -19,21 +18,6 @@ aiohttp>=3.10.0,<4.0.0
 # Authentication
 pyjwt==2.8.0
 cryptography==43.0.3
-=======
-grpcio==1.60.0
-grpcio-tools==1.60.0
-protobuf==4.25.1
-
-# Database
-pydal==20231215.1
-
-# HTTP Client
-aiohttp==3.9.1
-
-# Authentication
-pyjwt==2.8.0
-cryptography==41.0.7
->>>>>>> origin/main
 
 # Utilities
 python-dateutil==2.8.2

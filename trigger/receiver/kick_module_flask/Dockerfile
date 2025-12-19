@@ -27,7 +27,6 @@ COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
 RUN chmod 755 /usr/local/bin/healthcheck.py
 
 # Create non-root user
-<<<<<<< HEAD
 RUN groupadd -r waddlebot && useradd -r -g waddlebot -m waddlebot
 
 # Set proper permissions for app directory and log directory
@@ -35,10 +34,6 @@ RUN mkdir -p /var/log/waddlebotlog && chown -R waddlebot:waddlebot /app /var/log
 
 # Switch to non-root user
 USER waddlebot
-=======
-RUN useradd -m -s /bin/bash appuser && chown -R appuser:appuser /app
-USER appuser
->>>>>>> origin/main
 
 # Expose port
 EXPOSE 8007

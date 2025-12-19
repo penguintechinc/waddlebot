@@ -7,11 +7,7 @@ hypercorn>=0.16.0  # ASGI server for Quart
 quart-flask-patch>=0.3.0  # Flask compatibility for Quart
 
 # Database
-<<<<<<< HEAD
 pydal>=20240906.1,<20250101
-=======
-pydal>=20240906.1
->>>>>>> origin/main
 psycopg2-binary>=2.9.9  # PostgreSQL adapter
 
 # Authentication & Authorization
@@ -25,11 +21,7 @@ redis>=5.0.1
 hiredis>=2.3.2  # Optional C parser for better performance
 
 # HTTP Client (async)
-<<<<<<< HEAD
 httpx>=0.27.0,<0.28.0  # For async HTTP requests
-=======
-httpx>=0.26.0  # For async HTTP requests
->>>>>>> origin/main
 requests>=2.31.0  # Required by authlib for OAuth1 support
 
 # Data Validation & Sanitization

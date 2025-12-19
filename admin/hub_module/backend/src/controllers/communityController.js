@@ -974,7 +974,6 @@ export async function cancelServerLinkRequest(req, res, next) {
     next(err);
   }
 }
-<<<<<<< HEAD
 
 /**
  * Get connected platforms for a community
@@ -1007,5 +1006,3 @@ export async function getConnectedPlatforms(req, res, next) {
     next(err);
   }
 }
-=======
->>>>>>> origin/main
