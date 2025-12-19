@@ -22,6 +22,18 @@ from datetime import datetime
 import re
 import logging
 
+# Import from shared library for re-export
+try:
+    from py_libs.models import (
+        WaddleBaseModel, WaddleRequestModel, Platform,
+        PaginationParams as SharedPaginationParams,
+        CommunityIdRequired as SharedCommunityIdRequired,
+        DateRange as SharedDateRange,
+    )
+    HAS_SHARED_MODELS = True
+except ImportError:
+    HAS_SHARED_MODELS = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -466,4 +478,9 @@ __all__ = [
     'Field',
     'validator',
     'ValidationError',
+    # Shared library models
+    'WaddleBaseModel',
+    'WaddleRequestModel',
+    'Platform',
+    'HAS_SHARED_MODELS',
 ]

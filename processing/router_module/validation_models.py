@@ -4,7 +4,7 @@ Router Module Validation Models
 Pydantic models for validating router API requests.
 """
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, Dict, Any, List
 
 
@@ -15,7 +15,7 @@ class RouterEventRequest(BaseModel):
     """
     platform: str = Field(
         ...,
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name (twitch, discord, slack, kick)"
     )
     channel_id: str = Field(
@@ -52,21 +52,24 @@ class RouterEventRequest(BaseModel):
         description="Additional event metadata"
     )
 
-    @validator('channel_id', 'user_id', 'username')
-    def validate_not_empty(cls, v, field):
+    @field_validator('channel_id', 'user_id', 'username')
+    @classmethod
+    def validate_not_empty(cls, v, info):
         """Ensure string fields are not just whitespace."""
         if not v or not v.strip():
-            raise ValueError(f'{field.name} cannot be empty or whitespace only')
+            raise ValueError(f'{info.field_name} cannot be empty or whitespace only')
         return v.strip()
 
-    @validator('message')
+    @field_validator('message')
+    @classmethod
     def validate_message(cls, v):
         """Validate message is not empty."""
         if not v or not v.strip():
             raise ValueError('message cannot be empty or whitespace only')
         return v
 
-    @validator('command')
+    @field_validator('command')
+    @classmethod
     def validate_command(cls, v):
         """Validate command format if provided."""
         if v is not None and v:
@@ -79,8 +82,7 @@ class RouterEventRequest(BaseModel):
                 raise ValueError('command cannot exceed 255 characters')
         return v if v else None
 
-    class Config:
-        extra = 'forbid'  # Reject unknown fields
+    model_config = ConfigDict(extra='forbid')
 
 
 class RouterBatchRequest(BaseModel):
@@ -95,7 +97,8 @@ class RouterBatchRequest(BaseModel):
         description="List of events to process (1-100 items)"
     )
 
-    @validator('events')
+    @field_validator('events')
+    @classmethod
     def validate_events(cls, v):
         """Validate events list is not empty."""
         if not v:
@@ -104,8 +107,7 @@ class RouterBatchRequest(BaseModel):
             raise ValueError('cannot process more than 100 events at once')
         return v
 
-    class Config:
-        extra = 'forbid'  # Reject unknown fields
+    model_config = ConfigDict(extra='forbid')
 
 
 class RouterResponseRequest(BaseModel):
@@ -127,7 +129,7 @@ class RouterResponseRequest(BaseModel):
     )
     platform: str = Field(
         ...,
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name (twitch, discord, slack, kick)"
     )
     channel_id: str = Field(
@@ -137,22 +139,23 @@ class RouterResponseRequest(BaseModel):
         description="Channel ID to send response to"
     )
 
-    @validator('event_id', 'channel_id')
-    def validate_not_empty(cls, v, field):
+    @field_validator('event_id', 'channel_id')
+    @classmethod
+    def validate_not_empty(cls, v, info):
         """Ensure string fields are not just whitespace."""
         if not v or not v.strip():
-            raise ValueError(f'{field.name} cannot be empty or whitespace only')
+            raise ValueError(f'{info.field_name} cannot be empty or whitespace only')
         return v.strip()
 
-    @validator('response')
+    @field_validator('response')
+    @classmethod
     def validate_response(cls, v):
         """Validate response is not empty."""
         if not v or not v.strip():
             raise ValueError('response cannot be empty or whitespace only')
         return v
 
-    class Config:
-        extra = 'forbid'  # Reject unknown fields
+    model_config = ConfigDict(extra='forbid')
 
 
 __all__ = [

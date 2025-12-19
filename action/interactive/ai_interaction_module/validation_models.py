@@ -5,7 +5,7 @@ Pydantic models for input validation of AI interaction requests,
 provider configuration, and conversation search parameters.
 """
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List, Dict
 from datetime import datetime
 from flask_core.sanitization import sanitized_input, sanitized_url_validator
@@ -47,7 +47,7 @@ class ChatRequest(BaseModel):
     )
     platform: str = Field(
         ...,
-        regex=r'^(twitch|discord|slack)$',
+        pattern=r'^(twitch|discord|slack)$',
         description="Platform name (twitch, discord, or slack)"
     )
     channel_id: Optional[str] = Field(
@@ -61,7 +61,7 @@ class ChatRequest(BaseModel):
     )
     provider: Optional[str] = Field(
         'ollama',
-        regex=r'^(ollama|openai|mcp)$',
+        pattern=r'^(ollama|openai|mcp)$',
         description="AI provider to use"
     )
     model: Optional[str] = Field(
@@ -82,14 +82,16 @@ class ChatRequest(BaseModel):
         description="Maximum tokens in response (1-4096)"
     )
 
-    @validator('user_id', 'username')
+    @field_validator('user_id', 'username')
+    @classmethod
     def validate_string_fields(cls, v):
         """Validate and sanitize string fields."""
         if not v or not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    @validator('prompt')
+    @field_validator('prompt')
+    @classmethod
     def sanitize_prompt(cls, v):
         """
         Sanitize prompt to prevent injection attacks.
@@ -112,7 +114,8 @@ class ChatRequest(BaseModel):
 
         return sanitized
 
-    @validator('context')
+    @field_validator('context')
+    @classmethod
     def validate_context(cls, v):
         """Validate conversation context doesn't exceed limits."""
         if v is not None:
@@ -138,7 +141,8 @@ class ChatRequest(BaseModel):
 
         return v
 
-    @validator('channel_id')
+    @field_validator('channel_id')
+    @classmethod
     def validate_channel_id(cls, v):
         """Validate and sanitize channel_id."""
         if v is not None:
@@ -147,8 +151,7 @@ class ChatRequest(BaseModel):
                 return None
         return v
 
-    class Config:
-        extra = 'forbid'  # Reject unknown fields
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -169,7 +172,7 @@ class ProviderConfigRequest(BaseModel):
     )
     provider: str = Field(
         ...,
-        regex=r'^(ollama|openai|mcp)$',
+        pattern=r'^(ollama|openai|mcp)$',
         description="AI provider name"
     )
     api_key: Optional[str] = Field(
@@ -205,7 +208,8 @@ class ProviderConfigRequest(BaseModel):
         description="System prompt for AI behavior"
     )
 
-    @validator('api_key')
+    @field_validator('api_key')
+    @classmethod
     def validate_api_key(cls, v):
         """Validate and sanitize API key."""
         if v is not None:
@@ -217,7 +221,8 @@ class ProviderConfigRequest(BaseModel):
                 raise ValueError('api_key cannot contain whitespace')
         return v
 
-    @validator('base_url')
+    @field_validator('base_url')
+    @classmethod
     def validate_base_url(cls, v):
         """Validate and sanitize base URL."""
         if v is not None:
@@ -228,7 +233,8 @@ class ProviderConfigRequest(BaseModel):
             return sanitized_url_validator(v)
         return v
 
-    @validator('model')
+    @field_validator('model')
+    @classmethod
     def validate_model(cls, v):
         """Validate and sanitize model name."""
         if v is not None:
@@ -239,7 +245,8 @@ class ProviderConfigRequest(BaseModel):
             v = sanitized_input(v, allow_html=False)
         return v
 
-    @validator('system_prompt')
+    @field_validator('system_prompt')
+    @classmethod
     def validate_system_prompt(cls, v):
         """Validate and sanitize system prompt."""
         if v is not None:
@@ -252,8 +259,7 @@ class ProviderConfigRequest(BaseModel):
                 raise ValueError('system_prompt exceeds maximum length')
         return v
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -278,7 +284,7 @@ class ConversationSearchParams(BaseModel):
     )
     platform: Optional[str] = Field(
         None,
-        regex=r'^(twitch|discord|slack)$',
+        pattern=r'^(twitch|discord|slack)$',
         description="Filter by platform"
     )
     start_date: Optional[datetime] = Field(
@@ -301,15 +307,17 @@ class ConversationSearchParams(BaseModel):
         description="Number of results to skip"
     )
 
-    @validator('end_date')
-    def validate_date_range(cls, v, values):
+    @field_validator('end_date')
+    @classmethod
+    def validate_date_range(cls, v, info):
         """Ensure end_date is after start_date."""
-        if v and 'start_date' in values and values['start_date']:
-            if v <= values['start_date']:
+        if v and info.data.get('start_date'):
+            if v <= info.data['start_date']:
                 raise ValueError('end_date must be after start_date')
         return v
 
-    @validator('user_id')
+    @field_validator('user_id')
+    @classmethod
     def validate_user_id(cls, v):
         """Validate and sanitize user_id."""
         if v is not None:
@@ -319,8 +327,7 @@ class ConversationSearchParams(BaseModel):
             v = sanitized_input(v, allow_html=False)
         return v
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -363,7 +370,7 @@ class InteractionRequest(BaseModel):
     )
     platform: str = Field(
         ...,
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
     username: str = Field(
@@ -378,21 +385,24 @@ class InteractionRequest(BaseModel):
         description="Display name for user"
     )
 
-    @validator('session_id', 'user_id', 'username', 'entity_id')
+    @field_validator('session_id', 'user_id', 'username', 'entity_id')
+    @classmethod
     def validate_string_fields(cls, v):
         """Validate and sanitize required string fields."""
         if not v or not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return sanitized_input(v.strip(), allow_html=False)
 
-    @validator('message_content')
+    @field_validator('message_content')
+    @classmethod
     def sanitize_message_content(cls, v):
         """Sanitize message content to prevent injection attacks."""
         if v:
             return sanitized_input(v, allow_html=False)
         return ''
 
-    @validator('message_type')
+    @field_validator('message_type')
+    @classmethod
     def validate_message_type(cls, v):
         """Validate and sanitize message type."""
         if v:
@@ -400,7 +410,8 @@ class InteractionRequest(BaseModel):
             return sanitized_input(v, allow_html=False)
         return 'chatMessage'
 
-    @validator('display_name')
+    @field_validator('display_name')
+    @classmethod
     def validate_display_name(cls, v):
         """Validate and sanitize display name."""
         if v is not None:
@@ -410,8 +421,7 @@ class InteractionRequest(BaseModel):
             return sanitized_input(v, allow_html=False)
         return v
 
-    class Config:
-        extra = 'ignore'  # Allow extra fields for flexibility
+    model_config = ConfigDict(extra='ignore')
 
 
 __all__ = [

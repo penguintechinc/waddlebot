@@ -15,7 +15,7 @@ Usage:
         return success_response(event, status_code=201)
 """
 
-from pydantic.v1 import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 import re
@@ -63,7 +63,7 @@ class EventCreateRequest(BaseModel):
     )
     platform: str = Field(
         ...,
-        regex=r'^(twitch|discord|slack)$',
+        pattern=r'^(twitch|discord|slack)$',
         description="Platform where event was created (twitch, discord, slack)"
     )
     entity_id: Optional[str] = Field(
@@ -145,30 +145,16 @@ class EventCreateRequest(BaseModel):
         description="URL to event cover image"
     )
 
-    @validator('title', 'created_by_username')
-    def validate_non_empty_string(cls, v, field):
+    @field_validator('title', 'created_by_username')
+    @classmethod
+    def validate_non_empty_string(cls, v, info):
         """Ensure strings are not just whitespace."""
         if v and not v.strip():
-            raise ValueError(f'{field.name} cannot be empty or whitespace only')
+            raise ValueError(f'{info.field_name} cannot be empty or whitespace only')
         return v.strip() if v else v
 
-    @validator('end_date')
-    def validate_end_date(cls, v, values):
-        """Ensure end_date is after event_date."""
-        if v and 'event_date' in values and values['event_date']:
-            if v <= values['event_date']:
-                raise ValueError('end_date must be after event_date')
-        return v
-
-    @validator('rsvp_deadline')
-    def validate_rsvp_deadline(cls, v, values):
-        """Ensure RSVP deadline is before event_date."""
-        if v and 'event_date' in values and values['event_date']:
-            if v >= values['event_date']:
-                raise ValueError('rsvp_deadline must be before event_date')
-        return v
-
-    @validator('recurring_days')
+    @field_validator('recurring_days')
+    @classmethod
     def validate_recurring_days(cls, v):
         """Ensure recurring days are valid (0-6)."""
         if v:
@@ -177,15 +163,8 @@ class EventCreateRequest(BaseModel):
                     raise ValueError('recurring_days must contain integers 0-6 (0=Sunday, 6=Saturday)')
         return v
 
-    @validator('recurring_end_date')
-    def validate_recurring_end_date(cls, v, values):
-        """Ensure recurring end date is after event_date."""
-        if v and 'event_date' in values and values['event_date']:
-            if v <= values['event_date']:
-                raise ValueError('recurring_end_date must be after event_date')
-        return v
-
-    @validator('tags')
+    @field_validator('tags')
+    @classmethod
     def validate_tags(cls, v):
         """Validate tag format and length."""
         if v:
@@ -196,7 +175,8 @@ class EventCreateRequest(BaseModel):
                     raise ValueError('Each tag must be a string with max 50 characters')
         return v
 
-    @validator('cover_image_url')
+    @field_validator('cover_image_url')
+    @classmethod
     def validate_image_url(cls, v):
         """Validate image URL format."""
         if v:
@@ -205,8 +185,21 @@ class EventCreateRequest(BaseModel):
                 raise ValueError('cover_image_url must be a valid URL starting with http:// or https://')
         return v
 
-    class Config:
-        extra = 'forbid'  # Reject unknown fields
+    @model_validator(mode='after')
+    def validate_dates(self):
+        """Ensure end_date, rsvp_deadline, and recurring_end_date are valid."""
+        if self.end_date and self.event_date:
+            if self.end_date <= self.event_date:
+                raise ValueError('end_date must be after event_date')
+        if self.rsvp_deadline and self.event_date:
+            if self.rsvp_deadline >= self.event_date:
+                raise ValueError('rsvp_deadline must be before event_date')
+        if self.recurring_end_date and self.event_date:
+            if self.recurring_end_date <= self.event_date:
+                raise ValueError('recurring_end_date must be after event_date')
+        return self
+
+    model_config = ConfigDict(extra='forbid')
 
 
 class EventSearchParams(BaseModel):
@@ -219,12 +212,12 @@ class EventSearchParams(BaseModel):
     community_id: Optional[int] = Field(None, gt=0, description="Community ID filter")
     platform: Optional[str] = Field(
         None,
-        regex=r'^(twitch|discord|slack)$',
+        pattern=r'^(twitch|discord|slack)$',
         description="Platform filter (twitch, discord, slack)"
     )
     status: Optional[str] = Field(
         None,
-        regex=r'^(pending|approved|rejected|cancelled)$',
+        pattern=r'^(pending|approved|rejected|cancelled)$',
         description="Event status filter"
     )
     date_from: Optional[datetime] = Field(
@@ -265,16 +258,15 @@ class EventSearchParams(BaseModel):
         description="Include attendee information"
     )
 
-    @validator('date_to')
-    def validate_date_range(cls, v, values):
+    @model_validator(mode='after')
+    def validate_date_range(self):
         """Ensure date_to is after date_from if both provided."""
-        if v and 'date_from' in values and values['date_from']:
-            if v <= values['date_from']:
+        if self.date_to and self.date_from:
+            if self.date_to <= self.date_from:
                 raise ValueError('date_to must be after date_from')
-        return v
+        return self
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class EventUpdateRequest(BaseModel):
@@ -314,7 +306,7 @@ class EventUpdateRequest(BaseModel):
     )
     status: Optional[str] = Field(
         None,
-        regex=r'^(pending|approved|rejected|cancelled)$',
+        pattern=r'^(pending|approved|rejected|cancelled)$',
         description="Event status"
     )
     rsvp_enabled: Optional[bool] = Field(
@@ -349,22 +341,16 @@ class EventUpdateRequest(BaseModel):
         description="URL to event cover image"
     )
 
-    @validator('title')
+    @field_validator('title')
+    @classmethod
     def validate_title(cls, v):
         """Ensure title is not just whitespace."""
         if v and not v.strip():
             raise ValueError('title cannot be empty or whitespace only')
         return v.strip() if v else v
 
-    @validator('end_date')
-    def validate_end_date(cls, v, values):
-        """Ensure end_date is after event_date."""
-        if v and 'event_date' in values and values['event_date']:
-            if v <= values['event_date']:
-                raise ValueError('end_date must be after event_date')
-        return v
-
-    @validator('tags')
+    @field_validator('tags')
+    @classmethod
     def validate_tags(cls, v):
         """Validate tag format and length."""
         if v:
@@ -375,7 +361,8 @@ class EventUpdateRequest(BaseModel):
                     raise ValueError('Each tag must be a string with max 50 characters')
         return v
 
-    @validator('cover_image_url')
+    @field_validator('cover_image_url')
+    @classmethod
     def validate_image_url(cls, v):
         """Validate image URL format."""
         if v:
@@ -384,8 +371,15 @@ class EventUpdateRequest(BaseModel):
                 raise ValueError('cover_image_url must be a valid URL starting with http:// or https://')
         return v
 
-    class Config:
-        extra = 'forbid'
+    @model_validator(mode='after')
+    def validate_end_date(self):
+        """Ensure end_date is after event_date."""
+        if self.end_date and self.event_date:
+            if self.end_date <= self.event_date:
+                raise ValueError('end_date must be after event_date')
+        return self
+
+    model_config = ConfigDict(extra='forbid')
 
 
 class EventApprovalRequest(BaseModel):
@@ -394,7 +388,7 @@ class EventApprovalRequest(BaseModel):
     """
     status: str = Field(
         ...,
-        regex=r'^(approved|rejected)$',
+        pattern=r'^(approved|rejected)$',
         description="Approval status (approved or rejected)"
     )
     notes: Optional[str] = Field(
@@ -408,8 +402,7 @@ class EventApprovalRequest(BaseModel):
         description="Reason for rejection (deprecated, use notes)"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -422,7 +415,7 @@ class RSVPRequest(BaseModel):
     """
     status: str = Field(
         ...,
-        regex=r'^(yes|no|maybe)$',
+        pattern=r'^(yes|no|maybe)$',
         description="RSVP status (yes, no, maybe)"
     )
     guest_count: Optional[int] = Field(
@@ -437,8 +430,7 @@ class RSVPRequest(BaseModel):
         description="User note for RSVP"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class AttendeeSearchParams(BaseModel):
@@ -447,12 +439,11 @@ class AttendeeSearchParams(BaseModel):
     """
     status: Optional[str] = Field(
         None,
-        regex=r'^(yes|no|maybe)$',
+        pattern=r'^(yes|no|maybe)$',
         description="Filter by RSVP status"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -489,23 +480,23 @@ class EventFullTextSearchParams(BaseModel):
         description="Number of results"
     )
 
-    @validator('q')
+    @field_validator('q')
+    @classmethod
     def validate_query(cls, v):
         """Ensure query is not just whitespace."""
         if not v.strip():
             raise ValueError('search query cannot be empty or whitespace only')
         return v.strip()
 
-    @validator('date_to')
-    def validate_date_range(cls, v, values):
+    @model_validator(mode='after')
+    def validate_date_range(self):
         """Ensure date_to is after date_from."""
-        if v and 'date_from' in values and values['date_from']:
-            if v <= values['date_from']:
+        if self.date_to and self.date_from:
+            if self.date_to <= self.date_from:
                 raise ValueError('date_to must be after date_from')
-        return v
+        return self
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class UpcomingEventsParams(BaseModel):
@@ -524,8 +515,7 @@ class UpcomingEventsParams(BaseModel):
         description="Filter by entity ID"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -563,8 +553,7 @@ class PermissionsConfigRequest(BaseModel):
         description="Maximum events per member (0=unlimited)"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class CategoryCreateRequest(BaseModel):
@@ -584,7 +573,7 @@ class CategoryCreateRequest(BaseModel):
     )
     color: Optional[str] = Field(
         None,
-        regex=r'^#[0-9A-Fa-f]{6}$',
+        pattern=r'^#[0-9A-Fa-f]{6}$',
         description="Category color (hex format: #RRGGBB)"
     )
     icon: Optional[str] = Field(
@@ -598,15 +587,15 @@ class CategoryCreateRequest(BaseModel):
         description="Display order for sorting"
     )
 
-    @validator('name')
+    @field_validator('name')
+    @classmethod
     def validate_name(cls, v):
         """Ensure name is not just whitespace."""
         if not v.strip():
             raise ValueError('category name cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -629,15 +618,15 @@ class ContextSwitchRequest(BaseModel):
         description="Community name to switch to"
     )
 
-    @validator('community_name')
+    @field_validator('community_name')
+    @classmethod
     def validate_community_name(cls, v):
         """Ensure community name is not just whitespace."""
         if not v.strip():
             raise ValueError('community_name cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -673,7 +662,7 @@ class TicketTypeCreateRequest(BaseModel):
     )
     currency: str = Field(
         default='USD',
-        regex=r'^[A-Z]{3}$',
+        pattern=r'^[A-Z]{3}$',
         description="Currency code (ISO 4217)"
     )
     sales_start: Optional[datetime] = Field(
@@ -691,23 +680,23 @@ class TicketTypeCreateRequest(BaseModel):
         description="Display order (lower=first)"
     )
 
-    @validator('name')
+    @field_validator('name')
+    @classmethod
     def validate_name(cls, v):
         """Ensure name is not just whitespace."""
         if not v.strip():
             raise ValueError('name cannot be empty or whitespace only')
         return v.strip()
 
-    @validator('sales_end')
-    def validate_sales_end(cls, v, values):
+    @model_validator(mode='after')
+    def validate_sales_end(self):
         """Ensure sales_end is after sales_start."""
-        if v and 'sales_start' in values and values['sales_start']:
-            if v <= values['sales_start']:
+        if self.sales_end and self.sales_start:
+            if self.sales_end <= self.sales_start:
                 raise ValueError('sales_end must be after sales_start')
-        return v
+        return self
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class TicketTypeUpdateRequest(BaseModel):
@@ -739,7 +728,7 @@ class TicketTypeUpdateRequest(BaseModel):
     )
     currency: Optional[str] = Field(
         None,
-        regex=r'^[A-Z]{3}$',
+        pattern=r'^[A-Z]{3}$',
         description="Currency code"
     )
     sales_start: Optional[datetime] = Field(
@@ -765,8 +754,7 @@ class TicketTypeUpdateRequest(BaseModel):
         description="Whether ticket type is active"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class TicketCreateRequest(BaseModel):
@@ -790,7 +778,7 @@ class TicketCreateRequest(BaseModel):
     )
     platform: str = Field(
         ...,
-        regex=r'^(twitch|discord|slack|hub)$',
+        pattern=r'^(twitch|discord|slack|hub)$',
         description="Platform (twitch, discord, slack, hub)"
     )
     platform_user_id: str = Field(
@@ -812,7 +800,8 @@ class TicketCreateRequest(BaseModel):
         description="Number of additional guests"
     )
 
-    @validator('holder_email')
+    @field_validator('holder_email')
+    @classmethod
     def validate_email(cls, v):
         """Validate email format if provided."""
         if v:
@@ -821,8 +810,7 @@ class TicketCreateRequest(BaseModel):
                 raise ValueError('Invalid email format')
         return v
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class TicketVerifyRequest(BaseModel):
@@ -833,7 +821,7 @@ class TicketVerifyRequest(BaseModel):
         ...,
         min_length=64,
         max_length=64,
-        regex=r'^[a-fA-F0-9]{64}$',
+        pattern=r'^[a-fA-F0-9]{64}$',
         description="64-character hex ticket code"
     )
     perform_checkin: bool = Field(
@@ -846,8 +834,7 @@ class TicketVerifyRequest(BaseModel):
         description="Check-in location"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class TicketCheckInRequest(BaseModel):
@@ -859,7 +846,7 @@ class TicketCheckInRequest(BaseModel):
         None,
         min_length=64,
         max_length=64,
-        regex=r'^[a-fA-F0-9]{64}$',
+        pattern=r'^[a-fA-F0-9]{64}$',
         description="64-character hex ticket code"
     )
     ticket_id: Optional[int] = Field(
@@ -884,19 +871,16 @@ class TicketCheckInRequest(BaseModel):
         description="Check-in notes"
     )
 
-    @validator('ticket_id', always=True)
-    def validate_has_identifier(cls, v, values):
+    @model_validator(mode='after')
+    def validate_has_identifier(self):
         """Ensure at least one identifier is provided."""
-        ticket_code = values.get('ticket_code')
-        holder_name = values.get('holder_name')
-        if not v and not ticket_code and not holder_name:
+        if not self.ticket_id and not self.ticket_code and not self.holder_name:
             raise ValueError(
                 'At least one of ticket_code, ticket_id, or holder_name must be provided'
             )
-        return v
+        return self
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class TicketUndoCheckInRequest(BaseModel):
@@ -914,8 +898,7 @@ class TicketUndoCheckInRequest(BaseModel):
         description="Reason for undoing check-in"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class TicketTransferRequest(BaseModel):
@@ -935,7 +918,7 @@ class TicketTransferRequest(BaseModel):
     )
     new_holder_platform: str = Field(
         ...,
-        regex=r'^(twitch|discord|slack|hub)$',
+        pattern=r'^(twitch|discord|slack|hub)$',
         description="New holder platform"
     )
     new_holder_platform_user_id: str = Field(
@@ -961,7 +944,8 @@ class TicketTransferRequest(BaseModel):
         description="Transfer notes"
     )
 
-    @validator('new_holder_email')
+    @field_validator('new_holder_email')
+    @classmethod
     def validate_email(cls, v):
         """Validate email format if provided."""
         if v:
@@ -970,8 +954,7 @@ class TicketTransferRequest(BaseModel):
                 raise ValueError('Invalid email format')
         return v
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class TicketCancelRequest(BaseModel):
@@ -984,8 +967,7 @@ class TicketCancelRequest(BaseModel):
         description="Cancellation reason"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class TicketSearchParams(BaseModel):
@@ -994,7 +976,7 @@ class TicketSearchParams(BaseModel):
     """
     status: Optional[str] = Field(
         None,
-        regex=r'^(valid|checked_in|cancelled|expired|refunded|transferred)$',
+        pattern=r'^(valid|checked_in|cancelled|expired|refunded|transferred)$',
         description="Filter by ticket status"
     )
     is_checked_in: Optional[bool] = Field(
@@ -1023,8 +1005,7 @@ class TicketSearchParams(BaseModel):
         description="Pagination offset"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class CheckInLogParams(BaseModel):
@@ -1055,16 +1036,15 @@ class CheckInLogParams(BaseModel):
         description="Pagination offset"
     )
 
-    @validator('to_date')
-    def validate_date_range(cls, v, values):
+    @model_validator(mode='after')
+    def validate_date_range(self):
         """Ensure to_date is after from_date."""
-        if v and 'from_date' in values and values['from_date']:
-            if v <= values['from_date']:
+        if self.to_date and self.from_date:
+            if self.to_date <= self.from_date:
                 raise ValueError('to_date must be after from_date')
-        return v
+        return self
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class TicketingConfigRequest(BaseModel):
@@ -1093,12 +1073,12 @@ class TicketingConfigRequest(BaseModel):
     )
     event_type: Optional[str] = Field(
         None,
-        regex=r'^(virtual|in_person|hybrid)$',
+        pattern=r'^(virtual|in_person|hybrid)$',
         description="Event type"
     )
     check_in_mode: Optional[str] = Field(
         None,
-        regex=r'^(admin_only|self_checkin|auto_checkin)$',
+        pattern=r'^(admin_only|self_checkin|auto_checkin)$',
         description="Check-in mode"
     )
     refund_policy: Optional[dict] = Field(
@@ -1106,16 +1086,15 @@ class TicketingConfigRequest(BaseModel):
         description="Event-level refund policy override"
     )
 
-    @validator('ticket_sales_end')
-    def validate_sales_dates(cls, v, values):
+    @model_validator(mode='after')
+    def validate_sales_dates(self):
         """Ensure sales_end is after sales_start."""
-        if v and 'ticket_sales_start' in values and values['ticket_sales_start']:
-            if v <= values['ticket_sales_start']:
+        if self.ticket_sales_end and self.ticket_sales_start:
+            if self.ticket_sales_end <= self.ticket_sales_start:
                 raise ValueError('ticket_sales_end must be after ticket_sales_start')
-        return v
+        return self
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -1128,7 +1107,7 @@ class EventAdminAssignRequest(BaseModel):
     """
     platform: str = Field(
         ...,
-        regex=r'^(twitch|discord|slack|hub)$',
+        pattern=r'^(twitch|discord|slack|hub)$',
         description="Platform"
     )
     platform_user_id: str = Field(
@@ -1187,8 +1166,7 @@ class EventAdminAssignRequest(BaseModel):
         description="Notes about this assignment"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class EventAdminUpdateRequest(BaseModel):
@@ -1205,8 +1183,7 @@ class EventAdminUpdateRequest(BaseModel):
     can_assign_event_admins: Optional[bool] = Field(None, description="Can assign event admins")
     assignment_notes: Optional[str] = Field(None, max_length=500, description="Notes")
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class EventAdminRevokeRequest(BaseModel):
@@ -1219,8 +1196,7 @@ class EventAdminRevokeRequest(BaseModel):
         description="Reason for revoking access"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 __all__ = [

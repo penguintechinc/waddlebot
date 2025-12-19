@@ -4,7 +4,7 @@ Validation Models for Memories Interaction Module
 Pydantic models for validating requests to quotes, bookmarks, and reminders endpoints.
 """
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 import re
@@ -52,14 +52,16 @@ class QuoteCreateRequest(BaseModel):
         description="Quote category"
     )
 
-    @validator('quote_text')
+    @field_validator('quote_text')
+    @classmethod
     def validate_quote_text(cls, v):
         """Validate quote text is not empty or whitespace."""
         if not v or not v.strip():
             raise ValueError('quote_text cannot be empty or whitespace only')
         return v.strip()
 
-    @validator('created_by_username', 'author_username')
+    @field_validator('created_by_username', 'author_username')
+    @classmethod
     def validate_username(cls, v):
         """Validate username format."""
         if v is not None:
@@ -68,7 +70,8 @@ class QuoteCreateRequest(BaseModel):
             return v.strip()
         return v
 
-    @validator('category')
+    @field_validator('category')
+    @classmethod
     def validate_category(cls, v):
         """Validate category format."""
         if v is not None:
@@ -77,8 +80,7 @@ class QuoteCreateRequest(BaseModel):
             return v.strip()
         return v
 
-    class Config:
-        extra = 'allow'  # Allow extra fields like created_by_user_id
+    model_config = ConfigDict(extra='allow')
 
 
 class QuoteSearchParams(BaseModel):
@@ -110,15 +112,15 @@ class QuoteSearchParams(BaseModel):
         description="Pagination offset"
     )
 
-    @validator('search_query', 'category', 'author')
+    @field_validator('search_query', 'category', 'author')
+    @classmethod
     def strip_whitespace(cls, v):
         """Strip whitespace from string fields."""
         if v is not None:
             return v.strip() if v.strip() else None
         return v
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class QuoteVoteRequest(BaseModel):
@@ -136,14 +138,16 @@ class QuoteVoteRequest(BaseModel):
         description="Vote type: 'up', 'down', 'upvote', or 'downvote'"
     )
 
-    @validator('username')
+    @field_validator('username')
+    @classmethod
     def validate_username(cls, v):
         """Validate username format."""
         if not v or not v.strip():
             raise ValueError('username cannot be empty or whitespace only')
         return v.strip()
 
-    @validator('vote_type')
+    @field_validator('vote_type')
+    @classmethod
     def normalize_vote_type(cls, v):
         """Normalize vote type to 'up' or 'down'."""
         v = v.lower()
@@ -153,16 +157,14 @@ class QuoteVoteRequest(BaseModel):
             return 'down'
         return v
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class QuoteDeleteRequest(BaseModel):
     """Validation model for deleting quotes."""
     user_id: int = Field(..., gt=0, description="User ID requesting deletion")
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -208,26 +210,30 @@ class BookmarkCreateRequest(BaseModel):
         description="Automatically fetch page metadata"
     )
 
-    @validator('url')
+    @field_validator('url')
+    @classmethod
     def validate_url(cls, v):
         """Validate and sanitize URL."""
         return sanitized_url_validator(v)
 
-    @validator('created_by_username')
+    @field_validator('created_by_username')
+    @classmethod
     def validate_username(cls, v):
         """Validate username format."""
         if not v or not v.strip():
             raise ValueError('username cannot be empty or whitespace only')
         return v.strip()
 
-    @validator('title', 'description')
+    @field_validator('title', 'description')
+    @classmethod
     def strip_whitespace(cls, v):
         """Strip whitespace from string fields."""
         if v is not None:
             return v.strip() if v.strip() else None
         return v
 
-    @validator('tags')
+    @field_validator('tags')
+    @classmethod
     def validate_tags(cls, v):
         """Validate tags list."""
         if v is not None:
@@ -246,8 +252,7 @@ class BookmarkCreateRequest(BaseModel):
             return validated_tags if validated_tags else None
         return v
 
-    class Config:
-        extra = 'allow'  # Allow extra fields
+    model_config = ConfigDict(extra='allow')
 
 
 class BookmarkSearchParams(BaseModel):
@@ -278,14 +283,16 @@ class BookmarkSearchParams(BaseModel):
         description="Pagination offset"
     )
 
-    @validator('search_query', 'created_by')
+    @field_validator('search_query', 'created_by')
+    @classmethod
     def strip_whitespace(cls, v):
         """Strip whitespace from string fields."""
         if v is not None:
             return v.strip() if v.strip() else None
         return v
 
-    @validator('tags')
+    @field_validator('tags')
+    @classmethod
     def validate_tags(cls, v):
         """Validate tags list."""
         if v is not None:
@@ -298,16 +305,14 @@ class BookmarkSearchParams(BaseModel):
             return v if v else None
         return v
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class BookmarkDeleteRequest(BaseModel):
     """Validation model for deleting bookmarks."""
     user_id: int = Field(..., gt=0, description="User ID requesting deletion")
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class PopularBookmarksParams(BaseModel):
@@ -319,8 +324,7 @@ class PopularBookmarksParams(BaseModel):
         description="Results limit (1-100)"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -365,21 +369,24 @@ class ReminderCreateRequest(BaseModel):
         description="Recurring rule in RRULE format"
     )
 
-    @validator('reminder_text')
+    @field_validator('reminder_text')
+    @classmethod
     def validate_reminder_text(cls, v):
         """Validate reminder text is not empty or whitespace."""
         if not v or not v.strip():
             raise ValueError('reminder_text cannot be empty or whitespace only')
         return v.strip()
 
-    @validator('username')
+    @field_validator('username')
+    @classmethod
     def validate_username(cls, v):
         """Validate username format."""
         if not v or not v.strip():
             raise ValueError('username cannot be empty or whitespace only')
         return v.strip()
 
-    @validator('remind_in')
+    @field_validator('remind_in')
+    @classmethod
     def validate_remind_in(cls, v):
         """Validate remind_in format."""
         if not v or not v.strip():
@@ -401,7 +408,8 @@ class ReminderCreateRequest(BaseModel):
                 'or an ISO 8601 timestamp'
             )
 
-    @validator('recurring_rule')
+    @field_validator('recurring_rule')
+    @classmethod
     def validate_recurring_rule(cls, v):
         """Validate RRULE format."""
         if v is not None:
@@ -411,8 +419,7 @@ class ReminderCreateRequest(BaseModel):
             return v if v else None
         return v
 
-    class Config:
-        extra = 'allow'  # Allow extra fields
+    model_config = ConfigDict(extra='allow')
 
 
 class ReminderSearchParams(BaseModel):
@@ -443,8 +450,7 @@ class ReminderSearchParams(BaseModel):
         description="Pagination offset"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class ReminderMarkSentRequest(BaseModel):
@@ -454,16 +460,14 @@ class ReminderMarkSentRequest(BaseModel):
         description="Schedule next reminder for recurring reminders"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class ReminderDeleteRequest(BaseModel):
     """Validation model for deleting/canceling reminders."""
     user_id: int = Field(..., gt=0, description="User ID requesting deletion")
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class UserRemindersParams(BaseModel):
@@ -473,8 +477,7 @@ class UserRemindersParams(BaseModel):
         description="Include sent reminders"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 __all__ = [

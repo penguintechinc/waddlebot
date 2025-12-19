@@ -6,12 +6,14 @@ and other loyalty system operations with real economic impact requiring strict
 validation.
 """
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from typing import Optional
 from flask_core.validation import (
     BaseModel,
     Field,
-    validator,
+    field_validator,
+    model_validator,
+    ConfigDict,
 )
 
 
@@ -37,31 +39,32 @@ class CurrencyTransactionRequest(BaseModel):
     reason: str = Field(..., min_length=1, max_length=500, description="Transaction reason")
     transaction_type: str = Field(
         ...,
-        regex=r'^(earn|spend|admin_adjust)$',
+        pattern=r'^(earn|spend|admin_adjust)$',
         description="Transaction type: earn, spend, or admin_adjust"
     )
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    @validator('amount')
+    @field_validator('amount')
+    @classmethod
     def validate_amount_not_zero(cls, v):
         """Ensure amount is never zero (would be no-op transaction)."""
         if v == 0:
             raise ValueError('amount cannot be zero')
         return v
 
-    @validator('user_id', 'username')
+    @field_validator('user_id', 'username')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'  # Reject unknown fields
+    model_config = ConfigDict(extra='forbid')  # Reject unknown fields
 
 
 class CurrencyTransferRequest(BaseModel):
@@ -76,26 +79,27 @@ class CurrencyTransferRequest(BaseModel):
     amount: int = Field(..., gt=0, le=1000000, description="Transfer amount (1 to 1M)")
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    @validator('to_user_id')
+    @field_validator('to_user_id')
+    @classmethod
     def validate_different_users(cls, v, values):
         """Ensure users aren't transferring to themselves."""
         if 'from_user_id' in values and v == values['from_user_id']:
             raise ValueError('cannot transfer currency to yourself')
         return v
 
-    @validator('from_user_id', 'to_user_id')
+    @field_validator('from_user_id', 'to_user_id')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class SetBalanceRequest(BaseModel):
@@ -109,19 +113,19 @@ class SetBalanceRequest(BaseModel):
     balance: int = Field(..., ge=0, le=10000000, description="New balance (0 to 10M)")
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    @validator('user_id')
+    @field_validator('user_id')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -141,19 +145,19 @@ class GearPurchaseRequest(BaseModel):
     quantity: int = Field(default=1, ge=1, le=100, description="Purchase quantity (1-100)")
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    @validator('user_id', 'username')
+    @field_validator('user_id', 'username')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class GearCreateRequest(BaseModel):
@@ -170,13 +174,14 @@ class GearCreateRequest(BaseModel):
     category: Optional[str] = Field(None, max_length=50, description="Item category")
     rarity: str = Field(
         default='common',
-        regex=r'^(common|uncommon|rare|epic|legendary)$',
+        pattern=r'^(common|uncommon|rare|epic|legendary)$',
         description="Item rarity tier"
     )
     is_tradeable: bool = Field(default=True, description="Can item be traded between users")
     max_quantity: Optional[int] = Field(None, ge=1, le=10000, description="Max purchasable quantity")
 
-    @validator('icon_url')
+    @field_validator('icon_url')
+    @classmethod
     def validate_icon_url(cls, v):
         """Validate icon URL is safe and properly formatted."""
         if v is not None and v.strip():
@@ -184,15 +189,15 @@ class GearCreateRequest(BaseModel):
             return sanitized_url_validator(v.strip(), allowed_schemes=['http', 'https'])
         return v
 
-    @validator('name', 'category')
+    @field_validator('name', 'category')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if v and not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip() if v else v
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class GearActionRequest(BaseModel):
@@ -206,19 +211,19 @@ class GearActionRequest(BaseModel):
     item_id: int = Field(..., gt=0, description="Gear item ID")
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    @validator('user_id')
+    @field_validator('user_id')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -236,26 +241,26 @@ class MinigameWagerRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=255, description="Username")
     game_type: str = Field(
         ...,
-        regex=r'^(coinflip|dice|slots|rps|roulette)$',
+        pattern=r'^(coinflip|dice|slots|rps|roulette)$',
         description="Game type: coinflip, dice, slots, rps, or roulette"
     )
     wager_amount: int = Field(..., ge=1, le=10000, description="Wager amount (1-10000)")
     choice: Optional[str] = Field(None, max_length=50, description="Player choice for certain games")
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    @validator('user_id', 'username')
+    @field_validator('user_id', 'username')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class CoinflipRequest(BaseModel):
@@ -269,24 +274,24 @@ class CoinflipRequest(BaseModel):
     bet: int = Field(..., ge=1, le=10000, description="Bet amount")
     choice: str = Field(
         ...,
-        regex=r'^(heads|tails)$',
+        pattern=r'^(heads|tails)$',
         description="Coin side choice: heads or tails"
     )
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    @validator('user_id')
+    @field_validator('user_id')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class SlotsRequest(BaseModel):
@@ -300,19 +305,19 @@ class SlotsRequest(BaseModel):
     bet: int = Field(..., ge=1, le=10000, description="Bet amount")
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    @validator('user_id')
+    @field_validator('user_id')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class RouletteRequest(BaseModel):
@@ -326,7 +331,7 @@ class RouletteRequest(BaseModel):
     bet: int = Field(..., ge=1, le=10000, description="Bet amount")
     bet_type: str = Field(
         ...,
-        regex=r'^(number|red|black|odd|even|high|low)$',
+        pattern=r'^(number|red|black|odd|even|high|low)$',
         description="Bet type: number, red, black, odd, even, high, or low"
     )
     bet_value: Optional[int] = Field(
@@ -337,11 +342,12 @@ class RouletteRequest(BaseModel):
     )
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    @validator('bet_value')
+    @field_validator('bet_value')
+    @classmethod
     def validate_bet_value_required_for_number(cls, v, values):
         """Ensure bet_value is provided when bet_type is 'number'."""
         if 'bet_type' in values and values['bet_type'] == 'number':
@@ -349,15 +355,15 @@ class RouletteRequest(BaseModel):
                 raise ValueError('bet_value is required when bet_type is "number"')
         return v
 
-    @validator('user_id')
+    @field_validator('user_id')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -376,26 +382,27 @@ class DuelChallengeRequest(BaseModel):
     wager: int = Field(..., ge=1, le=10000, description="Wager amount (1-10000)")
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    @validator('opponent_id')
+    @field_validator('opponent_id')
+    @classmethod
     def validate_different_users(cls, v, values):
         """Ensure users aren't dueling themselves."""
         if 'challenger_id' in values and v == values['challenger_id']:
             raise ValueError('cannot duel yourself')
         return v
 
-    @validator('challenger_id', 'opponent_id')
+    @field_validator('challenger_id', 'opponent_id')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class DuelActionRequest(BaseModel):
@@ -408,12 +415,11 @@ class DuelActionRequest(BaseModel):
     duel_id: int = Field(..., gt=0, description="Duel ID")
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -442,15 +448,15 @@ class GiveawayCreateRequest(BaseModel):
         description="Use reputation-based weighting for winner selection"
     )
 
-    @validator('title', 'prize')
+    @field_validator('title', 'prize')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class GiveawayEntryRequest(BaseModel):
@@ -464,19 +470,19 @@ class GiveawayEntryRequest(BaseModel):
     user_id: str = Field(..., min_length=1, max_length=255, description="User ID")
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    @validator('user_id')
+    @field_validator('user_id')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 # ============================================================================
@@ -492,19 +498,18 @@ class LeaderboardParams(BaseModel):
     community_id: Optional[int] = Field(None, gt=0, description="Community ID filter")
     metric: str = Field(
         default='balance',
-        regex=r'^(balance|total_earned|total_spent|gear_count|duel_wins|game_wins)$',
+        pattern=r'^(balance|total_earned|total_spent|gear_count|duel_wins|game_wins)$',
         description="Metric to rank by"
     )
     limit: int = Field(default=10, ge=1, le=100, description="Number of results (1-100)")
     offset: int = Field(default=0, ge=0, description="Result offset for pagination")
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class EarningConfigUpdate(BaseModel):
@@ -551,8 +556,7 @@ class EarningConfigUpdate(BaseModel):
         description="Currency per bit cheered"
     )
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 class EventEarningRequest(BaseModel):
@@ -565,25 +569,25 @@ class EventEarningRequest(BaseModel):
     user_id: str = Field(..., min_length=1, max_length=255, description="User ID")
     event_type: str = Field(
         ...,
-        regex=r'^(follow|sub_t1|sub_t2|sub_t3|sub_gift|raid|cheer|host)$',
+        pattern=r'^(follow|sub_t1|sub_t2|sub_t3|sub_gift|raid|cheer|host)$',
         description="Event type"
     )
     event_data: dict = Field(default_factory=dict, description="Additional event data")
     platform: str = Field(
         default='twitch',
-        regex=r'^(twitch|discord|slack|kick)$',
+        pattern=r'^(twitch|discord|slack|kick)$',
         description="Platform name"
     )
 
-    @validator('user_id')
+    @field_validator('user_id')
+    @classmethod
     def validate_no_whitespace_only(cls, v):
         """Ensure strings are not just whitespace."""
         if not v.strip():
             raise ValueError('field cannot be empty or whitespace only')
         return v.strip()
 
-    class Config:
-        extra = 'forbid'
+    model_config = ConfigDict(extra='forbid')
 
 
 __all__ = [
