@@ -8,13 +8,6 @@ validation.
 
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from typing import Optional
-from flask_core.validation import (
-    BaseModel,
-    Field,
-    field_validator,
-    model_validator,
-    ConfigDict,
-)
 
 
 # ============================================================================
