@@ -57,7 +57,7 @@ export async function getCommunityDashboard(req, res, next) {
     // Get community details
     const communityResult = await query(
       `SELECT id, name, display_name, description, config,
-              platform, community_type, member_count, created_at
+              platform, member_count, created_at
        FROM communities
        WHERE id = $1 AND is_active = true`,
       [communityId]
@@ -137,7 +137,6 @@ export async function getCommunityDashboard(req, res, next) {
         logoUrl: community.config?.logo_url || null,
         bannerUrl: community.config?.banner_url || null,
         platform: community.platform,
-        communityType: community.community_type || 'creator',
         memberCount: community.member_count || 0,
         createdAt: community.created_at?.toISOString(),
       },
@@ -707,15 +706,6 @@ export async function leaveCommunity(req, res, next) {
       return next(errors.badRequest('Invalid community ID'));
     }
 
-    // Check if this is global community - cannot leave
-    const communityCheck = await query(
-      'SELECT is_global FROM communities WHERE id = $1',
-      [communityId]
-    );
-    if (communityCheck.rows[0]?.is_global) {
-      return next(errors.forbidden('You cannot leave the Global community'));
-    }
-
     // Check if user is owner
     const memberResult = await query(
       `SELECT role FROM community_members
@@ -984,6 +974,7 @@ export async function cancelServerLinkRequest(req, res, next) {
     next(err);
   }
 }
+<<<<<<< HEAD
 
 /**
  * Get connected platforms for a community
@@ -1016,3 +1007,5 @@ export async function getConnectedPlatforms(req, res, next) {
     next(err);
   }
 }
+=======
+>>>>>>> origin/main

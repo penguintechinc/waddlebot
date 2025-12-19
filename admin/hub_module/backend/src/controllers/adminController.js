@@ -265,15 +265,6 @@ export async function removeMember(req, res, next) {
     const userId = parseInt(req.params.userId, 10);
     const { reason } = req.body;
 
-    // Check if this is global community - cannot remove members
-    const communityCheck = await query(
-      'SELECT is_global FROM communities WHERE id = $1',
-      [communityId]
-    );
-    if (communityCheck.rows[0]?.is_global) {
-      return next(errors.forbidden('Cannot remove members from the Global community'));
-    }
-
     // Check target isn't owner
     const targetResult = await query(
       `SELECT role FROM community_members
@@ -1967,7 +1958,11 @@ export async function getReputationLeaderboard(req, res, next) {
       [communityId, limit, offset]
     );
 
+<<<<<<< HEAD
     const users = result.rows.map(row => ({
+=======
+    const leaderboard = result.rows.map(row => ({
+>>>>>>> origin/main
       userId: row.user_id,
       username: row.username,
       avatarUrl: row.avatar_url,
@@ -1977,10 +1972,16 @@ export async function getReputationLeaderboard(req, res, next) {
 
     res.json({
       success: true,
+<<<<<<< HEAD
       users,
       limit,
       offset,
       count: users.length,
+=======
+      leaderboard,
+      limit,
+      offset,
+>>>>>>> origin/main
     });
   } catch (err) {
     next(err);
@@ -2773,111 +2774,5 @@ export async function reviewSuspectedBot(req, res, next) {
     });
   } catch (err) {
     next(err);
-  }
-}
-
-/**
- * Get translation configuration for a community
- */
-export async function getTranslationConfig(req, res, next) {
-  try {
-    const communityId = parseInt(req.params.communityId, 10);
-
-    const result = await query(
-      `SELECT config->'translation' as translation_config,
-              overlay_key
-       FROM communities c
-       LEFT JOIN community_overlay_tokens cot ON cot.community_id = c.id
-       WHERE c.id = $1`,
-      [communityId]
-    );
-
-    if (!result.rows.length) {
-      return res.status(404).json({
-        success: false,
-        error: { message: 'Community not found' }
-      });
-    }
-
-    const config = result.rows[0].translation_config || {
-      enabled: false,
-      default_language: 'en',
-      confidence_threshold: 0.7,
-      min_words: 5,
-      skip_bot_messages: true,
-      closed_captions: {
-        enabled: false,
-        display_duration_ms: 5000,
-        max_captions_displayed: 3,
-        show_original: false
-      }
-    };
-
-    // Decrypt API key if present
-    if (config.google_api_key_encrypted) {
-      try {
-        config.google_api_key = decryptData(config.google_api_key_encrypted);
-      } catch (err) {
-        logger.error('Failed to decrypt API key', { error: err.message });
-        config.google_api_key = '';
-      }
-      delete config.google_api_key_encrypted;
-    }
-
-    // Generate overlay URL
-    const overlayKey = result.rows[0].overlay_key;
-    const overlayUrl = overlayKey
-      ? `${process.env.BROWSER_SOURCE_URL || 'http://localhost:8050'}/overlay/captions/${overlayKey}?community_id=${communityId}`
-      : null;
-
-    res.json({
-      success: true,
-      config,
-      overlay_url: overlayUrl
-    });
-  } catch (error) {
-    next(error);
-  }
-}
-
-/**
- * Update translation configuration for a community
- */
-export async function updateTranslationConfig(req, res, next) {
-  try {
-    const communityId = parseInt(req.params.communityId, 10);
-    const config = req.body;
-
-    // Encrypt API key if provided
-    if (config.google_api_key && config.google_api_key.trim()) {
-      config.google_api_key_encrypted = encryptData(config.google_api_key);
-      delete config.google_api_key;
-    }
-
-    // Update config JSONB
-    await query(
-      `UPDATE communities
-       SET config = jsonb_set(
-         COALESCE(config, '{}'::jsonb),
-         '{translation}',
-         $1::jsonb
-       ),
-       updated_at = NOW()
-       WHERE id = $2`,
-      [JSON.stringify(config), communityId]
-    );
-
-    logger.audit('Translation config updated', {
-      community_id: communityId,
-      enabled: config.enabled,
-      admin_id: req.user?.id
-    });
-
-    res.json({
-      success: true,
-      message: 'Translation configuration updated'
-    });
-  } catch (error) {
-    next(error);
   }
 }

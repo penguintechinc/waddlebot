@@ -69,7 +69,10 @@ helm install waddlebot ./helm/waddlebot -n waddlebot --create-namespace
 | **Inventory** | Item management system |
 | **Memories** | Community quotes and reminders |
 | **Announcements** | Broadcast to hub and all platforms |
+<<<<<<< HEAD
 | **Workflows** | Visual workflow builder with event triggers and actions (1 per community free, unlimited premium) |
+=======
+>>>>>>> origin/main
 
 ### 🚀 Platform Support
 
@@ -97,6 +100,7 @@ Infrastructure (PostgreSQL, Redis, MinIO, Qdrant)
 
 ## Screenshots
 
+<<<<<<< HEAD
 ### Login
 ![Login Page](docs/screenshots/login.png)
 
@@ -106,10 +110,18 @@ Infrastructure (PostgreSQL, Redis, MinIO, Qdrant)
 ### Community Portal
 ![Communities List](docs/screenshots/communities.png)
 
+=======
+### User Dashboard
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Community Portal
+![Communities](docs/screenshots/communities.png)
+>>>>>>> origin/main
 ![Community Dashboard](docs/screenshots/community-dashboard.png)
 
 ### Admin Panel
 ![Admin Overview](docs/screenshots/admin-overview.png)
+<<<<<<< HEAD
 
 ![Admin Members](docs/screenshots/admin-members.png)
 
@@ -120,11 +132,20 @@ Infrastructure (PostgreSQL, Redis, MinIO, Qdrant)
 ![Admin Announcements](docs/screenshots/admin-announcements.png)
 
 ### OBS Browser Source Integration
+=======
+![Admin Members](docs/screenshots/admin-members.png)
+![Admin Announcements](docs/screenshots/admin-announcements.png)
+
+### OBS Integration
+>>>>>>> origin/main
 ![OBS Overlays](docs/screenshots/admin-overlays.png)
 
 ### Super Admin
 ![Super Admin Dashboard](docs/screenshots/superadmin-dashboard.png)
+<<<<<<< HEAD
 
+=======
+>>>>>>> origin/main
 ![Community Management](docs/screenshots/superadmin-communities.png)
 
 ## What's New in v0.2.0
@@ -133,11 +154,15 @@ Infrastructure (PostgreSQL, Redis, MinIO, Qdrant)
 - ✅ **GitHub Actions CI/CD** - Automated builds and deployments
 - ✅ **Health Check Standardization** - `/health`, `/healthz`, `/metrics` on all containers
 - ✅ **Loyalty System** - Complete virtual economy with minigames and duels
+<<<<<<< HEAD
 - ✅ **Workflow Builder** - Visual workflow editor with conditional logic, limited to 1 per community on free tier
+=======
+>>>>>>> origin/main
 - ✅ **Comprehensive Docs** - Architecture, API reference, deployment guides
 
 **Full changelog:** [CHANGELOG.md](CHANGELOG.md)
 
+<<<<<<< HEAD
 ## Licensing & Tiers
 
 WaddleBot is open source (GPL-3.0) and free to use with basic features:
@@ -156,6 +181,8 @@ WaddleBot is open source (GPL-3.0) and free to use with basic features:
 
 [Learn more about Premium →](https://waddlebot.io/pricing)
 
+=======
+>>>>>>> origin/main
 ## Documentation
 
 | Guide | Description |
@@ -206,29 +233,3 @@ We welcome contributions! See [docs/development-rules.md](docs/development-rules
 **Made with ❤️ by the WaddleBot team**
 
 *Want to see WaddleBot in action? [Schedule a demo](mailto:demo@waddlebot.com)*
-
-## Testing
-
-### Comprehensive Test Suite
-
-WaddleBot includes a comprehensive test suite that runs build tests, API tests, and WebUI load tests in parallel:
-
-```bash
-# Run all tests
-./test-all.sh
-
-# Run with custom timeout (default: 300s)
-TIMEOUT=120 ./test-all.sh
-
-# Run with more parallel jobs (default: 8)
-PARALLEL_JOBS=16 ./test-all.sh
-```
-
-**Test Results:** All logs are saved to `/tmp/waddlebot-tests-<timestamp>/` with:
-- Build test logs (Python syntax validation)
-- API test logs (REST & gRPC endpoint tests)
-- WebUI test logs (Page load and accessibility tests)
-- Summary report with pass/fail statistics
-
-For detailed testing documentation, see [Testing Guide](docs/testing/test-all-guide.md).
-

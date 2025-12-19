@@ -56,7 +56,7 @@ export function CookieConsentProvider({ children }) {
         const token = localStorage.getItem('token');
         if (token) {
           try {
-            const userConsentResponse = await api.get('/api/v1/cookie-consent');
+            const userConsentResponse = await api.get('/api/v1/cookie-consent/user');
             if (userConsentResponse.data?.consent) {
               setConsent(userConsentResponse.data.consent);
               setConsentId(userConsentResponse.data.id);

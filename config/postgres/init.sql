@@ -31,21 +31,6 @@ ALTER SCHEMA public OWNER TO kong;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
--- Create community type enum
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'community_type') THEN
-        CREATE TYPE community_type AS ENUM (
-            'shared_interest_group',
-            'gaming',
-            'creator',
-            'corporate',
-            'other'
-        );
-    END IF;
-END
-$$;
-
 -- Create schemas for different modules
 CREATE SCHEMA IF NOT EXISTS public;
 CREATE SCHEMA IF NOT EXISTS portal;
@@ -107,12 +92,9 @@ CREATE TABLE IF NOT EXISTS hub_users (
     avatar_url TEXT,
     is_active BOOLEAN DEFAULT TRUE,
     is_super_admin BOOLEAN DEFAULT FALSE,
-    is_vendor BOOLEAN DEFAULT FALSE,
     email_verified BOOLEAN DEFAULT FALSE,
     email_verification_token VARCHAR(100),
     email_verification_expires TIMESTAMP,
-    password_reset_token VARCHAR(255),
-    password_reset_expires TIMESTAMP,
     last_login TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -129,8 +111,8 @@ CREATE TABLE IF NOT EXISTS hub_settings (
 
 CREATE INDEX IF NOT EXISTS idx_hub_users_email ON hub_users(email);
 CREATE INDEX IF NOT EXISTS idx_hub_users_username ON hub_users(username);
-CREATE INDEX IF NOT EXISTS idx_hub_users_is_vendor ON hub_users(is_vendor);
 
+<<<<<<< HEAD
 -- Initialize default hub settings for signup configuration
 INSERT INTO hub_settings (setting_key, setting_value, updated_at) VALUES
     ('signup_enabled', 'true', NOW()),
@@ -138,6 +120,8 @@ INSERT INTO hub_settings (setting_key, setting_value, updated_at) VALUES
     ('signup_allowed_domains', '', NOW())
 ON CONFLICT (setting_key) DO NOTHING;
 
+=======
+>>>>>>> origin/main
 -- Platform identities linked to users
 CREATE TABLE IF NOT EXISTS hub_user_identities (
     id SERIAL PRIMARY KEY,
@@ -257,7 +241,6 @@ CREATE TABLE IF NOT EXISTS communities (
     is_global BOOLEAN DEFAULT FALSE,
     join_mode VARCHAR(20) DEFAULT 'open',
     visibility VARCHAR(20) DEFAULT 'public',
-    community_type community_type NOT NULL DEFAULT 'creator',
     config JSONB DEFAULT '{}',
     created_by VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -270,13 +253,11 @@ COMMENT ON COLUMN communities.is_global IS 'Global community that all users are 
 COMMENT ON COLUMN communities.visibility IS 'Profile visibility: public, registered, members_only';
 COMMENT ON COLUMN communities.about_extended IS 'Extended about section for community profile page';
 COMMENT ON COLUMN communities.social_links IS 'JSON object: {twitter, youtube, tiktok, instagram, etc}';
-COMMENT ON COLUMN communities.community_type IS 'Community type for feature gating: shared_interest_group, gaming, creator, corporate, other. Shoutouts only for creator/gaming.';
 
 CREATE INDEX IF NOT EXISTS idx_communities_name ON communities(name);
 CREATE INDEX IF NOT EXISTS idx_communities_platform ON communities(platform, platform_server_id);
 CREATE INDEX IF NOT EXISTS idx_communities_active ON communities(is_active, is_public);
 CREATE INDEX IF NOT EXISTS idx_communities_visibility ON communities(visibility);
-CREATE INDEX IF NOT EXISTS idx_communities_type ON communities(community_type);
 
 -- Community members
 CREATE TABLE IF NOT EXISTS community_members (
@@ -2190,8 +2171,27 @@ CREATE TABLE IF NOT EXISTS community_domains (
 CREATE INDEX IF NOT EXISTS idx_community_domains_community ON community_domains(community_id);
 CREATE INDEX IF NOT EXISTS idx_community_domains_domain ON community_domains(domain);
 
+<<<<<<< HEAD
 -- NOTE: Coordination table is defined earlier in this file (line 545)
 -- This duplicate definition has been removed to prevent confusion
+=======
+-- Coordination table for stream status
+CREATE TABLE IF NOT EXISTS coordination (
+    id SERIAL PRIMARY KEY,
+    entity_id INTEGER NOT NULL,
+    channel_id VARCHAR(255),
+    viewer_count INTEGER DEFAULT 0,
+    stream_title TEXT,
+    game_name VARCHAR(255),
+    is_live BOOLEAN DEFAULT FALSE,
+    started_at TIMESTAMPTZ,
+    last_updated TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(entity_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_coordination_entity ON coordination(entity_id);
+CREATE INDEX IF NOT EXISTS idx_coordination_live ON coordination(is_live);
+>>>>>>> origin/main
 
 -- AI insights table
 CREATE TABLE IF NOT EXISTS ai_insights (
@@ -2214,108 +2214,3 @@ CREATE INDEX IF NOT EXISTS idx_ai_insights_type ON ai_insights(insight_type);
 CREATE INDEX IF NOT EXISTS idx_ai_insights_status ON ai_insights(status);
 CREATE INDEX IF NOT EXISTS idx_ai_insights_created ON ai_insights(created_at DESC);
 
--- ============================================================================
--- SHOUTOUT MODULE TABLES
--- ============================================================================
--- Supports both !so (text) and !vso (video) shoutout commands with permissions
--- NOTE: Shoutouts only available for 'creator' and 'gaming' community types
-
--- Shoutout permissions and configuration (per community)
-CREATE TABLE IF NOT EXISTS shoutout_config (
-    id SERIAL PRIMARY KEY,
-    community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
-    -- Text shoutout (!so / /so) permissions
-    so_enabled BOOLEAN DEFAULT true,
-    so_permission VARCHAR(20) DEFAULT 'mod',
-    -- Video shoutout (!vso / /vso) permissions
-    vso_enabled BOOLEAN DEFAULT true,
-    vso_permission VARCHAR(20) DEFAULT 'mod',
-    -- Auto-shoutout settings
-    auto_shoutout_mode VARCHAR(20) DEFAULT 'disabled',
-    trigger_first_message BOOLEAN DEFAULT false,
-    trigger_raid_host BOOLEAN DEFAULT true,
-    -- Video widget settings
-    widget_position VARCHAR(20) DEFAULT 'bottom-right',
-    widget_duration_seconds INTEGER DEFAULT 30,
-    cooldown_minutes INTEGER DEFAULT 60,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(community_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_shoutout_config_community ON shoutout_config(community_id);
-
-COMMENT ON TABLE shoutout_config IS 'Per-community configuration for !so and !vso shoutout commands';
-COMMENT ON COLUMN shoutout_config.so_permission IS 'Who can use !so: admin_only, mod, vip, subscriber, everyone';
-COMMENT ON COLUMN shoutout_config.vso_permission IS 'Who can use !vso: admin_only, mod, vip, subscriber, everyone';
-COMMENT ON COLUMN shoutout_config.auto_shoutout_mode IS 'Auto-shoutout mode: disabled, all_creators, list_only, role_based';
-
--- Custom role permissions for shoutout commands
-CREATE TABLE IF NOT EXISTS shoutout_command_permissions (
-    id SERIAL PRIMARY KEY,
-    community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
-    role_name VARCHAR(50) NOT NULL,
-    can_use_so BOOLEAN DEFAULT true,
-    can_use_vso BOOLEAN DEFAULT true,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(community_id, role_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_shoutout_permissions_community ON shoutout_command_permissions(community_id);
-
--- Manual creator list for auto-shoutouts
-CREATE TABLE IF NOT EXISTS auto_shoutout_creators (
-    id SERIAL PRIMARY KEY,
-    community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
-    platform VARCHAR(20) NOT NULL,
-    platform_user_id VARCHAR(100) NOT NULL,
-    platform_username VARCHAR(100) NOT NULL,
-    custom_trigger VARCHAR(20) DEFAULT 'default',
-    added_by INTEGER REFERENCES hub_users(id),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(community_id, platform, platform_user_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_auto_shoutout_creators_community ON auto_shoutout_creators(community_id);
-CREATE INDEX IF NOT EXISTS idx_auto_shoutout_creators_platform ON auto_shoutout_creators(platform, platform_user_id);
-
--- Role-based auto-shoutout configuration
-CREATE TABLE IF NOT EXISTS auto_shoutout_roles (
-    id SERIAL PRIMARY KEY,
-    community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
-    role_name VARCHAR(50) NOT NULL,
-    trigger_type VARCHAR(20) DEFAULT 'first_message',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(community_id, role_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_auto_shoutout_roles_community ON auto_shoutout_roles(community_id);
-
--- Video shoutout history
-CREATE TABLE IF NOT EXISTS video_shoutout_history (
-    id SERIAL PRIMARY KEY,
-    community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
-    target_platform VARCHAR(20) NOT NULL,
-    target_user_id VARCHAR(100) NOT NULL,
-    target_username VARCHAR(100) NOT NULL,
-    video_platform VARCHAR(20) NOT NULL,
-    video_id VARCHAR(100) NOT NULL,
-    video_title VARCHAR(500),
-    video_thumbnail_url TEXT,
-    video_url TEXT,
-    game_name VARCHAR(200),
-    trigger_type VARCHAR(20) NOT NULL,
-    triggered_by_user_id VARCHAR(100),
-    triggered_by_username VARCHAR(100),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_vso_history_community ON video_shoutout_history(community_id);
-CREATE INDEX IF NOT EXISTS idx_vso_history_target ON video_shoutout_history(target_platform, target_user_id);
-CREATE INDEX IF NOT EXISTS idx_vso_history_created ON video_shoutout_history(created_at);
-
--- Trigger to update updated_at on shoutout_config
-CREATE OR REPLACE TRIGGER update_shoutout_config_updated_at
-    BEFORE UPDATE ON shoutout_config
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();

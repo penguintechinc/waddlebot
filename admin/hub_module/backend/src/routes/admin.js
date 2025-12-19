@@ -5,13 +5,14 @@ import { Router } from 'express';
 import multer from 'multer';
 import * as adminController from '../controllers/adminController.js';
 import * as activityController from '../controllers/activityController.js';
+<<<<<<< HEAD
 import * as communityController from '../controllers/communityController.js';
+=======
+>>>>>>> origin/main
 import * as communityProfileController from '../controllers/communityProfileController.js';
 import * as overlayController from '../controllers/overlayController.js';
 import * as loyaltyController from '../controllers/loyaltyController.js';
 import * as announcementController from '../controllers/announcementController.js';
-import * as shoutoutController from '../controllers/shoutoutController.js';
-import * as ticketController from '../controllers/ticketController.js';
 import workflowRoutes from './workflow.js';
 import { requireAuth, requireCommunityAdmin } from '../middleware/auth.js';
 import { validators, validateRequest } from '../middleware/validation.js';
@@ -95,12 +96,15 @@ router.get('/:communityId/servers', requireCommunityAdmin, adminController.getLi
 router.put('/:communityId/servers/:serverId', requireCommunityAdmin, adminController.updateServer);
 router.delete('/:communityId/servers/:serverId', requireCommunityAdmin, adminController.removeServer);
 
+<<<<<<< HEAD
 // Connected platforms
 router.get('/:communityId/connected-platforms',
   requireCommunityAdmin,
   communityController.getConnectedPlatforms
 );
 
+=======
+>>>>>>> origin/main
 // Server link requests
 router.get('/:communityId/server-link-requests', requireCommunityAdmin, adminController.getServerLinkRequests);
 router.post('/:communityId/server-link-requests/:requestId/approve', requireCommunityAdmin, adminController.approveServerLinkRequest);
@@ -340,18 +344,6 @@ router.put('/:communityId/suspected-bots/:botId/review',
   adminController.reviewSuspectedBot
 );
 
-// Shoutout configuration (only for creator/gaming communities)
-router.get('/:communityId/shoutout/config', requireCommunityAdmin, shoutoutController.getShoutoutConfig);
-router.put('/:communityId/shoutout/config', requireCommunityAdmin, shoutoutController.updateShoutoutConfig);
-router.get('/:communityId/shoutout/creators', requireCommunityAdmin, shoutoutController.getShoutoutCreators);
-router.post('/:communityId/shoutout/creators', requireCommunityAdmin, shoutoutController.addShoutoutCreator);
-router.delete('/:communityId/shoutout/creators/:creatorId', requireCommunityAdmin, shoutoutController.removeShoutoutCreator);
-router.get('/:communityId/shoutout/history', requireCommunityAdmin, shoutoutController.getShoutoutHistory);
-
-// Translation configuration
-router.get('/:communityId/translation/config', requireCommunityAdmin, adminController.getTranslationConfig);
-router.put('/:communityId/translation/config', requireCommunityAdmin, adminController.updateTranslationConfig);
-
 // Analytics proxy routes
 router.get('/:communityId/analytics/*', requireCommunityAdmin, async (req, res) => {
   try {
@@ -470,44 +462,6 @@ router.delete('/:communityId/security/*', requireCommunityAdmin, async (req, res
     });
   }
 });
-
-// ===== Calendar Ticketing Routes =====
-
-// Ticket verification (public endpoint for QR scanning)
-router.post('/calendar/verify-ticket', ticketController.verifyTicket);
-
-// Ticket types management
-router.get('/:communityId/calendar/events/:eventId/ticket-types', requireCommunityAdmin, ticketController.listTicketTypes);
-router.post('/:communityId/calendar/events/:eventId/ticket-types', requireCommunityAdmin, ticketController.createTicketType);
-router.put('/:communityId/calendar/events/:eventId/ticket-types/:typeId', requireCommunityAdmin, ticketController.updateTicketType);
-router.delete('/:communityId/calendar/events/:eventId/ticket-types/:typeId', requireCommunityAdmin, ticketController.deleteTicketType);
-
-// Ticket management
-router.get('/:communityId/calendar/events/:eventId/tickets', requireCommunityAdmin, ticketController.listTickets);
-router.post('/:communityId/calendar/events/:eventId/tickets', requireCommunityAdmin, ticketController.createTicket);
-router.get('/:communityId/calendar/events/:eventId/tickets/:ticketId', requireCommunityAdmin, ticketController.getTicket);
-router.post('/:communityId/calendar/events/:eventId/tickets/:ticketId/cancel', requireCommunityAdmin, ticketController.cancelTicket);
-router.post('/:communityId/calendar/events/:eventId/tickets/:ticketId/transfer', requireCommunityAdmin, ticketController.transferTicket);
-
-// Check-in operations
-router.post('/:communityId/calendar/events/:eventId/check-in', requireCommunityAdmin, ticketController.checkIn);
-router.post('/:communityId/calendar/events/:eventId/tickets/:ticketId/undo-check-in', requireCommunityAdmin, ticketController.undoCheckIn);
-
-// Attendance & Reporting
-router.get('/:communityId/calendar/events/:eventId/attendance', requireCommunityAdmin, ticketController.getAttendanceStats);
-router.get('/:communityId/calendar/events/:eventId/check-in-log', requireCommunityAdmin, ticketController.getCheckInLog);
-router.get('/:communityId/calendar/events/:eventId/attendance/export', requireCommunityAdmin, ticketController.exportAttendance);
-
-// Event admin management
-router.get('/:communityId/calendar/events/:eventId/admins', requireCommunityAdmin, ticketController.listEventAdmins);
-router.post('/:communityId/calendar/events/:eventId/admins', requireCommunityAdmin, ticketController.assignEventAdmin);
-router.put('/:communityId/calendar/events/:eventId/admins/:adminId', requireCommunityAdmin, ticketController.updateEventAdmin);
-router.delete('/:communityId/calendar/events/:eventId/admins/:adminId', requireCommunityAdmin, ticketController.revokeEventAdmin);
-router.get('/:communityId/calendar/events/:eventId/my-permissions', requireCommunityAdmin, ticketController.getMyPermissions);
-
-// Ticketing configuration
-router.post('/:communityId/calendar/events/:eventId/ticketing/enable', requireCommunityAdmin, ticketController.enableTicketing);
-router.post('/:communityId/calendar/events/:eventId/ticketing/disable', requireCommunityAdmin, ticketController.disableTicketing);
 
 // Workflow routes
 router.use('/:communityId/workflows', workflowRoutes);
