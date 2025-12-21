@@ -51,20 +51,20 @@ services:
     entrypoint: ["/usr/local/bin/docker-entrypoint.sh"]
     environment:
       # Admin password for maintenance
-      REDIS_ADMIN_PASSWORD: ${REDIS_ADMIN_PASSWORD:-waddlebot_admin_dev}
+      REDIS_ADMIN_PASSWORD: ${REDIS_ADMIN_PASSWORD}
       # Per-module passwords (use secure passwords in production!)
-      REDIS_ROUTER_PASSWORD: ${REDIS_ROUTER_PASSWORD:-waddlebot_router_dev}
-      REDIS_HUB_PASSWORD: ${REDIS_HUB_PASSWORD:-waddlebot_hub_dev}
-      REDIS_WORKFLOW_PASSWORD: ${REDIS_WORKFLOW_PASSWORD:-waddlebot_workflow_dev}
-      REDIS_AI_PASSWORD: ${REDIS_AI_PASSWORD:-waddlebot_ai_dev}
-      REDIS_ANALYTICS_PASSWORD: ${REDIS_ANALYTICS_PASSWORD:-waddlebot_analytics_dev}
-      REDIS_SECURITY_PASSWORD: ${REDIS_SECURITY_PASSWORD:-waddlebot_security_dev}
-      REDIS_LOYALTY_PASSWORD: ${REDIS_LOYALTY_PASSWORD:-waddlebot_loyalty_dev}
-      REDIS_SPOTIFY_PASSWORD: ${REDIS_SPOTIFY_PASSWORD:-waddlebot_spotify_dev}
-      REDIS_YTMUSIC_PASSWORD: ${REDIS_YTMUSIC_PASSWORD:-waddlebot_ytmusic_dev}
-      REDIS_TWITCH_PASSWORD: ${REDIS_TWITCH_PASSWORD:-waddlebot_twitch_dev}
-      REDIS_DISCORD_PASSWORD: ${REDIS_DISCORD_PASSWORD:-waddlebot_discord_dev}
-      REDIS_SLACK_PASSWORD: ${REDIS_SLACK_PASSWORD:-waddlebot_slack_dev}
+      REDIS_ROUTER_PASSWORD: ${REDIS_ROUTER_PASSWORD}
+      REDIS_HUB_PASSWORD: ${REDIS_HUB_PASSWORD}
+      REDIS_WORKFLOW_PASSWORD: ${REDIS_WORKFLOW_PASSWORD}
+      REDIS_AI_PASSWORD: ${REDIS_AI_PASSWORD}
+      REDIS_ANALYTICS_PASSWORD: ${REDIS_ANALYTICS_PASSWORD}
+      REDIS_SECURITY_PASSWORD: ${REDIS_SECURITY_PASSWORD}
+      REDIS_LOYALTY_PASSWORD: ${REDIS_LOYALTY_PASSWORD}
+      REDIS_SPOTIFY_PASSWORD: ${REDIS_SPOTIFY_PASSWORD}
+      REDIS_YTMUSIC_PASSWORD: ${REDIS_YTMUSIC_PASSWORD}
+      REDIS_TWITCH_PASSWORD: ${REDIS_TWITCH_PASSWORD}
+      REDIS_DISCORD_PASSWORD: ${REDIS_DISCORD_PASSWORD}
+      REDIS_SLACK_PASSWORD: ${REDIS_SLACK_PASSWORD}
     volumes:
       - redis-data:/data
       - ./config/redis/redis.conf:/etc/redis/redis.conf:ro
@@ -74,7 +74,7 @@ services:
       - waddlebot-internal
     # NO ports exposed - internal only
     healthcheck:
-      test: ["CMD", "redis-cli", "-u", "redis://admin:${REDIS_ADMIN_PASSWORD:-waddlebot_admin_dev}@localhost:6379", "ping"]
+      test: ["CMD", "redis-cli", "-u", "redis://admin:${REDIS_ADMIN_PASSWORD}@localhost:6379", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -190,11 +190,11 @@ services:
       KONG_ADMIN_ACCESS_LOG: /dev/stdout
       KONG_PROXY_ERROR_LOG: /dev/stderr
       KONG_ADMIN_ERROR_LOG: /dev/stderr
-      KONG_ADMIN_LISTEN: "0.0.0.0:8001"
-      KONG_PROXY_LISTEN: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+      KONG_ADMIN_LISTEN: "0.0.0.0:8012"
+      KONG_PROXY_LISTEN: "0.0.0.0:8080, 0.0.0.0:8443 ssl"
       # Kong Manager OSS configuration
       KONG_ADMIN_GUI_PATH: /manager
-      KONG_ADMIN_GUI_URL: http://localhost:8002/manager
+      KONG_ADMIN_GUI_URL: http://localhost:8012/manager
       KONG_ADMIN_GUI_AUTH: basic-auth
       KONG_ADMIN_GUI_SESSION_CONF: '{"secret":"${KONG_SESSION_SECRET}","storage":"kong","cookie_secure":false,"cookie_samesite":"Lax"}'
       KONG_ENFORCE_RBAC: "on"
@@ -204,10 +204,10 @@ services:
     volumes:
       - ./config/kong/ssl:/etc/kong/ssl:ro
     ports:
-      - "8000:8000"   # Kong HTTP API (api.waddlebot.io)
+      - "8080:8080"   # Kong HTTP API (api.waddlebot.io)
       - "8443:8443"   # Kong HTTPS API
       - "127.0.0.1:8001:8001"  # Kong Admin API (localhost only for security)
-      - "8002:8002"   # Kong Manager OSS GUI
+      - "8012:8012 "   # Kong Manager OSS GUI
     networks:
       - waddlebot-public
       - waddlebot-internal
@@ -239,9 +239,9 @@ services:
       MODULE_PORT: 8000
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       # Redis ACL: user=router, prefix=router:*, waddlebot:session:*, waddlebot:rate:*, waddlebot:cmd:*
-      REDIS_URL: redis://router:${REDIS_ROUTER_PASSWORD:-waddlebot_router_dev}@redis:6379/0
+      REDIS_URL: redis://router:${REDIS_ROUTER_PASSWORD}@redis:6379/0
       REDIS_KEY_PREFIX: "router:"
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -264,14 +264,14 @@ services:
       dockerfile: admin/hub_module/Dockerfile
     container_name: waddlebot-hub
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
+      NODE_ENV: ${NODE_ENV}
       PORT: 8060
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       # Redis ACL: user=hub, prefix=hub:*, waddlebot:session:*, waddlebot:auth:*
-      REDIS_URL: redis://hub:${REDIS_HUB_PASSWORD:-waddlebot_hub_dev}@redis:6379/0
+      REDIS_URL: redis://hub:${REDIS_HUB_PASSWORD}@redis:6379/0
       REDIS_KEY_PREFIX: "hub:"
       JWT_SECRET: ${JWT_SECRET}
-      BASE_DOMAIN: ${BASE_DOMAIN:-waddlebot.io}
+      BASE_DOMAIN: ${BASE_DOMAIN}
       # OAuth Configuration
       DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
       DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET}
@@ -291,7 +291,7 @@ services:
       BROWSER_SOURCE_API_URL: http://browser-source:8027
       LOYALTY_API_URL: http://loyalty-interaction:8032
       # Overlay Configuration
-      OVERLAY_BASE_URL: ${OVERLAY_BASE_URL:-https://overlay.waddlebot.io}
+      OVERLAY_BASE_URL: ${OVERLAY_BASE_URL}
       # S3 Storage Configuration (MinIO)
       S3_STORAGE_ENABLED: "true"
       S3_BUCKET_NAME: waddlebot-assets
@@ -299,7 +299,7 @@ services:
       S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
       S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
       S3_PUBLIC_BASE_URL: http://localhost:9000/waddlebot-assets
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     ports:
       - "8060:8060"  # Hub admin portal
     networks:
@@ -336,7 +336,7 @@ services:
       TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID}
       TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET}
       TWITCH_WEBHOOK_SECRET: ${TWITCH_WEBHOOK_SECRET}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -360,7 +360,7 @@ services:
       ROUTER_API_URL: http://router:8000
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
       DISCORD_APPLICATION_ID: ${DISCORD_APPLICATION_ID}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -384,7 +384,7 @@ services:
       ROUTER_API_URL: http://router:8000
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
       SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -410,7 +410,7 @@ services:
       YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID}
       YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET}
       YOUTUBE_WEBHOOK_CALLBACK_URL: ${YOUTUBE_WEBHOOK_CALLBACK_URL}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -435,7 +435,7 @@ services:
       KICK_CLIENT_ID: ${KICK_CLIENT_ID}
       KICK_CLIENT_SECRET: ${KICK_CLIENT_SECRET}
       KICK_WEBHOOK_SECRET: ${KICK_WEBHOOK_SECRET}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -461,14 +461,14 @@ services:
       MODULE_PORT: 8005
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       ROUTER_API_URL: http://router:8000
-      AI_PROVIDER: ${AI_PROVIDER:-ollama}
-      OLLAMA_HOST: ${OLLAMA_HOST:-ollama}
-      OLLAMA_PORT: ${OLLAMA_PORT:-11434}
-      OLLAMA_USE_TLS: ${OLLAMA_USE_TLS:-false}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}  # Multilingual model for language detection
-      WADDLEAI_BASE_URL: ${WADDLEAI_BASE_URL:-http://waddleai:8000}
+      AI_PROVIDER: ${AI_PROVIDER}
+      OLLAMA_HOST: ${OLLAMA_HOST}
+      OLLAMA_PORT: ${OLLAMA_PORT}
+      OLLAMA_USE_TLS: ${OLLAMA_USE_TLS}
+      OLLAMA_MODEL: ${OLLAMA_MODEL}  # Multilingual model for language detection
+      WADDLEAI_BASE_URL: ${WADDLEAI_BASE_URL}
       WADDLEAI_API_KEY: ${WADDLEAI_API_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -491,7 +491,7 @@ services:
       MODULE_PORT: 8010
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       ROUTER_API_URL: http://router:8000
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -513,7 +513,7 @@ services:
       MODULE_PORT: 8011
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       ROUTER_API_URL: http://router:8000
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -535,7 +535,7 @@ services:
       MODULE_PORT: 8024
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       ROUTER_API_URL: http://router:8000
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -557,7 +557,7 @@ services:
       MODULE_PORT: 8030
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       ROUTER_API_URL: http://router:8000
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -579,7 +579,7 @@ services:
       MODULE_PORT: 8031
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       ROUTER_API_URL: http://router:8000
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -603,7 +603,7 @@ services:
       ROUTER_API_URL: http://router:8000
       BROWSER_SOURCE_API_URL: http://browser-source:8027
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -629,7 +629,7 @@ services:
       BROWSER_SOURCE_API_URL: http://browser-source:8027
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID}
       SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -654,7 +654,7 @@ services:
       ROUTER_API_URL: http://router:8000
       REPUTATION_API_URL: http://reputation:8021
       SERVICE_API_KEY: ${SERVICE_API_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -682,10 +682,10 @@ services:
       MODULE_PORT: 8023
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       # Redis ACL: uses router credentials for shared cache access
-      REDIS_URL: redis://router:${REDIS_ROUTER_PASSWORD:-waddlebot_router_dev}@redis:6379/0
+      REDIS_URL: redis://router:${REDIS_ROUTER_PASSWORD}@redis:6379/0
       REDIS_KEY_PREFIX: "labels:"
       ROUTER_API_URL: http://router:8000
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -708,9 +708,9 @@ services:
       MODULE_PORT: 8027
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       ROUTER_API_URL: http://router:8000
-      OVERLAY_BASE_URL: ${OVERLAY_BASE_URL:-https://overlay.waddlebot.io}
-      OVERLAY_KEY_GRACE_PERIOD_MINUTES: 5
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OVERLAY_BASE_URL: ${OVERLAY_BASE_URL}
+      OVERLAY_KEY_GRACE_PERIOD_MINUTES: ${OVERLAY_KEY_GRACE_PERIOD_MINUTES}
+      LOG_LEVEL: ${LOG_LEVEL}
     ports:
       - "8027:8027"  # Browser sources need direct access from OBS
     networks:
@@ -735,10 +735,10 @@ services:
       MODULE_PORT: 8050
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       # Redis ACL: uses hub credentials for session/auth data
-      REDIS_URL: redis://hub:${REDIS_HUB_PASSWORD:-waddlebot_hub_dev}@redis:6379/0
+      REDIS_URL: redis://hub:${REDIS_HUB_PASSWORD}@redis:6379/0
       REDIS_KEY_PREFIX: "identity:"
       ROUTER_API_URL: http://router:8000
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -762,16 +762,16 @@ services:
       MODULE_PORT: 8070
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       # Redis ACL: user=ai_researcher, prefix=ai:*, waddlebot:ai:*, waddlebot:rate:ai:*
-      REDIS_URL: redis://ai_researcher:${REDIS_AI_PASSWORD:-waddlebot_ai_dev}@redis:6379/0
+      REDIS_URL: redis://ai_researcher:${REDIS_AI_PASSWORD}@redis:6379/0
       REDIS_KEY_PREFIX: "ai:"
       ROUTER_API_URL: http://router:8000/api/v1/router
-      OLLAMA_HOST: ollama
-      OLLAMA_PORT: 11434
-      AI_PROVIDER: ollama
-      AI_MODEL: qwen2.5:1.5b
-      MEM0_VECTOR_STORE: qdrant
-      QDRANT_URL: http://qdrant:6333
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OLLAMA_HOST: ${OLLAMA_HOST}
+      OLLAMA_PORT: ${OLLAMA_PORT}
+      AI_PROVIDER: ${AI_PROVIDER}
+      AI_MODEL: ${OLLAMA_MODEL}
+      MEM0_VECTOR_STORE: ${MEM0_VECTOR_STORE}
+      QDRANT_URL: ${QDRANT_URL}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -801,12 +801,12 @@ services:
       MODULE_PORT: 8070
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       # Redis ACL: user=workflow, prefix=workflow:*, waddlebot:jobs:*, waddlebot:schedule:*, waddlebot:lock:*
-      REDIS_URL: redis://workflow:${REDIS_WORKFLOW_PASSWORD:-waddlebot_workflow_dev}@redis:6379/0
+      REDIS_URL: redis://workflow:${REDIS_WORKFLOW_PASSWORD}@redis:6379/0
       REDIS_KEY_PREFIX: "workflow:"
       ROUTER_API_URL: http://router:8000
-      LICENSE_SERVER_URL: ${LICENSE_SERVER_URL:-https://license.penguintech.io}
-      RELEASE_MODE: ${RELEASE_MODE:-false}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LICENSE_SERVER_URL: ${LICENSE_SERVER_URL}
+      RELEASE_MODE: ${RELEASE_MODE}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -837,7 +837,7 @@ services:
       MODULE_PORT: 8020
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       ROUTER_API_URL: http://router:8000
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -859,7 +859,7 @@ services:
       MODULE_PORT: 8021
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       ROUTER_API_URL: http://router:8000
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -881,9 +881,9 @@ services:
       MODULE_PORT: 8040
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       # Redis ACL: user=analytics, prefix=analytics:*, waddlebot:metrics:*, waddlebot:counters:*
-      REDIS_URL: redis://analytics:${REDIS_ANALYTICS_PASSWORD:-waddlebot_analytics_dev}@redis:6379/0
+      REDIS_URL: redis://analytics:${REDIS_ANALYTICS_PASSWORD}@redis:6379/0
       REDIS_KEY_PREFIX: "analytics:"
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -908,10 +908,10 @@ services:
       MODULE_PORT: 8041
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       # Redis ACL: user=security, prefix=security:*, waddlebot:blacklist:*, waddlebot:threat:*
-      REDIS_URL: redis://security:${REDIS_SECURITY_PASSWORD:-waddlebot_security_dev}@redis:6379/0
+      REDIS_URL: redis://security:${REDIS_SECURITY_PASSWORD}@redis:6379/0
       REDIS_KEY_PREFIX: "security:"
       REPUTATION_API_URL: http://reputation:8021
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -942,7 +942,7 @@ services:
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
       MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -967,7 +967,7 @@ services:
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
       MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -993,7 +993,7 @@ services:
       TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID}
       TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET}
       MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -1020,7 +1020,7 @@ services:
       YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID}
       YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET}
       MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -1049,10 +1049,10 @@ services:
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-      AWS_REGION: ${AWS_REGION:-us-east-1}
-      AWS_LAMBDA_ROLE_ARN: ${AWS_LAMBDA_ROLE_ARN:-}
+      AWS_REGION: ${AWS_REGION}
+      AWS_LAMBDA_ROLE_ARN: ${AWS_LAMBDA_ROLE_ARN}
       MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -1076,11 +1076,11 @@ services:
       REST_PORT: 8081
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       GCP_PROJECT_ID: ${GCP_PROJECT_ID}
-      GCP_REGION: ${GCP_REGION:-us-central1}
-      GCP_SERVICE_ACCOUNT_KEY: ${GCP_SERVICE_ACCOUNT_KEY:-}
-      GCP_SERVICE_ACCOUNT_EMAIL: ${GCP_SERVICE_ACCOUNT_EMAIL:-}
+      GCP_REGION: ${GCP_REGION}
+      GCP_SERVICE_ACCOUNT_KEY: ${GCP_SERVICE_ACCOUNT_KEY}
+      GCP_SERVICE_ACCOUNT_EMAIL: ${GCP_SERVICE_ACCOUNT_EMAIL}
       MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
@@ -1103,12 +1103,12 @@ services:
       GRPC_PORT: 50062
       REST_PORT: 8082
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      OPENWHISK_API_HOST: ${OPENWHISK_API_HOST:-http://waddlebot-openwhisk:3233}
+      OPENWHISK_API_HOST: ${OPENWHISK_API_HOST}
       OPENWHISK_AUTH_KEY: ${OPENWHISK_AUTH_KEY}
-      OPENWHISK_NAMESPACE: ${OPENWHISK_NAMESPACE:-guest}
-      OPENWHISK_INSECURE: ${OPENWHISK_INSECURE:-true}
+      OPENWHISK_NAMESPACE: ${OPENWHISK_NAMESPACE}
+      OPENWHISK_INSECURE: ${OPENWHISK_INSECURE}
       MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
       - waddlebot-public
