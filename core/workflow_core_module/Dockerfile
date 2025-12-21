@@ -1,6 +1,6 @@
 # Build from parent directory: docker build -f core/workflow_core_module/Dockerfile -t waddlebot/workflow-core:latest .
 
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -16,6 +16,9 @@ COPY core/workflow_core_module /app/
 
 # Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Compile Protobuf messages
+RUN python -m grpc_tools.protoc -I./proto --python_out=. --grpc_python_out=. ./proto/workflow.proto
 
 # Create non-root user
 RUN useradd -m -u 1000 waddlebot && \

@@ -1,7 +1,7 @@
 # Twitch Action Module Dockerfile
 # Build from parent directory: docker build -f action/pushing/twitch_action_module/Dockerfile -t waddlebot/twitch-action:latest .
 
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 # Set working directory
 WORKDIR /app

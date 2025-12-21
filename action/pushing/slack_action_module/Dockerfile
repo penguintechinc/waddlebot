@@ -1,7 +1,7 @@
 # Slack Action Module Dockerfile
-# Python 3.13 container for pushing actions to Slack
+# Python 3.12 container for pushing actions to Slack
 
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 # Set working directory
 WORKDIR /app
@@ -14,21 +14,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY requirements.txt /app/
+COPY action/pushing/slack_action_module/requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy proto files and generate gRPC code
-COPY proto /app/proto
+COPY action/pushing/slack_action_module/proto /app/proto
 RUN python -m grpc_tools.protoc \
     -I./proto \
     --python_out=./proto \
     --grpc_python_out=./proto \
-    ./proto/slack_action.proto
+    ./proto/slack_action.proto && \
+    sed -i 's/^import slack_action_pb2/from proto import slack_action_pb2/' ./proto/slack_action_pb2_grpc.py
 
 # Copy application files
-COPY config.py /app/
-COPY app.py /app/
-COPY services /app/services/
+COPY action/pushing/slack_action_module/config.py /app/
+COPY action/pushing/slack_action_module/app.py /app/
+COPY action/pushing/slack_action_module/services /app/services/
 
 # Create log directory
 RUN mkdir -p /var/log/waddlebotlog

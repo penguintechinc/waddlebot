@@ -39,6 +39,7 @@ async def startup():
     from services.cache_manager import CacheManager
     from services.rate_limiter import RateLimiter
     from services.session_manager import SessionManager
+    from services.command_registry import CommandRegistry
 
     logger.system("Starting router module", action="startup")
 
@@ -53,7 +54,8 @@ async def startup():
     rate_limiter = RateLimiter(redis_url=Config.REDIS_URL)
     await rate_limiter.connect()  # Connect to Redis on startup
     session_manager = SessionManager()
-    command_processor = CommandProcessor(dal, cache_manager, rate_limiter, session_manager)
+    command_registry = CommandRegistry(dal, cache_manager)
+    command_processor = CommandProcessor(dal, cache_manager, rate_limiter, session_manager, command_registry)
 
     app.config['command_processor'] = command_processor
     app.config['cache_manager'] = cache_manager

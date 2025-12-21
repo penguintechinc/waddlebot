@@ -200,6 +200,26 @@ function AdminTranslation() {
             Advanced Translation Settings
           </h2>
           <div className="space-y-4">
+            {/* Language Detection Method */}
+            <div>
+              <label className="block text-sm font-medium text-navy-300 mb-2">
+                Language Detection Method
+              </label>
+              <select
+                value={config.detection_method || 'ensemble'}
+                onChange={(e) => updateConfig('detection_method', e.target.value)}
+                disabled={!config.enabled}
+                className="w-full px-4 py-2 bg-navy-800 border border-navy-600 rounded-lg text-sky-100 focus:border-sky-500 focus:ring-1 focus:ring-sky-500 disabled:opacity-50"
+              >
+                <option value="ensemble">Ensemble (FastText + Lingua + Langdetect) - Recommended</option>
+                <option value="fasttext_only">FastText Only (Fast, good for long messages)</option>
+                <option value="provider">Provider Detection (Google Cloud / Googletrans fallback)</option>
+              </select>
+              <p className="text-xs text-navy-500 mt-1">
+                Ensemble provides the best accuracy by combining multiple detection libraries with consensus voting
+              </p>
+            </div>
+
             {/* Confidence Threshold */}
             <div>
               <label className="block text-sm font-medium text-navy-300 mb-2">
@@ -245,6 +265,16 @@ function AdminTranslation() {
                 Only translate messages with at least this many words
               </p>
             </div>
+
+            {/* Ensemble Method Info */}
+            {config.detection_method === 'ensemble' && (
+              <div className="p-3 bg-sky-500/10 border border-sky-500/30 rounded-lg">
+                <p className="text-xs text-sky-300">
+                  <strong>Ensemble Method:</strong> Combines FastText (fast), Lingua (accurate), and Langdetect (validation) for high-confidence detection.
+                  Confidence scores: All 3 agree (95%), 2 agree (85%), 1 only (70%).
+                </p>
+              </div>
+            )}
           </div>
         </div>
 

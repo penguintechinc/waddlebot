@@ -1,6 +1,6 @@
 # Build from parent directory: docker build -f action/interactive/ai_interaction_module/Dockerfile -t waddlebot/ai-interaction:latest .
 
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 

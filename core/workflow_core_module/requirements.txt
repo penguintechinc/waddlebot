@@ -3,6 +3,8 @@
 # Core Framework
 quart==0.19.4
 hypercorn==0.16.0
+grpcio>=1.62.0
+grpcio-tools>=1.62.0
 
 # HTTP Client (async)
 aiohttp>=3.10.0,<4.0.0
@@ -11,7 +13,7 @@ aiohttp>=3.10.0,<4.0.0
 pydal>=20240906.1,<20250101
 
 # Workflow Execution
-RestrictedPython==7.0
+RestrictedPython>=7.4
 croniter==2.0.1
 APScheduler==3.10.4
 

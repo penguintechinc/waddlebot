@@ -187,10 +187,30 @@ class AAALogger:
         extra = self._build_extra("AUDIT", user=user, community=community, action=action, result=result, **kwargs)
         self.logger.info(f"Audit: {action} - {result}", extra=extra)
 
+    def debug(self, message: str, **kwargs):
+        """Log debug message"""
+        extra = self._build_extra("DEBUG", **kwargs)
+        self.logger.debug(message, extra=extra)
+
+    def info(self, message: str, **kwargs):
+        """Log info message"""
+        extra = self._build_extra("INFO", **kwargs)
+        self.logger.info(message, extra=extra)
+
+    def warning(self, message: str, **kwargs):
+        """Log warning message"""
+        extra = self._build_extra("WARNING", **kwargs)
+        self.logger.warning(message, extra=extra)
+
     def error(self, message: str, **kwargs):
         """Log error event"""
         extra = self._build_extra("ERROR", **kwargs)
         self.logger.error(message, extra=extra)
+
+    def critical(self, message: str, **kwargs):
+        """Log critical message"""
+        extra = self._build_extra("CRITICAL", **kwargs)
+        self.logger.critical(message, extra=extra)
 
     def system(self, message: str, **kwargs):
         """Log system event"""

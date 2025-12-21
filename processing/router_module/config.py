@@ -55,10 +55,12 @@ class Config:
     BROWSER_SOURCE_URL = os.getenv('BROWSER_SOURCE_URL', 'http://browser-source:8050')
 
     # WaddleAI configuration (for AI-powered translation and decisions)
-    WADDLEAI_BASE_URL = os.getenv('WADDLEAI_BASE_URL', 'http://waddleai-proxy:8090')
+    # Note: Using Qwen2.5:1.5b for language detection (93%+ accuracy, multilingual)
+    # TinyLlama is NOT suitable for language detection (0% accuracy)
+    WADDLEAI_BASE_URL = os.getenv('WADDLEAI_BASE_URL', 'http://ollama:11434')
     WADDLEAI_API_KEY = os.getenv('WADDLEAI_API_KEY', '')
-    WADDLEAI_MODEL = os.getenv('WADDLEAI_MODEL', 'tinyllama')
-    WADDLEAI_TEMPERATURE = float(os.getenv('WADDLEAI_TEMPERATURE', '0.7'))
+    WADDLEAI_MODEL = os.getenv('WADDLEAI_MODEL', 'qwen2.5:1.5b')
+    WADDLEAI_TEMPERATURE = float(os.getenv('WADDLEAI_TEMPERATURE', '0.1'))  # Low temp for detection
     WADDLEAI_MAX_TOKENS = int(os.getenv('WADDLEAI_MAX_TOKENS', '500'))
     WADDLEAI_TIMEOUT = int(os.getenv('WADDLEAI_TIMEOUT', '30'))
 
@@ -122,3 +124,14 @@ class Config:
     STREAM_COMMANDS = os.getenv('STREAM_COMMANDS', 'waddlebot:stream:events:commands')
     STREAM_ACTIONS = os.getenv('STREAM_ACTIONS', 'waddlebot:stream:events:actions')
     STREAM_RESPONSES = os.getenv('STREAM_RESPONSES', 'waddlebot:stream:events:responses')
+
+
+# Compute REDIS_URL after class definition
+_redis_password = Config.REDIS_PASSWORD
+_redis_host = Config.REDIS_HOST
+_redis_port = Config.REDIS_PORT
+_redis_db = Config.REDIS_DB
+if _redis_password:
+    Config.REDIS_URL = f"redis://:{_redis_password}@{_redis_host}:{_redis_port}/{_redis_db}"
+else:
+    Config.REDIS_URL = f"redis://{_redis_host}:{_redis_port}/{_redis_db}"

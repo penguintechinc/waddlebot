@@ -2766,3 +2766,218 @@ export async function reviewSuspectedBot(req, res, next) {
     next(err);
   }
 }
+
+/**
+ * Get translation configuration for a community
+ */
+export async function getTranslationConfig(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+
+    // Get or create default config
+    let result = await query(
+      `SELECT id, enabled, target_language, confidence_threshold, min_words,
+              detection_method, google_api_key, preprocessing, captions, ai_decision
+       FROM community_translation_settings
+       WHERE community_id = $1`,
+      [communityId]
+    );
+
+    let config;
+
+    if (result.rows.length === 0) {
+      // Create default configuration
+      const defaultConfig = {
+        enabled: false,
+        target_language: 'en',
+        confidence_threshold: 0.7,
+        min_words: 5,
+        detection_method: 'ensemble',
+        preprocessing: {
+          enabled: true,
+          preserve_mentions: true,
+          preserve_commands: true,
+          preserve_emails: true,
+          preserve_urls: true,
+          preserve_emotes: true,
+          emote_sources: ['global', 'bttv', 'ffz', '7tv'],
+        },
+        captions: {
+          enabled: false,
+          display_duration: 5000,
+          max_captions: 3,
+          show_original: false,
+        },
+        ai_decision: {
+          mode: 'never',
+          confidence_threshold: 0.7,
+        },
+      };
+
+      const insertResult = await query(
+        `INSERT INTO community_translation_settings
+         (community_id, enabled, target_language, confidence_threshold, min_words,
+          detection_method, preprocessing, captions, ai_decision, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+         RETURNING id, enabled, target_language, confidence_threshold, min_words,
+                   detection_method, preprocessing, captions, ai_decision`,
+        [
+          communityId,
+          defaultConfig.enabled,
+          defaultConfig.target_language,
+          defaultConfig.confidence_threshold,
+          defaultConfig.min_words,
+          defaultConfig.detection_method,
+          JSON.stringify(defaultConfig.preprocessing),
+          JSON.stringify(defaultConfig.captions),
+          JSON.stringify(defaultConfig.ai_decision),
+        ]
+      );
+
+      config = {
+        id: insertResult.rows[0].id,
+        enabled: insertResult.rows[0].enabled,
+        target_language: insertResult.rows[0].target_language,
+        confidence_threshold: insertResult.rows[0].confidence_threshold,
+        min_words: insertResult.rows[0].min_words,
+        detection_method: insertResult.rows[0].detection_method,
+        preprocessing: JSON.parse(insertResult.rows[0].preprocessing || '{}'),
+        captions: JSON.parse(insertResult.rows[0].captions || '{}'),
+        ai_decision: JSON.parse(insertResult.rows[0].ai_decision || '{}'),
+      };
+    } else {
+      const row = result.rows[0];
+      config = {
+        id: row.id,
+        enabled: row.enabled,
+        target_language: row.target_language,
+        confidence_threshold: row.confidence_threshold,
+        min_words: row.min_words,
+        detection_method: row.detection_method,
+        preprocessing: JSON.parse(row.preprocessing || '{}'),
+        captions: JSON.parse(row.captions || '{}'),
+        ai_decision: JSON.parse(row.ai_decision || '{}'),
+      };
+    }
+
+    res.json({
+      success: true,
+      config,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Update translation configuration for a community
+ */
+export async function updateTranslationConfig(req, res, next) {
+  try {
+    const communityId = parseInt(req.params.communityId, 10);
+    const {
+      enabled,
+      target_language,
+      confidence_threshold,
+      min_words,
+      detection_method,
+      preprocessing,
+      captions,
+      ai_decision,
+    } = req.body;
+
+    // Validate inputs
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        error: 'enabled must be a boolean',
+      });
+    }
+
+    if (!target_language || typeof target_language !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'target_language is required and must be a string',
+      });
+    }
+
+    if (typeof confidence_threshold !== 'number' || confidence_threshold < 0.5 || confidence_threshold > 1.0) {
+      return res.status(400).json({
+        success: false,
+        error: 'confidence_threshold must be between 0.5 and 1.0',
+      });
+    }
+
+    if (typeof min_words !== 'number' || min_words < 1 || min_words > 20) {
+      return res.status(400).json({
+        success: false,
+        error: 'min_words must be between 1 and 20',
+      });
+    }
+
+    if (!['ensemble', 'fasttext_only', 'provider'].includes(detection_method)) {
+      return res.status(400).json({
+        success: false,
+        error: 'detection_method must be one of: ensemble, fasttext_only, provider',
+      });
+    }
+
+    // Update or insert
+    const result = await query(
+      `INSERT INTO community_translation_settings
+       (community_id, enabled, target_language, confidence_threshold, min_words,
+        detection_method, preprocessing, captions, ai_decision, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+       ON CONFLICT (community_id)
+       DO UPDATE SET
+         enabled = $2,
+         target_language = $3,
+         confidence_threshold = $4,
+         min_words = $5,
+         detection_method = $6,
+         preprocessing = $7,
+         captions = $8,
+         ai_decision = $9,
+         updated_at = NOW()
+       RETURNING id, enabled, target_language, confidence_threshold, min_words,
+                 detection_method, preprocessing, captions, ai_decision`,
+      [
+        communityId,
+        enabled,
+        target_language,
+        confidence_threshold,
+        min_words,
+        detection_method,
+        JSON.stringify(preprocessing),
+        JSON.stringify(captions),
+        JSON.stringify(ai_decision),
+      ]
+    );
+
+    const row = result.rows[0];
+    const config = {
+      id: row.id,
+      enabled: row.enabled,
+      target_language: row.target_language,
+      confidence_threshold: row.confidence_threshold,
+      min_words: row.min_words,
+      detection_method: row.detection_method,
+      preprocessing: JSON.parse(row.preprocessing || '{}'),
+      captions: JSON.parse(row.captions || '{}'),
+      ai_decision: JSON.parse(row.ai_decision || '{}'),
+    };
+
+    logger.audit('Translation settings updated', {
+      adminId: req.user.id,
+      communityId,
+      detection_method,
+    });
+
+    res.json({
+      success: true,
+      config,
+    });
+  } catch (err) {
+    next(err);
+  }
+}

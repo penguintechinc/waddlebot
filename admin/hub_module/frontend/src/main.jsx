@@ -7,6 +7,20 @@ import { SocketProvider } from './contexts/SocketContext';
 import { CookieConsentProvider } from './contexts/CookieConsentContext';
 import CookieBanner from './components/CookieBanner';
 import CookiePreferencesModal from './components/CookiePreferencesModal';
-    </BrowserRouter>
+import './index.css';
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <CookieConsentProvider>
+      <AuthProvider>
+        <SocketProvider>
+          <BrowserRouter>
+            <App />
+            <CookieBanner />
+            <CookiePreferencesModal />
+          </BrowserRouter>
+        </SocketProvider>
+      </AuthProvider>
+    </CookieConsentProvider>
   </React.StrictMode>
 );

@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 
 import grpc
-from python_jose import jwt, JWTError
+from jose import jwt, JWTError
 
 # Import generated protobuf messages
 import sys

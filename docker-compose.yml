@@ -48,14 +48,33 @@ services:
   redis:
     image: redis:7-alpine
     container_name: waddlebot-redis
-    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    entrypoint: ["/usr/local/bin/docker-entrypoint.sh"]
+    environment:
+      # Admin password for maintenance
+      REDIS_ADMIN_PASSWORD: ${REDIS_ADMIN_PASSWORD:-waddlebot_admin_dev}
+      # Per-module passwords (use secure passwords in production!)
+      REDIS_ROUTER_PASSWORD: ${REDIS_ROUTER_PASSWORD:-waddlebot_router_dev}
+      REDIS_HUB_PASSWORD: ${REDIS_HUB_PASSWORD:-waddlebot_hub_dev}
+      REDIS_WORKFLOW_PASSWORD: ${REDIS_WORKFLOW_PASSWORD:-waddlebot_workflow_dev}
+      REDIS_AI_PASSWORD: ${REDIS_AI_PASSWORD:-waddlebot_ai_dev}
+      REDIS_ANALYTICS_PASSWORD: ${REDIS_ANALYTICS_PASSWORD:-waddlebot_analytics_dev}
+      REDIS_SECURITY_PASSWORD: ${REDIS_SECURITY_PASSWORD:-waddlebot_security_dev}
+      REDIS_LOYALTY_PASSWORD: ${REDIS_LOYALTY_PASSWORD:-waddlebot_loyalty_dev}
+      REDIS_SPOTIFY_PASSWORD: ${REDIS_SPOTIFY_PASSWORD:-waddlebot_spotify_dev}
+      REDIS_YTMUSIC_PASSWORD: ${REDIS_YTMUSIC_PASSWORD:-waddlebot_ytmusic_dev}
+      REDIS_TWITCH_PASSWORD: ${REDIS_TWITCH_PASSWORD:-waddlebot_twitch_dev}
+      REDIS_DISCORD_PASSWORD: ${REDIS_DISCORD_PASSWORD:-waddlebot_discord_dev}
+      REDIS_SLACK_PASSWORD: ${REDIS_SLACK_PASSWORD:-waddlebot_slack_dev}
     volumes:
       - redis-data:/data
+      - ./config/redis/redis.conf:/etc/redis/redis.conf:ro
+      - ./config/redis/users.acl:/etc/redis/users.acl.template:ro
+      - ./config/redis/docker-entrypoint.sh:/usr/local/bin/docker-entrypoint.sh:ro
     networks:
       - waddlebot-internal
     # NO ports exposed - internal only
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "-u", "redis://admin:${REDIS_ADMIN_PASSWORD:-waddlebot_admin_dev}@localhost:6379", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -123,10 +142,11 @@ services:
     # ports:
     #   - "6333:6333"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333'"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   # Apache OpenWhisk standalone for testing serverless actions
@@ -218,9 +238,9 @@ services:
       MODULE_NAME: router
       MODULE_PORT: 8000
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # Redis ACL: user=router, prefix=router:*, waddlebot:session:*, waddlebot:rate:*, waddlebot:cmd:*
+      REDIS_URL: redis://router:${REDIS_ROUTER_PASSWORD:-waddlebot_router_dev}@redis:6379/0
+      REDIS_KEY_PREFIX: "router:"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     networks:
       - waddlebot-internal
@@ -244,12 +264,12 @@ services:
       dockerfile: admin/hub_module/Dockerfile
     container_name: waddlebot-hub
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-development}
       PORT: 8060
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # Redis ACL: user=hub, prefix=hub:*, waddlebot:session:*, waddlebot:auth:*
+      REDIS_URL: redis://hub:${REDIS_HUB_PASSWORD:-waddlebot_hub_dev}@redis:6379/0
+      REDIS_KEY_PREFIX: "hub:"
       JWT_SECRET: ${JWT_SECRET}
       BASE_DOMAIN: ${BASE_DOMAIN:-waddlebot.io}
       # OAuth Configuration
@@ -445,7 +465,7 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST:-ollama}
       OLLAMA_PORT: ${OLLAMA_PORT:-11434}
       OLLAMA_USE_TLS: ${OLLAMA_USE_TLS:-false}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-tinyllama}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}  # Multilingual model for language detection
       WADDLEAI_BASE_URL: ${WADDLEAI_BASE_URL:-http://waddleai:8000}
       WADDLEAI_API_KEY: ${WADDLEAI_API_KEY}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -661,9 +681,9 @@ services:
       MODULE_NAME: labels-core
       MODULE_PORT: 8023
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # Redis ACL: uses router credentials for shared cache access
+      REDIS_URL: redis://router:${REDIS_ROUTER_PASSWORD:-waddlebot_router_dev}@redis:6379/0
+      REDIS_KEY_PREFIX: "labels:"
       ROUTER_API_URL: http://router:8000
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     networks:
@@ -714,9 +734,9 @@ services:
       MODULE_NAME: identity-core
       MODULE_PORT: 8050
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # Redis ACL: uses hub credentials for session/auth data
+      REDIS_URL: redis://hub:${REDIS_HUB_PASSWORD:-waddlebot_hub_dev}@redis:6379/0
+      REDIS_KEY_PREFIX: "identity:"
       ROUTER_API_URL: http://router:8000
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     networks:
@@ -741,12 +761,14 @@ services:
       MODULE_VERSION: 1.0.0
       MODULE_PORT: 8070
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      REDIS_URL: redis://redis:6379
+      # Redis ACL: user=ai_researcher, prefix=ai:*, waddlebot:ai:*, waddlebot:rate:ai:*
+      REDIS_URL: redis://ai_researcher:${REDIS_AI_PASSWORD:-waddlebot_ai_dev}@redis:6379/0
+      REDIS_KEY_PREFIX: "ai:"
       ROUTER_API_URL: http://router:8000/api/v1/router
       OLLAMA_HOST: ollama
       OLLAMA_PORT: 11434
       AI_PROVIDER: ollama
-      AI_MODEL: tinyllama
+      AI_MODEL: qwen2.5:1.5b
       MEM0_VECTOR_STORE: qdrant
       QDRANT_URL: http://qdrant:6333
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -778,9 +800,9 @@ services:
       MODULE_NAME: workflow-core
       MODULE_PORT: 8070
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # Redis ACL: user=workflow, prefix=workflow:*, waddlebot:jobs:*, waddlebot:schedule:*, waddlebot:lock:*
+      REDIS_URL: redis://workflow:${REDIS_WORKFLOW_PASSWORD:-waddlebot_workflow_dev}@redis:6379/0
+      REDIS_KEY_PREFIX: "workflow:"
       ROUTER_API_URL: http://router:8000
       LICENSE_SERVER_URL: ${LICENSE_SERVER_URL:-https://license.penguintech.io}
       RELEASE_MODE: ${RELEASE_MODE:-false}
@@ -858,9 +880,9 @@ services:
       MODULE_NAME: analytics-core
       MODULE_PORT: 8040
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_DB: 0
+      # Redis ACL: user=analytics, prefix=analytics:*, waddlebot:metrics:*, waddlebot:counters:*
+      REDIS_URL: redis://analytics:${REDIS_ANALYTICS_PASSWORD:-waddlebot_analytics_dev}@redis:6379/0
+      REDIS_KEY_PREFIX: "analytics:"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     networks:
       - waddlebot-internal
@@ -885,9 +907,9 @@ services:
       MODULE_NAME: security-core
       MODULE_PORT: 8041
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_DB: 0
+      # Redis ACL: user=security, prefix=security:*, waddlebot:blacklist:*, waddlebot:threat:*
+      REDIS_URL: redis://security:${REDIS_SECURITY_PASSWORD:-waddlebot_security_dev}@redis:6379/0
+      REDIS_KEY_PREFIX: "security:"
       REPUTATION_API_URL: http://reputation:8021
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     networks:

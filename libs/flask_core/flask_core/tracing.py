@@ -25,16 +25,42 @@ from opentelemetry.sdk.trace.export import (
     ConsoleSpanExporter,
 )
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION
-from opentelemetry.exporter.jaeger.thrift import JaegerExporter
-from opentelemetry.exporter.zipkin.json import ZipkinExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.requests import RequestsInstrumentor
-from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.trace import Status, StatusCode, SpanKind
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry.baggage.propagation import W3CBaggagePropagator
 from opentelemetry.propagate import set_global_textmap, get_global_textmap
 from opentelemetry.context import Context
+
+# Optional exporters - graceful fallback if not installed
+try:
+    from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+    JAEGER_AVAILABLE = True
+except ImportError:
+    JaegerExporter = None
+    JAEGER_AVAILABLE = False
+
+try:
+    from opentelemetry.exporter.zipkin.json import ZipkinExporter
+    ZIPKIN_AVAILABLE = True
+except ImportError:
+    ZipkinExporter = None
+    ZIPKIN_AVAILABLE = False
+
+# Optional instrumentation - graceful fallback
+try:
+    from opentelemetry.instrumentation.requests import RequestsInstrumentor
+    REQUESTS_INSTRUMENTATION_AVAILABLE = True
+except ImportError:
+    RequestsInstrumentor = None
+    REQUESTS_INSTRUMENTATION_AVAILABLE = False
+
+try:
+    from opentelemetry.instrumentation.flask import FlaskInstrumentor
+    FLASK_INSTRUMENTATION_AVAILABLE = True
+except ImportError:
+    FlaskInstrumentor = None
+    FLASK_INSTRUMENTATION_AVAILABLE = False
 
 try:
     from quart import request
@@ -120,17 +146,25 @@ class TracingManager:
         """Setup span exporter based on configuration."""
         try:
             if self.exporter_type == "jaeger":
-                exporter = JaegerExporter(
-                    agent_host_name=self.jaeger_host,
-                    agent_port=self.jaeger_port,
-                )
-                logger.info(f"Jaeger exporter configured: {self.jaeger_host}:{self.jaeger_port}")
+                if not JAEGER_AVAILABLE:
+                    logger.warning("Jaeger exporter not available, falling back to console")
+                    exporter = ConsoleSpanExporter()
+                else:
+                    exporter = JaegerExporter(
+                        agent_host_name=self.jaeger_host,
+                        agent_port=self.jaeger_port,
+                    )
+                    logger.info(f"Jaeger exporter configured: {self.jaeger_host}:{self.jaeger_port}")
 
             elif self.exporter_type == "zipkin":
-                exporter = ZipkinExporter(
-                    endpoint=self.zipkin_endpoint,
-                )
-                logger.info(f"Zipkin exporter configured: {self.zipkin_endpoint}")
+                if not ZIPKIN_AVAILABLE:
+                    logger.warning("Zipkin exporter not available, falling back to console")
+                    exporter = ConsoleSpanExporter()
+                else:
+                    exporter = ZipkinExporter(
+                        endpoint=self.zipkin_endpoint,
+                    )
+                    logger.info(f"Zipkin exporter configured: {self.zipkin_endpoint}")
 
             elif self.exporter_type == "otlp":
                 exporter = OTLPSpanExporter(
@@ -164,8 +198,11 @@ class TracingManager:
         """Setup automatic instrumentation for common libraries."""
         try:
             # Instrument requests library
-            RequestsInstrumentor().instrument()
-            logger.info("Requests instrumentation enabled")
+            if REQUESTS_INSTRUMENTATION_AVAILABLE:
+                RequestsInstrumentor().instrument()
+                logger.info("Requests instrumentation enabled")
+            else:
+                logger.info("Requests instrumentation not available (optional)")
 
             # Note: Flask instrumentation is done separately when app is created
             # via instrument_app() method
@@ -181,8 +218,11 @@ class TracingManager:
             app: Flask or Quart application instance
         """
         try:
-            FlaskInstrumentor().instrument_app(app)
-            logger.info(f"Flask/Quart application instrumented: {app.name}")
+            if FLASK_INSTRUMENTATION_AVAILABLE:
+                FlaskInstrumentor().instrument_app(app)
+                logger.info(f"Flask/Quart application instrumented: {app.name}")
+            else:
+                logger.info("Flask instrumentation not available (optional)")
         except Exception as e:
             logger.warning(f"Failed to instrument Flask/Quart app: {e}")
 

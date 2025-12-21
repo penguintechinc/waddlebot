@@ -1,0 +1,14 @@
+user default off
+user admin on >REDIS_ADMIN_PASSWORD_PLACEHOLDER ~* +@all
+user router on >REDIS_ROUTER_PASSWORD_PLACEHOLDER ~router:* ~waddlebot:session:* ~waddlebot:rate:* ~waddlebot:cmd:* +@read +@write +@keyspace +@string +@hash +@list +@set +@sortedset +@stream +expire +expireat +ttl +pttl +ping +select +info
+user hub on >REDIS_HUB_PASSWORD_PLACEHOLDER ~hub:* ~waddlebot:session:* ~waddlebot:auth:* +@read +@write +@keyspace +@string +@hash +expire +expireat +ttl +pttl +ping +select +info
+user workflow on >REDIS_WORKFLOW_PASSWORD_PLACEHOLDER ~workflow:* ~waddlebot:jobs:* ~waddlebot:schedule:* ~waddlebot:lock:* +@read +@write +@keyspace +@string +@hash +@list +@set +@sortedset +expire +expireat +ttl +pttl +ping +select +info +setnx +getset
+user ai_researcher on >REDIS_AI_PASSWORD_PLACEHOLDER ~ai:* ~waddlebot:ai:* ~waddlebot:rate:ai:* +@read +@write +@keyspace +@string +@hash +expire +expireat +ttl +pttl +ping +select +info
+user analytics on >REDIS_ANALYTICS_PASSWORD_PLACEHOLDER ~analytics:* ~waddlebot:metrics:* ~waddlebot:counters:* +@read +@write +@keyspace +@string +@hash +@sortedset +expire +expireat +ttl +pttl +ping +select +info +incr +incrby +incrbyfloat +decr +decrby
+user security on >REDIS_SECURITY_PASSWORD_PLACEHOLDER ~security:* ~waddlebot:blacklist:* ~waddlebot:rate:security:* ~waddlebot:threat:* +@read +@write +@keyspace +@string +@hash +@set +expire +expireat +ttl +pttl +ping +select +info +sadd +srem +sismember +smembers
+user loyalty on >REDIS_LOYALTY_PASSWORD_PLACEHOLDER ~loyalty:* ~waddlebot:points:* ~waddlebot:leaderboard:* ~waddlebot:cooldown:* +@read +@write +@keyspace +@string +@hash +@sortedset +expire +expireat +ttl +pttl +ping +select +info +incr +incrby +decr +decrby +zincrby +zadd +zrange +zrevrange +zrank +zrevrank
+user spotify on >REDIS_SPOTIFY_PASSWORD_PLACEHOLDER ~spotify:* ~waddlebot:spotify:* +@read +@write +@keyspace +@string +@hash +expire +expireat +ttl +pttl +ping +select +info
+user ytmusic on >REDIS_YTMUSIC_PASSWORD_PLACEHOLDER ~ytmusic:* ~waddlebot:ytmusic:* +@read +@write +@keyspace +@string +@hash +expire +expireat +ttl +pttl +ping +select +info
+user twitch on >REDIS_TWITCH_PASSWORD_PLACEHOLDER ~twitch:* ~waddlebot:events:twitch:* ~waddlebot:rate:twitch:* +@read +@write +@keyspace +@string +@hash +@set +expire +expireat +ttl +pttl +ping +select +info +sadd +sismember
+user discord on >REDIS_DISCORD_PASSWORD_PLACEHOLDER ~discord:* ~waddlebot:events:discord:* ~waddlebot:rate:discord:* +@read +@write +@keyspace +@string +@hash +@set +expire +expireat +ttl +pttl +ping +select +info +sadd +sismember
+user slack on >REDIS_SLACK_PASSWORD_PLACEHOLDER ~slack:* ~waddlebot:events:slack:* ~waddlebot:rate:slack:* +@read +@write +@keyspace +@string +@hash +@set +expire +expireat +ttl +pttl +ping +select +info +sadd +sismember

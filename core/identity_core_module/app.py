@@ -66,7 +66,7 @@ async def _start_grpc_server(server, logger):
         logger.error(f"gRPC server error: {str(e)}")
 
 
-@app.before_server_shutdown
+@app.after_serving
 async def shutdown():
     global grpc_server
     if grpc_server:

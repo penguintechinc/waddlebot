@@ -38,7 +38,19 @@ function SuperAdminCreateCommunity() {
 
     try {
       setSaving(true);
-      const response = await superAdminApi.createCommunity(form);
+      // Convert camelCase to snake_case for backend API
+      const payload = {
+        name: form.name,
+        display_name: form.displayName,
+        description: form.description,
+        platform: form.platform,
+        platform_server_id: form.platformServerId,
+        owner_id: form.ownerId,
+        owner_name: form.ownerName,
+        is_public: form.isPublic,
+        community_type: form.communityType,
+      };
+      const response = await superAdminApi.createCommunity(payload);
       if (response.data.success) {
         navigate('/superadmin/communities');
       }
@@ -51,9 +63,21 @@ function SuperAdminCreateCommunity() {
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
+    let finalValue = type === 'checkbox' ? checked : value;
+
+    // Auto-format community name: lowercase, replace spaces with hyphens, remove invalid chars
+    if (name === 'name') {
+      finalValue = value
+        .toLowerCase()
+        .replace(/[^a-z0-9\s\-_]/g, '')  // Keep only alphanumeric, spaces, hyphens, underscores
+        .replace(/\s+/g, '-')              // Replace spaces with hyphens
+        .replace(/-+/g, '-')                // Replace multiple hyphens with single hyphen
+        .slice(0, 100);                    // Limit to 100 chars
+    }
+
     setForm(prev => ({
       ...prev,
-      [name]: type === 'checkbox' ? checked : value,
+      [name]: finalValue,
     }));
   };
 

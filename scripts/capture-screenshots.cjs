@@ -9,22 +9,132 @@ const OUTPUT_DIR = path.join(__dirname, '..', 'docs', 'screenshots');
 // Note: Community ID 2 is the first real community (ID 1 may not exist)
 const COMMUNITY_ID = 2;
 const pages = [
+  // Public/Auth pages
   { name: 'login', path: '/login' },
+
+  // Dashboard pages
   { name: 'dashboard', path: '/dashboard' },
+  { name: 'dashboard-settings', path: '/dashboard/settings' },
+  { name: 'dashboard-profile', path: '/dashboard/profile' },
+
+  // Community pages
   { name: 'communities', path: '/communities' },
   { name: 'community-dashboard', path: `/dashboard/community/${COMMUNITY_ID}` },
+  { name: 'community-settings', path: `/dashboard/community/${COMMUNITY_ID}/settings` },
+  { name: 'community-chat', path: `/dashboard/community/${COMMUNITY_ID}/chat` },
+  { name: 'community-leaderboard', path: `/dashboard/community/${COMMUNITY_ID}/leaderboard` },
+  { name: 'community-members', path: `/dashboard/community/${COMMUNITY_ID}/members` },
+
+  // Admin pages
   { name: 'admin-overview', path: `/admin/${COMMUNITY_ID}` },
   { name: 'admin-members', path: `/admin/${COMMUNITY_ID}/members` },
-  { name: 'admin-announcements', path: `/admin/${COMMUNITY_ID}/announcements` },
-  { name: 'admin-servers', path: `/admin/${COMMUNITY_ID}/servers` },
+  { name: 'admin-workflows', path: `/admin/${COMMUNITY_ID}/workflows` },
   { name: 'admin-modules', path: `/admin/${COMMUNITY_ID}/modules` },
-  { name: 'admin-overlays', path: `/admin/${COMMUNITY_ID}/overlays` },
+  { name: 'admin-marketplace', path: `/admin/${COMMUNITY_ID}/marketplace` },
+  { name: 'admin-browser-sources', path: `/admin/${COMMUNITY_ID}/browser-sources` },
+  { name: 'admin-domains', path: `/admin/${COMMUNITY_ID}/domains` },
+  { name: 'admin-servers', path: `/admin/${COMMUNITY_ID}/servers` },
+  { name: 'admin-mirror-groups', path: `/admin/${COMMUNITY_ID}/mirror-groups` },
+  { name: 'admin-leaderboard-config', path: `/admin/${COMMUNITY_ID}/leaderboard` },
+  { name: 'admin-community-profile', path: `/admin/${COMMUNITY_ID}/profile` },
+  { name: 'admin-reputation', path: `/admin/${COMMUNITY_ID}/reputation` },
+  { name: 'admin-ai-insights', path: `/admin/${COMMUNITY_ID}/ai-insights` },
+  { name: 'admin-ai-config', path: `/admin/${COMMUNITY_ID}/ai-config` },
+
+  // SuperAdmin pages
   { name: 'superadmin-dashboard', path: '/superadmin' },
   { name: 'superadmin-communities', path: '/superadmin/communities' },
 ];
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function getAuthToken(page) {
+  try {
+    console.log('  Step 1: Navigating to login page...');
+    // Navigate to login to get CSRF token set in cookies
+    await page.goto(`${BASE_URL}/login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await sleep(800);
+
+    console.log('  Step 2: Getting CSRF token from cookies...');
+    // Extract CSRF token from Puppeteer's cookie store
+    const cookies = await page.cookies();
+    let csrfToken = null;
+    for (const cookie of cookies) {
+      if (cookie.name === 'XSRF-TOKEN') {
+        csrfToken = cookie.value;
+        console.log(`  ✓ CSRF token found: ${csrfToken.substring(0, 8)}...`);
+        break;
+      }
+    }
+
+    if (!csrfToken) {
+      console.log('  ✗ No CSRF token in cookies, cannot proceed');
+      return false;
+    }
+
+    console.log('  Step 3: Logging in via API call from within page...');
+    // Use page.evaluate to make the API call from within the browser context
+    // This ensures cookies are properly handled
+    const result = await page.evaluate(
+      async (baseUrl, email, password, token) => {
+        try {
+          const response = await fetch(`${baseUrl}/api/v1/auth/login`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-XSRF-TOKEN': token,
+            },
+            credentials: 'include', // Include cookies
+            body: JSON.stringify({ email, password }),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.token) {
+              localStorage.setItem('token', data.token);
+              return { success: true, token: data.token };
+            }
+          } else {
+            const error = await response.text();
+            return { success: false, error: `HTTP ${response.status}: ${error}` };
+          }
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      },
+      BASE_URL,
+      'admin@localhost.net',
+      'admin123',
+      csrfToken
+    );
+
+    if (result.success) {
+      console.log('  ✓ Login successful! Token stored in localStorage');
+      await sleep(500);
+
+      // Verify we can access protected pages
+      try {
+        await page.goto(`${BASE_URL}/dashboard`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        const currentUrl = page.url();
+        if (!currentUrl.includes('/login')) {
+          console.log(`  ✓ Verified access to dashboard`);
+          return true;
+        }
+      } catch (e) {
+        console.log(`  ⚠️  Could not verify dashboard access: ${e.message}`);
+        // Still consider login successful if token is stored
+        return true;
+      }
+    } else {
+      console.error(`  ✗ Login failed: ${result.error}`);
+      return false;
+    }
+  } catch (error) {
+    console.error(`  ✗ Error during login: ${error.message}`);
+    return false;
+  }
 }
 
 async function captureScreenshots() {
@@ -41,42 +151,25 @@ async function captureScreenshots() {
   const page = await browser.newPage();
   await page.setViewport({ width: 1920, height: 1080 });
 
-  // Capture login page first (unauthenticated)
-  console.log('Capturing login page...');
-  try {
-    await page.goto(`${BASE_URL}/login`, { waitUntil: 'networkidle0', timeout: 60000 });
-    await sleep(1000);
-    await page.screenshot({ path: path.join(OUTPUT_DIR, 'login.png') });
-    console.log('  ✓ Saved login.png');
-  } catch (error) {
-    console.error('  ✗ Error capturing login:', error.message);
-  }
+  // Log in via UI (this also shows the login page)
+  console.log('Attempting to log in...');
+  const loginSuccess = await getAuthToken(page);
 
-  // Perform login through UI
-  console.log('\nLogging in...');
-  try {
-    const inputs = await page.$$('input');
-    console.log(`  Found ${inputs.length} input fields`);
-
-    if (inputs.length >= 2) {
-      await inputs[0].type('admin@localhost');  // Email/username field
-      await inputs[1].type('admin123');          // Password field
+  // Capture login page screenshot (take it after login attempt)
+  if (!loginSuccess) {
+    console.log('\nCapturing login page...');
+    try {
+      // Refresh login page if login failed
+      await page.goto(`${BASE_URL}/login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await sleep(1000);
+      await page.screenshot({ path: path.join(OUTPUT_DIR, 'login.png') });
+      console.log('  ✓ Saved login.png');
+    } catch (error) {
+      console.error('  ✗ Error capturing login:', error.message);
     }
-
-    // Click submit button
-    await page.click('button[type="submit"]');
-
-    // Wait for navigation to complete
-    await page.waitForFunction(
-      () => !window.location.pathname.includes('/login'),
-      { timeout: 30000 }
-    );
-    await sleep(2000);
-    console.log('  ✓ Login successful');
-    console.log(`  Current URL: ${page.url()}`);
-  } catch (error) {
-    console.error('  ✗ Login failed:', error.message);
-    console.log('  Continuing with available pages...');
+    console.log('\n⚠️  Could not log in, will capture public pages only');
+  } else {
+    console.log('\n✓ Successfully authenticated, capturing authenticated pages...');
   }
 
   // Capture all other pages

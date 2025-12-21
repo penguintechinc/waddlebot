@@ -25,11 +25,12 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Libraries :: Python Modules",
         "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 3.12",
         "Programming Language :: Python :: 3.13",
         "Framework :: Flask",
         "Framework :: Quart",
     ],
-    python_requires=">=3.13",
+    python_requires=">=3.12",
     install_requires=requirements,
     extras_require={
         "dev": [

@@ -2,12 +2,12 @@
 Google Translate Free Provider
 ===============================
 
-Translation provider using the free googletrans-py library.
+Translation provider using the deep-translator library.
 
 Features:
 - Free translation without API key
-- No rate limiting (unofficial API)
-- Language detection
+- Uses Google Translate under the hood
+- Language detection via langdetect
 - Runs in executor to avoid blocking
 """
 
@@ -16,7 +16,8 @@ import logging
 from typing import Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 
-from googletrans import Translator
+from deep_translator import GoogleTranslator
+from langdetect import detect, detect_langs
 
 from .base_provider import TranslationProvider, TranslationResult
 
@@ -25,11 +26,11 @@ logger = logging.getLogger(__name__)
 
 class GoogleTransProvider(TranslationProvider):
     """
-    Free Google Translate provider using googletrans-py library.
+    Free Google Translate provider using deep-translator library.
 
-    This provider uses Google's unofficial translate API and does not
-    require an API key. All blocking operations are run in an executor
-    to avoid blocking the event loop.
+    This provider uses Google's translation service via deep-translator
+    and does not require an API key. All blocking operations are run
+    in an executor to avoid blocking the event loop.
     """
 
     def __init__(self, executor: Optional[ThreadPoolExecutor] = None):
@@ -41,16 +42,15 @@ class GoogleTransProvider(TranslationProvider):
                      If None, a default executor will be used.
         """
         super().__init__("googletrans")
-        self.translator = Translator()
         self.executor = executor
-        logger.info("Initialized GoogleTransProvider (free/unofficial API)")
+        logger.info("Initialized GoogleTransProvider (deep-translator)")
 
     async def detect_language(
         self,
         text: str
     ) -> Tuple[str, float]:
         """
-        Detect the language of the given text using Google Translate.
+        Detect the language of the given text using langdetect.
 
         Args:
             text: Text to detect language for
@@ -66,7 +66,7 @@ class GoogleTransProvider(TranslationProvider):
             raise ValueError("Text cannot be empty")
 
         try:
-            # Run translation detection in executor to avoid blocking
+            # Run detection in executor to avoid blocking
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 self.executor,
@@ -86,7 +86,7 @@ class GoogleTransProvider(TranslationProvider):
         source_lang: Optional[str] = None
     ) -> TranslationResult:
         """
-        Translate text using Google Translate.
+        Translate text using Google Translate via deep-translator.
 
         Args:
             text: Text to translate
@@ -184,7 +184,7 @@ class GoogleTransProvider(TranslationProvider):
 
     def _detect_sync(self, text: str) -> Tuple[str, float]:
         """
-        Synchronous language detection wrapper.
+        Synchronous language detection using langdetect.
 
         Args:
             text: Text to detect
@@ -193,19 +193,17 @@ class GoogleTransProvider(TranslationProvider):
             Tuple of (language_code, confidence_score)
         """
         try:
-            detection = self.translator.detect(text)
-            # googletrans returns detection as Detected object
-            # with lang and confidence attributes
-            lang_code = detection[0] if isinstance(detection, tuple) else detection.lang
-            confidence = detection[1] if isinstance(detection, tuple) else getattr(
-                detection, 'confidence', 0.8
-            )
-
-            # Normalize confidence (googletrans doesn't always provide it)
-            if not isinstance(confidence, float):
-                confidence = 0.8
-
-            return (lang_code, min(1.0, max(0.0, confidence)))
+            # Use detect_langs for confidence score
+            detections = detect_langs(text)
+            if detections:
+                top_detection = detections[0]
+                lang_code = top_detection.lang
+                confidence = top_detection.prob
+                return (lang_code, min(1.0, max(0.0, confidence)))
+            else:
+                # Fallback to simple detect
+                lang_code = detect(text)
+                return (lang_code, 0.8)
 
         except Exception as e:
             logger.error(f"Sync detection error: {e}")
@@ -218,7 +216,7 @@ class GoogleTransProvider(TranslationProvider):
         source_lang: str
     ) -> str:
         """
-        Synchronous translation wrapper.
+        Synchronous translation using deep-translator.
 
         Args:
             text: Text to translate
@@ -229,15 +227,8 @@ class GoogleTransProvider(TranslationProvider):
             Translated text
         """
         try:
-            result = self.translator.translate(
-                text,
-                src_language=source_lang,
-                dest_language=target_lang
-            )
-
-            # googletrans returns a Translated object with text attribute
-            translated_text = result[0] if isinstance(result, tuple) else result.text
-
+            translator = GoogleTranslator(source=source_lang, target=target_lang)
+            translated_text = translator.translate(text)
             return translated_text
 
         except Exception as e:

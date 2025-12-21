@@ -1,7 +1,7 @@
 # Lambda Action Module Dockerfile
 # Build from parent directory: docker build -f action/pushing/lambda_action_module/Dockerfile -t waddlebot/lambda-action:latest .
 
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 # Set working directory
 WORKDIR /app
@@ -17,6 +17,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY action/pushing/lambda_action_module /app/
+
+# Compile Protobuf messages
+RUN python -m grpc_tools.protoc -I./grpc_proto --python_out=./grpc_proto --grpc_python_out=./grpc_proto ./grpc_proto/lambda_action.proto
 
 # Create log directory
 RUN mkdir -p /var/log/waddlebotlog

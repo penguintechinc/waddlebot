@@ -364,6 +364,10 @@ router.delete('/:communityId/security/*', requireCommunityAdmin, async (req, res
   }
 });
 
+// Translation configuration routes
+router.get('/:communityId/translation/config', requireCommunityAdmin, adminController.getTranslationConfig);
+router.put('/:communityId/translation/config', requireCommunityAdmin, adminController.updateTranslationConfig);
+
 // Workflow routes
 router.use('/:communityId/workflows', workflowRoutes);
 

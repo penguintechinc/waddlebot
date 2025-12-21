@@ -19,7 +19,7 @@ google-auth-httplib2==0.2.0
 pyjwt==2.8.0
 
 # PostgreSQL support
-psycopg2-binary==2.9.9
+psycopg2-binary>=2.9.10
 
 # Utilities
 python-dotenv==1.0.0

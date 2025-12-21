@@ -1,6 +1,6 @@
-# Build from parent directory: docker build -f slack_module_flask/Dockerfile -t waddlebot/slack:latest .
+# Build from parent directory: docker build -f slack_module/Dockerfile -t waddlebot/slack:latest .
 
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -11,8 +11,8 @@ COPY libs/flask_core /app/libs/flask_core
 RUN cd /app/libs/flask_core && pip install --no-cache-dir .
 
 # Copy module files
-COPY slack_module_flask/requirements.txt /app/
-COPY slack_module_flask /app/
+COPY trigger/receiver/slack_module/requirements.txt /app/
+COPY trigger/receiver/slack_module /app/
 
 # Install module dependencies
 RUN pip install --no-cache-dir -r requirements.txt

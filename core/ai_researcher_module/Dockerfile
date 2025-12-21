@@ -1,6 +1,6 @@
 # Build from parent directory: docker build -f core/ai_researcher_module/Dockerfile -t waddlebot/ai-researcher:latest .
 
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 

@@ -129,54 +129,99 @@ class WaddleAIProvider(TranslationProvider):
 
         try:
             # Prepare AI request for language detection
-            system_prompt = (
-                "You are a language detection expert. "
-                "Detect the language of the given text. "
-                "Return ONLY the language code (e.g., 'en', 'es', 'fr') and confidence (0-1). "
-                "Format: LANG_CODE:CONFIDENCE\nExample: es:0.95"
-            )
+            # Using Ollama native API format for direct Ollama integration
+            prompt = f"""You are a language detection expert. Detect the language of the following text.
+Return ONLY the ISO 639-1 language code (e.g., 'en', 'es', 'fr', 'de', 'ja', 'ko', 'zh', 'ru', 'ar') and your confidence (0.0-1.0).
+Format: LANG_CODE:CONFIDENCE
+Example: es:0.95
 
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Detect language: {text[:100]}"}
-            ]
+Text to analyze: "{text[:100]}"
 
-            payload = {
-                "model": self.model,
-                "messages": messages,
-                "temperature": self.temperature,
-                "max_tokens": 20  # Very short response needed
-            }
+Response (format LANG_CODE:CONFIDENCE only):"""
+
+            # Detect if using Ollama directly (port 11434) or OpenAI-compatible proxy
+            is_ollama_direct = ':11434' in self.base_url or 'ollama' in self.base_url.lower()
 
             async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.base_url}/v1/chat/completions",
-                    headers=self.headers,
-                    json=payload,
-                    timeout=self.timeout
-                )
+                if is_ollama_direct:
+                    # Use Ollama native API
+                    payload = {
+                        "model": self.model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {
+                            "temperature": self.temperature,
+                            "num_predict": 20  # Short response
+                        }
+                    }
+                    response = await client.post(
+                        f"{self.base_url}/api/generate",
+                        json=payload,
+                        timeout=self.timeout
+                    )
+                else:
+                    # Use OpenAI-compatible API
+                    messages = [
+                        {"role": "system", "content": "You are a language detection expert."},
+                        {"role": "user", "content": prompt}
+                    ]
+                    payload = {
+                        "model": self.model,
+                        "messages": messages,
+                        "temperature": self.temperature,
+                        "max_tokens": 20
+                    }
+                    response = await client.post(
+                        f"{self.base_url}/v1/chat/completions",
+                        headers=self.headers,
+                        json=payload,
+                        timeout=self.timeout
+                    )
 
                 if response.status_code == 200:
                     data = response.json()
-                    content = data['choices'][0]['message']['content'].strip()
+                    # Handle both Ollama and OpenAI response formats
+                    if is_ollama_direct:
+                        content = data.get('response', '').strip()
+                    else:
+                        content = data['choices'][0]['message']['content'].strip()
 
                     # Parse response (format: LANG_CODE:CONFIDENCE)
+                    # Handle variations like "en:0.95", "en: 0.95", "English (en):0.95"
                     parts = content.split(':')
                     if len(parts) >= 2:
-                        lang_code = parts[0].strip().lower()
+                        # Extract language code (take first 2-3 lowercase letters)
+                        lang_part = parts[0].strip().lower()
+                        # Remove any parentheses content
+                        if '(' in lang_part:
+                            lang_part = lang_part.split('(')[0].strip()
+                        # Take only the first 2-3 chars that look like a language code
+                        lang_code = ''.join(c for c in lang_part if c.isalpha())[:3]
+                        if len(lang_code) < 2:
+                            lang_code = lang_part[:2]
+
                         try:
-                            confidence = float(parts[1].strip())
+                            # Extract confidence (first number-like part)
+                            conf_part = parts[1].strip()
+                            # Remove any trailing text after the number
+                            conf_str = ''.join(c for c in conf_part[:5] if c.isdigit() or c == '.')
+                            confidence = float(conf_str) if conf_str else 0.8
                             confidence = min(1.0, max(0.0, confidence))
-                        except ValueError:
+                        except (ValueError, IndexError):
                             confidence = 0.8
 
                         logger.debug(
                             f"WaddleAI detected language: {lang_code} "
-                            f"(confidence: {confidence})"
+                            f"(confidence: {confidence:.2f})"
                         )
                         return (lang_code, confidence)
 
-                    # Fallback if parsing fails
+                    # Fallback if parsing fails - try to extract just language code
+                    lang_code = ''.join(c for c in content.lower() if c.isalpha())[:2]
+                    if lang_code:
+                        logger.warning(f"Partial parse of language detection: {content} -> {lang_code}")
+                        return (lang_code, 0.7)
+
                     logger.warning(f"Failed to parse language detection: {content}")
                     return ("unknown", 0.5)
 

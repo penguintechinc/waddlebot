@@ -1,5 +1,5 @@
-# YouTube Action Module - Python 3.13 Container
-FROM python:3.13-slim
+# YouTube Action Module - Python 3.12 Container
+FROM python:3.12-slim
 
 # Set working directory
 WORKDIR /app
@@ -11,18 +11,19 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install dependencies
-COPY requirements.txt /app/
+COPY action/pushing/youtube_action_module/requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY . /app/
+COPY action/pushing/youtube_action_module/ /app/
 
 # Generate gRPC protobuf files
 RUN python -m grpc_tools.protoc \
     -I./proto \
     --python_out=./proto \
     --grpc_python_out=./proto \
-    ./proto/youtube_action.proto
+    ./proto/youtube_action.proto && \
+    sed -i 's/^import youtube_action_pb2/from proto import youtube_action_pb2/' ./proto/youtube_action_pb2_grpc.py
 
 # Create log directory
 RUN mkdir -p /var/log/waddlebotlog

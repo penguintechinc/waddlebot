@@ -80,7 +80,11 @@ class TranslationService:
         self._preprocessor: Optional[TranslationPreprocessor] = None
         self._ai_decision_service: Optional[AIDecisionService] = None
 
-        logger.info("TranslationService initialized with multi-level caching")
+        # Ensemble language detector (initialized lazily)
+        self._ensemble_detector = None
+        self._ensemble_detector_initialized = False
+
+        logger.info("TranslationService initialized with multi-level caching and ensemble detection")
 
     def _initialize_providers(self, config: Dict) -> None:
         """
@@ -93,21 +97,24 @@ class TranslationService:
             return
 
         try:
-            # Import providers only when needed
-            from services.translation_providers.google_cloud_provider import GoogleCloudProvider
-            from services.translation_providers.google_trans_provider import GoogleTransProvider
+            # Import providers only when needed (some are optional)
+            from services.translation_providers.googletrans_provider import GoogleTransProvider
             from services.translation_providers.waddleai_provider import WaddleAIProvider
+            from services.translation_providers import GOOGLE_CLOUD_AVAILABLE
 
-            # Initialize Google Cloud provider if API key configured
+            # Initialize Google Cloud provider if API key configured AND package available
             google_api_key = config.get('google_api_key_encrypted')
-            if google_api_key:
+            if google_api_key and GOOGLE_CLOUD_AVAILABLE:
                 try:
+                    from services.translation_providers.google_cloud_provider import GoogleCloudProvider
                     self._providers['google_cloud'] = GoogleCloudProvider(
                         api_key=google_api_key
                     )
                     logger.info("Google Cloud Translation API provider initialized")
                 except Exception as e:
                     logger.warning(f"Failed to initialize Google Cloud provider: {e}")
+            elif google_api_key and not GOOGLE_CLOUD_AVAILABLE:
+                logger.info("Google Cloud provider not available (google-cloud-translate not installed)")
 
             # Initialize free GoogleTrans provider (always available)
             try:
@@ -188,6 +195,10 @@ class TranslationService:
 
             # Initialize providers if needed
             self._initialize_providers(config)
+
+            # Initialize ensemble detector if needed
+            if not self._ensemble_detector_initialized:
+                self._initialize_ensemble_detector()
 
             # Initialize preprocessor if needed
             self._initialize_preprocessor(config)
@@ -315,6 +326,27 @@ class TranslationService:
             logger.error(f"Translation error: {e}", exc_info=True)
             return None
 
+    def _initialize_ensemble_detector(self) -> None:
+        """
+        Initialize the ensemble language detector.
+
+        Lazy initialization to avoid blocking on startup.
+        """
+        if self._ensemble_detector_initialized:
+            return
+
+        try:
+            from services.translation_providers.ensemble_detector import EnsembleLanguageDetector
+
+            self._ensemble_detector = EnsembleLanguageDetector()
+            self._ensemble_detector_initialized = True
+            logger.info("Ensemble language detector initialized")
+
+        except ImportError as e:
+            logger.warning(f"Failed to initialize ensemble detector: {e}. Falling back to provider detection.")
+            self._ensemble_detector = None
+            self._ensemble_detector_initialized = True
+
     def _initialize_preprocessor(self, config: Dict) -> None:
         """
         Initialize the translation preprocessor.
@@ -355,7 +387,17 @@ class TranslationService:
 
     async def _detect_language(self, text: str) -> Tuple[str, float]:
         """
-        Detect language of text using available providers.
+        Detect language of text using tiered confidence approach.
+
+        Tiered Confidence Strategy:
+        - <70% confidence: Return as-is (will be rejected by threshold)
+        - 70-90% confidence: Verify with WaddleAI/TinyLlama for second opinion
+        - 90%+ confidence: Accept directly (high confidence from ensemble)
+
+        Priority:
+        1. Ensemble detector (fastText + Lingua + langdetect) for high confidence
+        2. AI verification for uncertain detections (70-90%)
+        3. Provider detection fallback if ensemble fails
 
         Args:
             text: Text to detect language for
@@ -364,14 +406,49 @@ class TranslationService:
             Tuple of (language_code, confidence_score)
 
         Raises:
-            Exception: If all providers fail
+            Exception: If all detection methods fail
         """
-        # Try each provider in order until one succeeds
+        # Initialize ensemble detector if needed
+        if not self._ensemble_detector_initialized:
+            self._initialize_ensemble_detector()
+
+        # Try ensemble detector first (highest accuracy)
+        if self._ensemble_detector:
+            try:
+                lang_code, confidence = await self._ensemble_detector.detect_language(text)
+                logger.debug(
+                    f"Language detected as '{lang_code}' with {confidence:.2%} "
+                    f"confidence via ensemble detector"
+                )
+
+                # Tiered confidence handling
+                if confidence >= 0.90:
+                    # High confidence - accept directly
+                    logger.debug(f"High confidence ({confidence:.2%}) - accepting without AI verification")
+                    return lang_code, confidence
+
+                elif confidence >= 0.70:
+                    # Medium confidence (70-90%) - verify with AI
+                    ai_result = await self._verify_with_ai(text, lang_code, confidence)
+                    if ai_result:
+                        return ai_result
+                    # If AI verification fails, return original detection
+                    return lang_code, confidence
+
+                else:
+                    # Low confidence (<70%) - return as-is (will be rejected by threshold)
+                    logger.debug(f"Low confidence ({confidence:.2%}) - no AI verification needed")
+                    return lang_code, confidence
+
+            except Exception as e:
+                logger.warning(f"Ensemble detection failed, falling back to providers: {e}")
+
+        # Fallback to provider detection
         for provider_name, provider in self._providers.items():
             try:
                 lang_code, confidence = await provider.detect_language(text)
                 logger.debug(
-                    f"Language detected as '{lang_code}' with {confidence:.2f} "
+                    f"Language detected as '{lang_code}' with {confidence:.2%} "
                     f"confidence via {provider_name}"
                 )
                 return lang_code, confidence
@@ -381,9 +458,70 @@ class TranslationService:
                 )
                 continue
 
-        # If all providers fail, default to 'unknown' with low confidence
-        logger.error("All language detection providers failed")
+        # If all methods fail, default to 'unknown' with low confidence
+        logger.error("All language detection methods (ensemble + providers) failed")
         return 'unknown', 0.0
+
+    async def _verify_with_ai(
+        self,
+        text: str,
+        detected_lang: str,
+        ensemble_confidence: float
+    ) -> Optional[Tuple[str, float]]:
+        """
+        Verify uncertain language detection with WaddleAI/TinyLlama.
+
+        Called when ensemble detection confidence is between 70-90%.
+        Uses AI to get a second opinion and either confirm or override.
+
+        Args:
+            text: Text to verify language for
+            detected_lang: Language detected by ensemble
+            ensemble_confidence: Confidence from ensemble detection
+
+        Returns:
+            Tuple of (language_code, confidence) if AI verification succeeds,
+            None if AI is unavailable or fails (fall back to ensemble result)
+        """
+        waddleai = self._providers.get('waddleai')
+        if not waddleai:
+            logger.debug("WaddleAI not available for verification, using ensemble result")
+            return None
+
+        try:
+            # Get AI's opinion
+            ai_lang, ai_confidence = await waddleai.detect_language(text)
+
+            logger.info(
+                f"AI verification: ensemble={detected_lang} ({ensemble_confidence:.2%}), "
+                f"AI={ai_lang} ({ai_confidence:.2%})"
+            )
+
+            if ai_lang == detected_lang:
+                # Agreement - boost confidence to 95%
+                logger.debug(f"AI agrees with ensemble ({detected_lang}) - boosting confidence")
+                return detected_lang, 0.95
+
+            else:
+                # Disagreement - use AI's opinion if more confident
+                if ai_confidence > ensemble_confidence:
+                    logger.info(
+                        f"AI disagrees and is more confident - using AI result: "
+                        f"{ai_lang} ({ai_confidence:.2%})"
+                    )
+                    return ai_lang, ai_confidence
+                else:
+                    # Ensemble was more confident, but mark as uncertain
+                    logger.debug(
+                        f"AI disagrees but less confident - keeping ensemble result "
+                        f"with reduced confidence"
+                    )
+                    # Reduce confidence due to disagreement
+                    return detected_lang, ensemble_confidence * 0.9
+
+        except Exception as e:
+            logger.warning(f"AI verification failed: {e}")
+            return None
 
     async def _translate_with_fallback(
         self,

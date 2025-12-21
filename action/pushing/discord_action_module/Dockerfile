@@ -1,7 +1,7 @@
 # Discord Action Module Dockerfile
-# Build: docker build -f Dockerfile -t waddlebot/discord-action:latest .
+# Build: docker compose build discord-action
 
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 # Set working directory
 WORKDIR /app
@@ -12,18 +12,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY requirements.txt /app/
+COPY action/pushing/discord_action_module/requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY . /app/
+COPY action/pushing/discord_action_module/ /app/
 
 # Generate protobuf Python files
 RUN python -m grpc_tools.protoc \
     -I./proto \
     --python_out=./proto \
     --grpc_python_out=./proto \
-    ./proto/discord_action.proto
+    ./proto/discord_action.proto && \
+    sed -i 's/^import discord_action_pb2/from proto import discord_action_pb2/' ./proto/discord_action_pb2_grpc.py
 
 # Create log directory
 RUN mkdir -p /var/log/waddlebotlog
