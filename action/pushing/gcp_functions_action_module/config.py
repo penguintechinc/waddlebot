@@ -9,10 +9,10 @@ from typing import Optional
 class Config:
     """Configuration class for GCP Functions Action Module."""
 
-    # GCP Configuration
+    # GCP Configuration (optional in testing mode)
     GCP_PROJECT_ID: str = os.getenv("GCP_PROJECT_ID", "")
     GCP_REGION: str = os.getenv("GCP_REGION", "us-central1")
-    GCP_SERVICE_ACCOUNT_KEY: str = os.getenv("GCP_SERVICE_ACCOUNT_KEY", "")  # JSON string or path
+    GCP_SERVICE_ACCOUNT_KEY: str = os.getenv("GCP_SERVICE_ACCOUNT_KEY", "")  # JSON string or path (optional in testing)
     GCP_SERVICE_ACCOUNT_EMAIL: str = os.getenv("GCP_SERVICE_ACCOUNT_EMAIL", "")
 
     # GCP API Configuration
@@ -69,7 +69,7 @@ class Config:
     def validate(cls) -> None:
         """Validate required configuration."""
         if cls.TESTING_MODE:
-            # Lenient validation for testing
+            # Lenient validation for testing - only DATABASE_URL required
             if not cls.DATABASE_URL:
                 raise ValueError("DATABASE_URL is required")
             return

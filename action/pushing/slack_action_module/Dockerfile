@@ -10,6 +10,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
+    postgresql-client \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -34,13 +35,16 @@ COPY action/pushing/slack_action_module/services /app/services/
 # Create log directory
 RUN mkdir -p /var/log/waddlebotlog
 
+# Create PyDAL migration log directory
+RUN mkdir -p /tmp/pydal
+
 # Copy standard healthcheck script
 COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
 RUN chmod 755 /usr/local/bin/healthcheck.py
 
 # Create non-root user
 RUN useradd -m -u 1000 waddlebot && \
-    chown -R waddlebot:waddlebot /app /var/log/waddlebotlog
+    chown -R waddlebot:waddlebot /app /var/log/waddlebotlog /tmp/pydal
 
 # Switch to non-root user
 USER waddlebot

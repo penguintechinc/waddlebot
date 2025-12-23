@@ -6,6 +6,22 @@ import multer from 'multer';
 import * as adminController from '../controllers/adminController.js';
 import * as activityController from '../controllers/activityController.js';
 import * as communityController from '../controllers/communityController.js';
+import * as communityProfileController from '../controllers/communityProfileController.js';
+import * as overlayController from '../controllers/overlayController.js';
+import * as loyaltyController from '../controllers/loyaltyController.js';
+import * as announcementController from '../controllers/announcementController.js';
+import { requireAuth, requireCommunityAdmin } from '../middleware/auth.js';
+import { validators, validateRequest } from '../middleware/validation.js';
+import workflowRoutes from './workflow.js';
+
+const router = Router();
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+});
+
+router.use(requireAuth);
+
 // Server link requests
 router.get('/:communityId/server-link-requests', requireCommunityAdmin, adminController.getServerLinkRequests);
 router.post('/:communityId/server-link-requests/:requestId/approve', requireCommunityAdmin, adminController.approveServerLinkRequest);

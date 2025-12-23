@@ -39,6 +39,8 @@ class OllamaProvider:
     timeout: int = field(default_factory=lambda: Config.OLLAMA_TIMEOUT)
     cert_path: str = field(default_factory=lambda: Config.OLLAMA_CERT_PATH)
     verify_ssl: bool = field(default_factory=lambda: Config.OLLAMA_VERIFY_SSL)
+    base_url: str = field(init=False)
+    ssl_context: Optional[ssl.SSLContext] = field(init=False, default=None)
 
     def __post_init__(self):
         """Initialize provider after dataclass creation"""

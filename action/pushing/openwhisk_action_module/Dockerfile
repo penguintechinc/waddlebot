@@ -24,10 +24,22 @@ COPY action/pushing/openwhisk_action_module /app/
 # Create log directory
 RUN mkdir -p /var/log/waddlebotlog
 
-# Create non-root user
-RUN groupadd -r waddlebot && useradd -r -g waddlebot -m waddlebot
+# Copy standard healthcheck script
+COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
+RUN chmod 755 /usr/local/bin/healthcheck.py
 
-# Set proper permissions for app directory and log directory
-RUN chown -R waddlebot:waddlebot /app /var/log/waddlebotlog
+# Create non-root user
+RUN useradd -m -u 1000 waddlebot && \
+    chown -R waddlebot:waddlebot /app /var/log/waddlebotlog
+
+# Switch to non-root user
+USER waddlebot
+
+# Expose ports
+EXPOSE 8082
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python3 /usr/local/bin/healthcheck.py http://localhost:8082/health
 
 CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8082", "--workers", "4"]

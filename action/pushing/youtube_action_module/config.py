@@ -17,10 +17,11 @@ class Config:
     REST_PORT: int = int(os.getenv("REST_PORT", "8073"))
 
     # Database
-    DATABASE_URL: str = os.getenv(
+    _raw_db_url = os.getenv(
         "DATABASE_URL",
         "postgresql://user:pass@localhost:5432/waddlebot"
     )
+    DATABASE_URL: str = _raw_db_url.replace("postgresql://", "postgres://")
 
     # YouTube API Configuration
     YOUTUBE_API_KEY: Optional[str] = os.getenv("YOUTUBE_API_KEY")
@@ -94,7 +95,3 @@ class Config:
 
         if errors:
             raise ValueError(f"Configuration errors: {', '.join(errors)}")
-
-
-# Validate config on import
-Config.validate()

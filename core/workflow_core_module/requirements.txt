@@ -1,8 +1,8 @@
 # WaddleBot Workflow Core Module - Dependencies
 
 # Core Framework
-quart==0.19.4
-hypercorn==0.16.0
+quart>=0.19.5
+hypercorn>=0.16.0
 grpcio>=1.62.0
 grpcio-tools>=1.62.0
 

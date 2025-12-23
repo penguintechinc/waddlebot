@@ -19,10 +19,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY action/pushing/lambda_action_module /app/
 
 # Compile Protobuf messages
-RUN python -m grpc_tools.protoc -I./grpc_proto --python_out=./grpc_proto --grpc_python_out=./grpc_proto ./grpc_proto/lambda_action.proto
+RUN python -m grpc_tools.protoc -I./grpc_proto --python_out=./grpc_proto --grpc_python_out=./grpc_proto ./grpc_proto/lambda_action.proto && \
+    sed -i 's/import lambda_action_pb2/from grpc_proto import lambda_action_pb2/g' ./grpc_proto/lambda_action_pb2_grpc.py
 
 # Create log directory
 RUN mkdir -p /var/log/waddlebotlog
+
+# Copy standard healthcheck script
+COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
+RUN chmod 755 /usr/local/bin/healthcheck.py
 
 # Create non-root user
 RUN groupadd -r waddlebot && useradd -r -g waddlebot -m waddlebot
@@ -30,4 +35,11 @@ RUN groupadd -r waddlebot && useradd -r -g waddlebot -m waddlebot
 # Set proper permissions for app directory and log directory
 RUN chown -R waddlebot:waddlebot /app /var/log/waddlebotlog
 
+# Switch to non-root user
+USER waddlebot
+
+# Expose port
+EXPOSE 8080
+
+# Run application
 CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8080", "--workers", "4"]

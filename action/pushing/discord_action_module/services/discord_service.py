@@ -46,6 +46,7 @@ class DiscordService:
             Field("request_data", "json"),
             Field("response_data", "json"),
             Field("created_at", "datetime", default=datetime.utcnow),
+            migrate=False,
         )
 
     async def _get_session(self) -> aiohttp.ClientSession:

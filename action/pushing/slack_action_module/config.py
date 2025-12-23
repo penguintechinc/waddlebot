@@ -14,7 +14,8 @@ class Config:
     SLACK_APP_TOKEN: str = os.getenv('SLACK_APP_TOKEN', '')  # For socket mode if needed
 
     # Database Configuration
-    DATABASE_URL: str = os.getenv('DATABASE_URL', 'postgresql://user:pass@localhost:5432/waddlebot')
+    _raw_db_url = os.getenv('DATABASE_URL', 'postgresql://user:pass@localhost:5432/waddlebot')
+    DATABASE_URL: str = _raw_db_url.replace("postgresql://", "postgres://")
 
     # gRPC Configuration
     GRPC_PORT: int = int(os.getenv('GRPC_PORT', '50052'))

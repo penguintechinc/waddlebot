@@ -44,7 +44,7 @@ EXPOSE 8073 50054
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python3 /usr/local/bin/healthcheck.py http://localhost:8073/healthz
+    CMD python3 /usr/local/bin/healthcheck.py http://localhost:8073/health
 
 # Run with Hypercorn
 CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8073", "--workers", "4"]

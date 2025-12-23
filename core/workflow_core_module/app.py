@@ -69,6 +69,10 @@ def _run_grpc_server(
     try:
         import workflow_pb2_grpc
 
+        # Create event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         # Create gRPC service handler
         handler = WorkflowServiceServicer(
             workflow_engine=workflow_engine,
@@ -97,8 +101,8 @@ def _run_grpc_server(
         )
 
         # Run server in event loop
-        asyncio.new_event_loop().run_until_complete(server.start())
-        asyncio.get_event_loop().run_forever()
+        loop.run_until_complete(server.start())
+        loop.run_forever()
 
     except Exception as e:
         logger.error(

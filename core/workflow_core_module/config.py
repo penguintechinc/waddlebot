@@ -17,18 +17,18 @@ class Config:
 
     # Database Configuration
     DATABASE_URI = os.getenv(
-        'DATABASE_URI',
-        'postgresql://waddlebot:password@localhost:5432/waddlebot'
+        'DATABASE_URL',
+        'postgresql://waddlebot:password@postgres:5432/waddlebot'
     )
     READ_REPLICA_URIS = os.getenv(
         'READ_REPLICA_URIS',
-        'postgresql://waddlebot:password@localhost:5433/waddlebot'
+        'postgresql://waddlebot:password@postgres:5433/waddlebot'
     ).split(',')
 
     # Redis Configuration
     REDIS_URL = os.getenv(
         'REDIS_URL',
-        'redis://localhost:6379/0'
+        'redis://redis:6379/0'
     )
 
     # Router Service Configuration

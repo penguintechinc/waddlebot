@@ -32,3 +32,26 @@ class Config:
 
     # Use Socket Mode instead of HTTP webhooks (for development)
     USE_SOCKET_MODE = os.getenv('USE_SOCKET_MODE', 'false').lower() == 'true'
+
+    @classmethod
+    def validate(cls):
+        """
+        Validate configuration and return errors and warnings separately.
+
+        Returns:
+            Tuple of (error_list, warning_list)
+        """
+        errors = []
+        warnings = []
+
+        if not cls.DATABASE_URL:
+            errors.append("DATABASE_URL is required")
+
+        # Optional credentials - warn but don't fail startup
+        if not cls.SLACK_BOT_TOKEN:
+            warnings.append("SLACK_BOT_TOKEN not configured - Slack API calls will fail")
+
+        if not cls.SLACK_SIGNING_SECRET:
+            warnings.append("SLACK_SIGNING_SECRET not configured - webhook verification will be skipped")
+
+        return errors, warnings

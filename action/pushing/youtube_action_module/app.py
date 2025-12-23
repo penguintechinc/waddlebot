@@ -26,8 +26,48 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Initialize Flask app
-app = Quart(__name__)
+# Custom config dict that provides Quart defaults
+class DefaultConfig(dict):
+    """Dict subclass that provides Quart defaults on missing keys."""
+
+    def __init__(self, root_path=None, defaults=None):
+        """Initialize with root_path and defaults (Flask signature)."""
+        super().__init__()
+        if defaults:
+            self.update(defaults)
+        # Always set Quart required keys
+        self.setdefault('PROVIDE_AUTOMATIC_OPTIONS', True)
+        self.setdefault('JSON_SORT_KEYS', False)
+        self.setdefault('PROPAGATE_EXCEPTIONS', True)
+        self.setdefault('MAX_CONTENT_LENGTH', 16 * 1024 * 1024)
+
+    def __getitem__(self, key):
+        """Provide defaults for Quart required keys."""
+        try:
+            return super().__getitem__(key)
+        except KeyError:
+            # Provide Quart defaults for required keys (fallback)
+            defaults = {
+                'PROVIDE_AUTOMATIC_OPTIONS': True,
+                'JSON_SORT_KEYS': False,
+                'PROPAGATE_EXCEPTIONS': True,
+                'MAX_CONTENT_LENGTH': 16 * 1024 * 1024,
+            }
+            if key in defaults:
+                return defaults[key]
+            raise
+
+# Initialize Flask/Quart app with pre-populated config dict
+class PreConfiguredQuart(Quart):
+    """Quart with pre-configured defaults to avoid __init__ KeyError."""
+
+    config_class = DefaultConfig
+
+    def __init__(self, *args, **kwargs):
+        """Initialize with custom config class."""
+        super().__init__(*args, **kwargs)
+
+app = PreConfiguredQuart(__name__)
 app.config["SECRET_KEY"] = Config.MODULE_SECRET_KEY
 
 

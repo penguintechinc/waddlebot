@@ -85,7 +85,7 @@ async def startup():
     reputation_pb2_grpc.add_ReputationServiceServicer_to_server(servicer, grpc_server)
 
     grpc_server_address = f"0.0.0.0:{Config.GRPC_PORT}"
-    await grpc_server.add_insecure_port(grpc_server_address)
+    grpc_server.add_insecure_port(grpc_server_address)
     await grpc_server.start()
 
     logger.system(

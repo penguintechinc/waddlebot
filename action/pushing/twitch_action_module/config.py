@@ -15,10 +15,11 @@ class Config:
     TWITCH_API_BASE_URL: str = "https://api.twitch.tv/helix"
 
     # Database Configuration
-    DATABASE_URL: str = os.getenv(
+    _raw_db_url = os.getenv(
         "DATABASE_URL",
         "postgresql://waddlebot:password@localhost:5432/waddlebot"
     )
+    DATABASE_URL: str = _raw_db_url.replace("postgresql://", "postgres://")
 
     # Server Configuration
     GRPC_PORT: int = int(os.getenv("GRPC_PORT", "50053"))

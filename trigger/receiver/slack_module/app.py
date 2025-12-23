@@ -39,6 +39,16 @@ async def startup():
     global dal, slack_bolt, slack_handler
     logger.system("Starting slack_module", action="startup")
 
+    # Validate configuration
+    errors, warnings = Config.validate()
+    if errors:
+        logger.error(f"Configuration errors: {errors}")
+        raise RuntimeError(f"Configuration errors: {errors}")
+
+    if warnings:
+        for warning in warnings:
+            logger.warning(warning)
+
     # Initialize database
     dal = init_database(Config.DATABASE_URL)
     app.config['dal'] = dal

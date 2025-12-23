@@ -391,6 +391,6 @@ class SlackBoltService:
             await self._socket_handler.close_async()
 
     def get_quart_handler(self):
-        """Get handler for Quart integration"""
-        from slack_bolt.adapter.quart import SlackRequestHandler
+        """Get handler for Quart integration using Flask adapter wrapper"""
+        from slack_bolt.adapter.flask import SlackRequestHandler
         return SlackRequestHandler(self.app)

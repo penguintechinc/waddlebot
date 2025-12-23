@@ -71,6 +71,18 @@ def verify_jwt(token: str) -> tuple[bool, dict | str]:
         return False, f"Invalid token: {str(e)}"
 
 
+def check_credentials() -> tuple[bool, dict | None]:
+    """
+    Check if required credentials are configured for API calls
+
+    Returns:
+        Tuple of (is_configured, error_response_or_none)
+    """
+    if not Config.DISCORD_BOT_TOKEN:
+        return False, jsonify({"error": "Discord credentials not configured"}), 503
+    return True, None
+
+
 def require_auth(f):
     """Decorator to require JWT authentication"""
 
@@ -158,6 +170,11 @@ async def send_message_rest():
         "embed": {...}  // optional
     }
     """
+    # Check if Discord credentials are configured
+    configured, error_response = check_credentials()
+    if not configured:
+        return error_response
+
     data = await request.get_json()
     channel_id = data.get("channel_id")
     content = data.get("content")
@@ -402,13 +419,20 @@ async def serve_rest():
 async def main():
     """Main entry point"""
     # Validate configuration
-    errors = Config.validate()
+    errors, warnings = Config.validate()
     if errors:
         logger.error(f"Configuration errors: {errors}")
         sys.exit(1)
 
+    if warnings:
+        for warning in warnings:
+            logger.warning(warning)
+
     logger.info(f"Starting {Config.MODULE_NAME} v{Config.MODULE_VERSION}")
     logger.info(f"Configuration: {Config.get_summary()}")
+
+    # TODO: Implement periodic polling from hub module for credential updates
+    # This will allow dynamic credential provisioning without service restart
 
     try:
         # Run both gRPC and REST servers

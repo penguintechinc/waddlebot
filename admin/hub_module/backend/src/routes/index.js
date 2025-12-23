@@ -13,6 +13,18 @@ import platformRoutes from './platform.js';
 import superadminRoutes from './superadmin.js';
 import internalRoutes from './internal.js';
 import cookieConsentRoutes from './cookieConsent.js';
+
+const router = Router();
+
+// Public routes (no auth required)
+router.use('/', publicRoutes);
+
+// Cookie consent routes
+router.use('/cookie', cookieConsentRoutes);
+
+// Auth routes
+router.use('/auth', authRoutes);
+
 // User routes (auth required - identity linking, profile)
 router.use('/user', userRoutes);
 

@@ -17,10 +17,11 @@ class Config:
     DISCORD_API_BASE: str = f"https://discord.com/api/v{DISCORD_API_VERSION}"
 
     # Database Configuration
-    DATABASE_URL: str = os.getenv(
+    _raw_db_url = os.getenv(
         "DATABASE_URL",
         "postgresql://user:pass@localhost:5432/waddlebot"
     )
+    DATABASE_URL: str = _raw_db_url.replace("postgresql://", "postgres://")
 
     # Server Configuration
     GRPC_PORT: int = int(os.getenv("GRPC_PORT", "50051"))
@@ -62,23 +63,18 @@ class Config:
     RETRY_DELAY: float = float(os.getenv("RETRY_DELAY", "1.0"))
 
     @classmethod
-    def validate(cls) -> list[str]:
+    def validate(cls) -> tuple[list[str], list[str]]:
         """
-        Validate configuration and return list of errors
+        Validate configuration and return errors and warnings separately
 
         Returns:
-            List of error messages, empty if valid
+            Tuple of (error_list, warning_list)
         """
         errors = []
-
-        if not cls.DISCORD_BOT_TOKEN:
-            errors.append("DISCORD_BOT_TOKEN is required")
+        warnings = []
 
         if not cls.DATABASE_URL:
             errors.append("DATABASE_URL is required")
-
-        if len(cls.MODULE_SECRET_KEY) < 64:
-            errors.append("MODULE_SECRET_KEY must be at least 64 characters")
 
         if cls.GRPC_PORT < 1 or cls.GRPC_PORT > 65535:
             errors.append("GRPC_PORT must be between 1 and 65535")
@@ -86,7 +82,14 @@ class Config:
         if cls.REST_PORT < 1 or cls.REST_PORT > 65535:
             errors.append("REST_PORT must be between 1 and 65535")
 
-        return errors
+        # Optional credentials - warn but don't fail startup
+        if not cls.DISCORD_BOT_TOKEN:
+            warnings.append("DISCORD_BOT_TOKEN not configured - Discord API calls will fail")
+
+        if len(cls.MODULE_SECRET_KEY) < 64:
+            warnings.append("MODULE_SECRET_KEY less than 64 chars - consider setting for production")
+
+        return errors, warnings
 
     @classmethod
     def get_summary(cls) -> dict:

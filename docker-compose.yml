@@ -150,24 +150,28 @@ services:
     restart: unless-stopped
 
   # Apache OpenWhisk standalone for testing serverless actions
-  openwhisk:
-    image: openwhisk/standalone:nightly
-    container_name: waddlebot-openwhisk
-    ports:
-      - "3233:3233"   # OpenWhisk API
-    environment:
-      JAVA_OPTS: "-Xmx1g"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    networks:
-      - waddlebot-public
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3233/api/v1"]
-      interval: 30s
-      timeout: 10s
-      start_period: 120s
-      retries: 10
-    restart: unless-stopped
+  # NOTE: Disabled on ARM64 - openwhisk/standalone:nightly lacks native ARM64 support
+  # x86_64 emulation on ARM64 (linux/amd64) fails with exit code 255 (platform mismatch)
+  # Enable this service only on native amd64 systems
+  # openwhisk:
+  #   image: openwhisk/standalone:nightly
+  #   container_name: waddlebot-openwhisk
+  #   platform: linux/amd64
+  #   ports:
+  #     - "3233:3233"   # OpenWhisk API
+  #   environment:
+  #     JAVA_OPTS: "-Xmx1g"
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   networks:
+  #     - waddlebot-public
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:3233/api/v1"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     start_period: 120s
+  #     retries: 10
+  #   restart: unless-stopped
 
   # =============================================================================
   # KONG API GATEWAY - Single external entry point for all APIs
@@ -207,7 +211,7 @@ services:
       - "8080:8080"   # Kong HTTP API (api.waddlebot.io)
       - "8443:8443"   # Kong HTTPS API
       - "127.0.0.1:8001:8001"  # Kong Admin API (localhost only for security)
-      - "8012:8012 "   # Kong Manager OSS GUI
+      - "8012:8012"   # Kong Manager OSS GUI
     networks:
       - waddlebot-public
       - waddlebot-internal
@@ -798,7 +802,7 @@ services:
     container_name: waddlebot-workflow-core
     environment:
       MODULE_NAME: workflow-core
-      MODULE_PORT: 8070
+      MODULE_PORT: 8090
       DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
       # Redis ACL: user=workflow, prefix=workflow:*, waddlebot:jobs:*, waddlebot:schedule:*, waddlebot:lock:*
       REDIS_URL: redis://workflow:${REDIS_WORKFLOW_PASSWORD}@redis:6379/0
@@ -817,7 +821,7 @@ services:
       router:
         condition: service_started
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8070/health')"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1093,32 +1097,34 @@ services:
       retries: 3
     restart: unless-stopped
 
-  openwhisk-action:
-    build:
-      context: .
-      dockerfile: action/pushing/openwhisk_action_module/Dockerfile
-    container_name: waddlebot-openwhisk-action
-    environment:
-      MODULE_NAME: openwhisk-action
-      GRPC_PORT: 50062
-      REST_PORT: 8082
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      OPENWHISK_API_HOST: ${OPENWHISK_API_HOST}
-      OPENWHISK_AUTH_KEY: ${OPENWHISK_AUTH_KEY}
-      OPENWHISK_NAMESPACE: ${OPENWHISK_NAMESPACE}
-      OPENWHISK_INSECURE: ${OPENWHISK_INSECURE}
-      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
-      LOG_LEVEL: ${LOG_LEVEL}
-    networks:
-      - waddlebot-internal
-      - waddlebot-public
-    depends_on:
-      - router
-      - postgres
-      - openwhisk
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
+  # OpenWhisk action module disabled - requires native ARM64 OpenWhisk image
+  # Re-enable when ARM64-compatible OpenWhisk image available
+  # openwhisk-action:
+  #   build:
+  #     context: .
+  #     dockerfile: action/pushing/openwhisk_action_module/Dockerfile
+  #   container_name: waddlebot-openwhisk-action
+  #   environment:
+  #     MODULE_NAME: openwhisk-action
+  #     GRPC_PORT: 50062
+  #     REST_PORT: 8082
+  #     DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+  #     OPENWHISK_API_HOST: ${OPENWHISK_API_HOST}
+  #     OPENWHISK_AUTH_KEY: ${OPENWHISK_AUTH_KEY}
+  #     OPENWHISK_NAMESPACE: ${OPENWHISK_NAMESPACE}
+  #     OPENWHISK_INSECURE: ${OPENWHISK_INSECURE}
+  #     MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+  #     LOG_LEVEL: ${LOG_LEVEL}
+  #   networks:
+  #     - waddlebot-internal
+  #     - waddlebot-public
+  #   depends_on:
+  #     - router
+  #     - postgres
+  #     - openwhisk
+  #   healthcheck:
+  #     test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/health')"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #   restart: unless-stopped

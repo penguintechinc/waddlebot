@@ -43,23 +43,19 @@ RUN python -m grpc_tools.protoc \
     # Fix import paths in generated grpc file
     sed -i 's/^import gcp_functions_action_pb2/from grpc_proto import gcp_functions_action_pb2/' ./grpc_proto/gcp_functions_action_pb2_grpc.py
 
-# Expose ports (REST and gRPC)
-EXPOSE 8081 50061
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8081/health')"
-
-# Run with Hypercorn (async ASGI server)
 # Copy standard healthcheck script
 COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
 RUN chmod 755 /usr/local/bin/healthcheck.py
+
+# Switch to non-root user
+USER waddlebot
+
+# Expose ports (REST and gRPC)
+EXPOSE 8081 50061
 
 # Health check (using /healthz for Kubernetes compatibility)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python3 /usr/local/bin/healthcheck.py http://localhost:8081/healthz
 
-# Switch to non-root user
-USER waddlebot
-
+# Run with Hypercorn (async ASGI server)
 CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:8081", "--workers", "4"]
