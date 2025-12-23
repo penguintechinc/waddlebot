@@ -491,3 +491,23 @@ curl http://localhost:8000/api/v1/license/status
 *This context should be referenced for all future development to maintain consistency with WaddleBot architecture and the PenguinTech gold standard patterns.*
 
 *For comprehensive standards and detailed implementation guidance, see [docs/STANDARDS.md](docs/STANDARDS.md).*
+
+---
+
+## File Size Limits
+
+- **Maximum file size**: 25,000 characters for ALL code and markdown files
+- **Split large files**: Decompose into modules, libraries, or separate documents
+- **CLAUDE.md exception**: Maximum 39,000 characters (only exception to 25K rule)
+- **High-level approach**: CLAUDE.md contains high-level context and references detailed docs
+- **Documentation strategy**: Create detailed documentation in `docs/` folder and link to them from CLAUDE.md
+- **Keep focused**: Critical context, architectural decisions, and workflow instructions only
+- **User approval required**: ALWAYS ask user permission before splitting CLAUDE.md files
+
+## Pre-Commit Screenshots
+
+**Before Every Commit - Screenshots**:
+- **Run screenshot tool to update UI screenshots in documentation**
+  - Run `cd services/webui && npm run screenshots` to capture current UI state
+  - This automatically removes old screenshots and captures fresh ones
+  - Commit updated screenshots with relevant feature/documentation changes
