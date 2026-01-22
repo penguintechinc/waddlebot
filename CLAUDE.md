@@ -6,12 +6,15 @@ WaddleBot is a multi-platform chatbot system with a modular, microservices archi
 
 **WaddleBot Features:**
 - Multi-platform chat integration (Twitch, Discord, Slack, YouTube)
-- Modular microservices architecture with 24+ services
+- Modular microservices architecture with 27+ services
 - Event-driven processing with trigger→routing→action pipeline
 - Enterprise licensing integration with PenguinTech License Server
 - Community-based multi-tenancy with role-based access control
 - High-performance command routing with caching and read replicas
 - License-gated enterprise features (SSO, AI, custom integrations)
+- Multi-platform live streaming via video proxy (Twitch, Kick, YouTube, Custom RTMP)
+- WebRTC-based community calls via LiveKit (scalable to 1000+ users)
+- Community engagement (polls, forms) with granular visibility controls
 
 **System Architecture:**
 - **Trigger Modules**: Platform-specific webhooks/events receivers and pollers
@@ -29,7 +32,7 @@ WaddleBot is a multi-platform chatbot system with a modular, microservices archi
   - AsyncDAL wrapper for database operations
   - gRPC support for service-to-service communication
 - **Node.js 18+**: Frontend WebUI and web services
-- **Go 1.23.x**: Reserved for future high-performance components (not yet implemented)
+- **Go 1.23.x**: High-performance components (module_rtc for WebRTC/LiveKit)
 
 ### Infrastructure & DevOps
 - **Containerization**: Docker with multi-stage builds for all modules
@@ -108,7 +111,10 @@ WaddleBot/
 │   ├── labels_core_module_flask/
 │   ├── browser_source_core_module_flask/
 │   ├── reputation_module_flask/
-│   └── community_module_flask/
+│   ├── community_module_flask/
+│   ├── video_proxy_module/       # Multi-platform streaming (Python/Quart)
+│   ├── module_rtc/               # WebRTC community calls (Go/LiveKit)
+│   └── engagement_module/        # Polls and forms (Python/Quart)
 ├── admin/                        # Administrative modules
 │   └── hub_module/               # Community management portal
 ├── archive/                      # Legacy/deprecated modules
@@ -138,7 +144,7 @@ WaddleBot/
 | **action/interactive** | User-facing responses | AI, alias, shoutout, inventory, calendar, memories, music |
 | **action/pushing** | External system integration | Webhooks, notifications |
 | **action/security** | Moderation & security | Content filtering, spam detection |
-| **core** | Platform services | Identity, labels, browser source, reputation, community |
+| **core** | Platform services | Identity, labels, browser source, reputation, community, video proxy, module_rtc, engagement |
 | **admin** | Administrative interfaces | Hub module, settings portal |
 | **archive** | Legacy/deprecated | Kong admin, marketplace (old) |
 

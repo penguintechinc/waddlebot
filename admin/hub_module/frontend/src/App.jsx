@@ -65,6 +65,10 @@ import AdminVendorReview from './pages/admin/AdminVendorReview';
 import AdminCalendarTicketing from './pages/admin/AdminCalendarTicketing';
 import AdminCalendarScanner from './pages/admin/AdminCalendarScanner';
 import AdminCalendarAttendance from './pages/admin/AdminCalendarAttendance';
+import AdminLiveStreams from './pages/admin/AdminLiveStreams';
+import AdminCommunityCalls from './pages/admin/AdminCommunityCalls';
+import AdminPolls from './pages/admin/AdminPolls';
+import AdminForms from './pages/admin/AdminForms';
 
 // Vendor pages
 import VendorSubmissionForm from './pages/vendor/VendorSubmissionForm';
@@ -209,6 +213,10 @@ function App() {
         <Route path="/admin/:communityId/calendar/events/:eventId/tickets" element={<AdminCalendarTicketing />} />
         <Route path="/admin/:communityId/calendar/events/:eventId/scanner" element={<AdminCalendarScanner />} />
         <Route path="/admin/:communityId/calendar/events/:eventId/attendance" element={<AdminCalendarAttendance />} />
+        <Route path="/admin/:communityId/live-streaming" element={<AdminLiveStreams />} />
+        <Route path="/admin/:communityId/calls" element={<AdminCommunityCalls />} />
+        <Route path="/admin/:communityId/polls" element={<AdminPolls />} />
+        <Route path="/admin/:communityId/forms" element={<AdminForms />} />
       </Route>
 
       {/* Platform admin routes */}

@@ -1,0 +1,50 @@
+# Module RTC Dockerfile
+# Multi-stage Go build
+
+FROM golang:1.23-bookworm AS builder
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy go mod files first for layer caching
+COPY go.mod go.sum* ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build binary
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /build/module_rtc ./cmd/server
+
+# Production stage
+FROM debian:12-slim
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r waddlebot && useradd -r -g waddlebot waddlebot
+
+# Copy binary from builder
+COPY --from=builder /build/module_rtc /app/module_rtc
+
+# Set ownership
+RUN chown -R waddlebot:waddlebot /app
+
+USER waddlebot
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8093/health || exit 1
+
+EXPOSE 8093 50067
+
+CMD ["/app/module_rtc"]

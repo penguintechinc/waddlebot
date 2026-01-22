@@ -13,6 +13,10 @@ import platformRoutes from './platform.js';
 import superadminRoutes from './superadmin.js';
 import internalRoutes from './internal.js';
 import cookieConsentRoutes from './cookieConsent.js';
+import streamingRoutes from './streaming.js';
+import callsRoutes from './calls.js';
+import pollsRoutes from './polls.js';
+import formsRoutes from './forms.js';
 
 const router = Router();
 
@@ -34,6 +38,18 @@ router.use('/communities', communityRoutes); // Alias for plural form
 
 // Community admin routes (admin role required)
 router.use('/admin', adminRoutes);
+
+// Streaming management routes (admin role required)
+router.use('/admin', streamingRoutes);
+
+// Community calls routes (admin role required)
+router.use('/admin', callsRoutes);
+
+// Polls management routes (admin role required)
+router.use('/admin', pollsRoutes);
+
+// Forms management routes (admin role required)
+router.use('/admin', formsRoutes);
 
 // Marketplace routes (admin role required)
 router.use('/admin', marketplaceRoutes);
