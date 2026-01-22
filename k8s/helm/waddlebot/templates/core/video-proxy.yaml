@@ -24,7 +24,7 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
       - name: video-proxy
-        image: "{{ .Values.global.imageRegistry }}/core-video-proxy:{{ .Values.modules.videoProxy.imageTag | default .Chart.AppVersion }}"
+        image: "{{ .Values.global.imageRegistry }}/core-video-proxy:{{ .Values.modules.videoProxy.imageTag | default .Values.global.imageTag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         securityContext:
           {{- toYaml .Values.securityContext | nindent 10 }}
@@ -37,9 +37,9 @@ spec:
           protocol: TCP
         envFrom:
         - configMapRef:
-            name: {{ include "waddlebot.fullname" . }}-common-config
+            name: waddlebot-config
         - secretRef:
-            name: {{ include "waddlebot.fullname" . }}-common-secret
+            name: waddlebot-secrets
         env:
         - name: MODULE_NAME
           value: "video-proxy"
@@ -72,8 +72,12 @@ spec:
         volumeMounts:
         - name: logs
           mountPath: /var/log/waddlebotlog
+        - name: databases
+          mountPath: /app/databases
       volumes:
       - name: logs
+        emptyDir: {}
+      - name: databases
         emptyDir: {}
 ---
 apiVersion: v1

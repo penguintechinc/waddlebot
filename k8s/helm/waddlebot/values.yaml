@@ -27,8 +27,19 @@ global:
   moduleSecretKey: "change-me-in-production"
   serviceApiKey: "change-me-in-production"
 
+  # Logging
+  logLevel: "INFO"
+  nodeEnv: "production"
+
 # Namespace configuration
 namespace: waddlebot
+namespaceCreate: true  # Create namespace if it doesn't exist
+
+# Service Account
+serviceAccount:
+  create: true
+  name: "waddlebot"
+  annotations: {}
 
 # Resource presets
 resourcePresets:
@@ -60,12 +71,22 @@ infrastructure:
     service:
       name: "infra-postgres"
       port: 5432
+      type: ClusterIP
     port: 5432
     replicas: 1
-    resourcePreset: large
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "512Mi"
+      limits:
+        cpu: "2000m"
+        memory: "2Gi"
     persistence:
       enabled: true
+      name: "postgres-data"
       size: 20Gi
+      accessMode: ReadWriteOnce
+      storageClass: ""
     env:
       POSTGRES_DB: waddlebot
       POSTGRES_USER: waddlebot
@@ -80,14 +101,26 @@ infrastructure:
     image: redis:7-alpine
     port: 6379
     password: "changeme"  # Only used for secrets, actual Redis already running
+    maxMemory: "256mb"
+    maxMemoryPolicy: "allkeys-lru"
     service:
       name: "infra-redis"
       port: 6379
+      type: ClusterIP
     replicas: 1
-    resourcePreset: medium
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
     persistence:
       enabled: true
+      name: "redis-data"
       size: 5Gi
+      accessMode: ReadWriteOnce
+      storageClass: ""
 
   # MinIO Object Storage
   minio:
@@ -329,7 +362,7 @@ modules:
     service:
       type: ClusterIP
       port: 8092
-    replicas: 2
+    replicas: 1  # Single replica to avoid PyDAL migration race conditions
     resourcePreset: medium
     resources:
       requests:
@@ -356,7 +389,7 @@ modules:
     service:
       type: ClusterIP
       port: 8091
-    replicas: 2
+    replicas: 1  # Single replica to avoid PyDAL migration race conditions
     resourcePreset: medium
     resources:
       requests:

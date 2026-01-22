@@ -5,10 +5,14 @@ namespace: waddlebot
 
 resources:
   - namespace.yaml
+  - serviceaccount.yaml
+  - secrets.yaml
   - video-proxy.yaml
   - engagement.yaml
   - module-rtc.yaml
 
-commonLabels:
-  app.kubernetes.io/part-of: waddlebot
-  app.kubernetes.io/managed-by: kustomize
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: waddlebot
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: true

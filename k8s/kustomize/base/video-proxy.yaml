@@ -93,8 +93,12 @@ spec:
         volumeMounts:
         - name: logs
           mountPath: /var/log/waddlebotlog
+        - name: databases
+          mountPath: /app/databases
       volumes:
       - name: logs
+        emptyDir: {}
+      - name: databases
         emptyDir: {}
 ---
 apiVersion: v1

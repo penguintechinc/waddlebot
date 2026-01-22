@@ -9,8 +9,12 @@ metadata:
     app.kubernetes.io/component: config
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 data:
-  # Database Configuration
-  DATABASE_URL: "postgresql://{{ .Values.infrastructure.postgresql.username }}:$(POSTGRES_PASSWORD)@{{ .Values.infrastructure.postgresql.service.name }}:{{ .Values.infrastructure.postgresql.service.port }}/{{ .Values.infrastructure.postgresql.database }}"
+  # Database Configuration - individual vars for modules to build connection strings
+  DB_HOST: {{ .Values.infrastructure.postgresql.service.name | quote }}
+  DB_PORT: {{ .Values.infrastructure.postgresql.service.port | quote }}
+  DB_NAME: {{ .Values.infrastructure.postgresql.database | quote }}
+  DB_USER: {{ .Values.infrastructure.postgresql.username | quote }}
+  DB_TYPE: "postgres"
   POSTGRES_USER: {{ .Values.infrastructure.postgresql.username | quote }}
   POSTGRES_DB: {{ .Values.infrastructure.postgresql.database | quote }}
 

@@ -1,6 +1,9 @@
 -- WaddleBot Development Database Initialization
 -- This script sets up the basic database structure for development
 
+-- Grant replication permissions to waddlebot user for read replicas
+ALTER USER waddlebot WITH REPLICATION;
+
 -- Create Kong database and user
 -- Kong requires its own database separate from WaddleBot
 CREATE DATABASE kong;

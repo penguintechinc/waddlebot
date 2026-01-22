@@ -17,8 +17,10 @@ images:
     newName: registry-dal2.penguintech.io/waddlebot/core-module-rtc
     newTag: latest
 
-commonLabels:
-  environment: beta
+labels:
+  - pairs:
+      environment: beta
+    includeSelectors: false
 
 patches:
   # Increase replicas for beta
