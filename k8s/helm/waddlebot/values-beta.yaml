@@ -124,49 +124,53 @@ sharedEnv:
   ROUTER_URL: "http://waddlebot-router:8000"
   HUB_URL: "http://waddlebot-hub:8060"
 
-# Ingress
+# Ingress - using Cloudflare wildcard certificate
 ingress:
   enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
   hosts:
     - host: waddlebot.penguintech.io
       paths:
         - path: /
           pathType: Prefix
-          service: waddlebot-hub-webui
+          service: hub-webui
           port: 80
         - path: /api
           pathType: Prefix
-          service: waddlebot-hub
+          service: hub-api
           port: 8060
         - path: /api/router
           pathType: Prefix
-          service: waddlebot-router
+          service: router
           port: 8000
         - path: /api/video-proxy
           pathType: Prefix
-          service: waddlebot-video-proxy
+          service: video-proxy
           port: 8092
         - path: /api/engagement
           pathType: Prefix
-          service: waddlebot-engagement
+          service: engagement
           port: 8091
         - path: /api/rtc
           pathType: Prefix
-          service: waddlebot-module-rtc
+          service: module-rtc
           port: 8093
         - path: /webhooks/twitch
           pathType: Prefix
-          service: waddlebot-twitch-collector
+          service: twitch-collector
           port: 8002
         - path: /webhooks/discord
           pathType: Prefix
-          service: waddlebot-discord-collector
+          service: discord-collector
           port: 8003
         - path: /webhooks/slack
           pathType: Prefix
-          service: waddlebot-slack-collector
+          service: slack-collector
           port: 8004
   tls:
-    - secretName: waddlebot-tls
+    - secretName: penguintech-wildcard-tls
       hosts:
         - waddlebot.penguintech.io
