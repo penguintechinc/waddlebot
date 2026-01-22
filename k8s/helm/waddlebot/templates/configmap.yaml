@@ -10,32 +10,32 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 data:
   # Database Configuration
-  DATABASE_URL: "postgresql://{{ .Values.postgres.username }}:$(POSTGRES_PASSWORD)@{{ .Values.postgres.service.name }}:{{ .Values.postgres.service.port }}/{{ .Values.postgres.database }}"
-  POSTGRES_USER: {{ .Values.postgres.username | quote }}
-  POSTGRES_DB: {{ .Values.postgres.database | quote }}
+  DATABASE_URL: "postgresql://{{ .Values.infrastructure.postgresql.username }}:$(POSTGRES_PASSWORD)@{{ .Values.infrastructure.postgresql.service.name }}:{{ .Values.infrastructure.postgresql.service.port }}/{{ .Values.infrastructure.postgresql.database }}"
+  POSTGRES_USER: {{ .Values.infrastructure.postgresql.username | quote }}
+  POSTGRES_DB: {{ .Values.infrastructure.postgresql.database | quote }}
 
   # Redis Configuration
-  REDIS_HOST: {{ .Values.redis.service.name | quote }}
-  REDIS_PORT: {{ .Values.redis.service.port | quote }}
+  REDIS_HOST: {{ .Values.infrastructure.redis.service.name | quote }}
+  REDIS_PORT: {{ .Values.infrastructure.redis.service.port | quote }}
 
   # MinIO Configuration
-  MINIO_ENDPOINT: "http://{{ .Values.minio.service.name }}:{{ .Values.minio.service.apiPort }}"
-  MINIO_CONSOLE_ENDPOINT: "http://{{ .Values.minio.service.name }}:{{ .Values.minio.service.consolePort }}"
-  S3_ENDPOINT_URL: "http://{{ .Values.minio.service.name }}:{{ .Values.minio.service.apiPort }}"
-  S3_BUCKET_NAME: {{ .Values.minio.bucketName | quote }}
+  MINIO_ENDPOINT: "http://{{ .Values.infrastructure.minio.service.name }}:{{ .Values.infrastructure.minio.service.apiPort }}"
+  MINIO_CONSOLE_ENDPOINT: "http://{{ .Values.infrastructure.minio.service.name }}:{{ .Values.infrastructure.minio.service.consolePort }}"
+  S3_ENDPOINT_URL: "http://{{ .Values.infrastructure.minio.service.name }}:{{ .Values.infrastructure.minio.service.apiPort }}"
+  S3_BUCKET_NAME: {{ .Values.infrastructure.minio.bucketName | quote }}
   S3_STORAGE_ENABLED: "true"
 
   # Qdrant Configuration
-  QDRANT_URL: "http://{{ .Values.qdrant.service.name }}:{{ .Values.qdrant.service.port }}"
+  QDRANT_URL: "http://{{ .Values.infrastructure.qdrant.service.name }}:{{ .Values.infrastructure.qdrant.service.port }}"
   MEM0_VECTOR_STORE: "qdrant"
 
   # Ollama Configuration
-  OLLAMA_HOST: {{ .Values.ollama.service.name | quote }}
-  OLLAMA_PORT: {{ .Values.ollama.service.port | quote }}
+  OLLAMA_HOST: {{ .Values.infrastructure.ollama.service.name | quote }}
+  OLLAMA_PORT: {{ .Values.infrastructure.ollama.service.port | quote }}
   OLLAMA_USE_TLS: "false"
-  AI_PROVIDER: {{ .Values.ollama.defaultProvider | quote }}
-  AI_MODEL: {{ .Values.ollama.defaultModel | quote }}
-  OLLAMA_MODEL: {{ .Values.ollama.defaultModel | quote }}
+  AI_PROVIDER: {{ .Values.infrastructure.ollama.defaultProvider | quote }}
+  AI_MODEL: {{ .Values.infrastructure.ollama.defaultModel | quote }}
+  OLLAMA_MODEL: {{ .Values.infrastructure.ollama.defaultModel | quote }}
 
   # Service URLs - Router
   ROUTER_API_URL: "http://router-service:8000"

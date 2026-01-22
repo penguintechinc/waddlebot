@@ -1,53 +1,52 @@
-{{- if .Values.modules.hub.enabled }}
+{{- if .Values.modules.engagement.enabled }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "waddlebot.fullname" . }}-hub-api
+  name: {{ include "waddlebot.fullname" . }}-engagement
   labels:
     {{- include "waddlebot.labels" . | nindent 4 }}
-    app.kubernetes.io/component: hub
+    app.kubernetes.io/component: engagement
 spec:
-  replicas: {{ .Values.modules.hub.replicas }}
+  replicas: {{ .Values.modules.engagement.replicas }}
   selector:
     matchLabels:
       {{- include "waddlebot.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: hub
+      app.kubernetes.io/component: engagement
   template:
     metadata:
       labels:
         {{- include "waddlebot.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: hub
+        app.kubernetes.io/component: engagement
     spec:
       serviceAccountName: {{ include "waddlebot.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
-      - name: hub
-        image: "{{ .Values.global.imageRegistry }}/hub-api:{{ .Values.modules.hub.imageTag | default .Chart.AppVersion }}"
+      - name: engagement
+        image: "{{ .Values.global.imageRegistry }}/core-engagement:{{ .Values.modules.engagement.imageTag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         securityContext:
           {{- toYaml .Values.securityContext | nindent 10 }}
         ports:
         - name: http
-          containerPort: 8060
+          containerPort: 8091
+          protocol: TCP
+        - name: grpc
+          containerPort: 50066
           protocol: TCP
         envFrom:
         - configMapRef:
             name: {{ include "waddlebot.fullname" . }}-common-config
-        - configMapRef:
-            name: {{ include "waddlebot.fullname" . }}-hub-api-config
-            optional: true
         - secretRef:
             name: {{ include "waddlebot.fullname" . }}-common-secret
-        - secretRef:
-            name: {{ include "waddlebot.fullname" . }}-hub-api-secret
-            optional: true
         env:
         - name: MODULE_NAME
-          value: "hub"
+          value: "engagement"
         - name: MODULE_PORT
-          value: "8060"
+          value: "8091"
+        - name: GRPC_PORT
+          value: "50066"
         livenessProbe:
           httpGet:
             path: /health
@@ -65,7 +64,7 @@ spec:
           timeoutSeconds: 3
           failureThreshold: 3
         resources:
-          {{- toYaml .Values.modules.hub.resources | nindent 10 }}
+          {{- toYaml .Values.modules.engagement.resources | nindent 10 }}
         volumeMounts:
         - name: logs
           mountPath: /var/log/waddlebotlog
@@ -76,21 +75,22 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "waddlebot.fullname" . }}-hub-api
+  name: {{ include "waddlebot.fullname" . }}-engagement
   labels:
     {{- include "waddlebot.labels" . | nindent 4 }}
-    app.kubernetes.io/component: hub
+    app.kubernetes.io/component: engagement
 spec:
-  type: {{ .Values.modules.hub.service.type | default "NodePort" }}
+  type: ClusterIP
   ports:
-  - port: 8060
+  - port: 8091
     targetPort: http
     protocol: TCP
     name: http
-    {{- if and (eq (.Values.modules.hub.service.type | default "NodePort") "NodePort") .Values.modules.hub.service.nodePort }}
-    nodePort: {{ .Values.modules.hub.service.nodePort }}
-    {{- end }}
+  - port: 50066
+    targetPort: grpc
+    protocol: TCP
+    name: grpc
   selector:
     {{- include "waddlebot.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: hub
+    app.kubernetes.io/component: engagement
 {{- end }}

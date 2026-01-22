@@ -1,0 +1,235 @@
+# WaddleBot Helm Chart - Beta Cluster Values
+# This file overrides default values for beta cluster deployment
+# Usage: helm upgrade --install waddlebot . -f values.yaml -f values-beta.yaml
+
+# Global settings for beta cluster
+global:
+  # Beta cluster registry
+  imageRegistry: "registry-dal2.penguintech.io/waddlebot"
+  imageTag: "latest"
+  imagePullPolicy: Always
+
+# Infrastructure - Disabled (already running in beta cluster)
+# Ollama uses GPU-enabled daemonset deployment instead
+infrastructure:
+  postgresql:
+    enabled: false
+  redis:
+    enabled: false
+  minio:
+    enabled: false
+  ollama:
+    enabled: false  # Using built-in daemonset with GPU
+  qdrant:
+    enabled: false
+
+# Processing Module
+processing:
+  router:
+    name: core-router
+    image: core-router
+
+# Admin Modules
+admin:
+  hub:
+    name: hub-api
+    image: hub-api
+
+  hubWebui:
+    name: hub-webui
+    image: hub-webui
+
+# Core Modules - New naming convention
+core:
+  identity:
+    name: core-identity
+    image: core-identity
+
+  labels:
+    name: core-labels
+    image: core-labels
+
+  browserSource:
+    name: core-browser-source
+    image: core-browser-source
+
+  reputation:
+    name: core-reputation
+    image: core-reputation
+
+  community:
+    name: core-community
+    image: core-community
+
+  aiResearcher:
+    name: ai-researcher
+    image: ai-researcher
+
+  videoProxy:
+    name: core-video-proxy
+    image: core-video-proxy
+
+  engagement:
+    name: core-engagement
+    image: core-engagement
+
+  moduleRtc:
+    name: core-module-rtc
+    image: core-module-rtc
+
+# Trigger Modules - New naming convention
+trigger:
+  receivers:
+    twitch:
+      name: trigger-twitch
+      image: trigger-twitch
+
+    discord:
+      name: trigger-discord
+      image: trigger-discord
+
+    slack:
+      name: trigger-slack
+      image: trigger-slack
+
+    youtubeLive:
+      name: trigger-youtube
+      image: trigger-youtube
+
+    kick:
+      name: trigger-kick
+      image: trigger-kick
+
+# Action Modules - New naming convention
+action:
+  interactive:
+    ai:
+      name: interactive-ai
+      image: interactive-ai
+
+    alias:
+      name: interactive-alias
+      image: interactive-alias
+
+    shoutout:
+      name: interactive-shoutout
+      image: interactive-shoutout
+
+    inventory:
+      name: interactive-inventory
+      image: interactive-inventory
+
+    calendar:
+      name: interactive-calendar
+      image: interactive-calendar
+
+    memories:
+      name: interactive-memories
+      image: interactive-memories
+
+    youtubeMusic:
+      name: interactive-youtube-music
+      image: interactive-youtube-music
+
+    spotify:
+      name: interactive-spotify
+      image: interactive-spotify
+
+    loyalty:
+      name: interactive-loyalty
+      image: interactive-loyalty
+
+  platformActions:
+    discord:
+      name: action-discord
+      image: action-discord
+
+    slack:
+      name: action-slack
+      image: action-slack
+
+    twitch:
+      name: action-twitch
+      image: action-twitch
+
+    youtube:
+      name: action-youtube
+      image: action-youtube
+
+# Shared Environment Variables for beta
+sharedEnv:
+  # Use new service names for internal DNS
+  DB_HOST: "infra-postgres"
+  REDIS_HOST: "infra-redis"
+  MINIO_ENDPOINT: "infra-minio:9000"
+  OLLAMA_HOST: "http://ai-ollama:11434"
+  OLLAMA_MODEL: "tinyllama"
+  QDRANT_HOST: "infra-qdrant"
+  ROUTER_URL: "http://core-router:8000"
+  HUB_URL: "http://hub-api:8060"
+
+# Ingress - Update service references
+ingress:
+  hosts:
+    - host: waddlebot.penguintech.io
+      paths:
+        - path: /
+          pathType: Prefix
+          service: hub-webui
+          port: 80
+        - path: /api
+          pathType: Prefix
+          service: hub-api
+          port: 8060
+        - path: /api/router
+          pathType: Prefix
+          service: core-router
+          port: 8000
+        - path: /api/identity
+          pathType: Prefix
+          service: core-identity
+          port: 8050
+        - path: /api/labels
+          pathType: Prefix
+          service: core-labels
+          port: 8023
+        - path: /api/browser-source
+          pathType: Prefix
+          service: core-browser-source
+          port: 8027
+        - path: /api/reputation
+          pathType: Prefix
+          service: core-reputation
+          port: 8021
+        - path: /api/community
+          pathType: Prefix
+          service: core-community
+          port: 8020
+        - path: /webhooks/twitch
+          pathType: Prefix
+          service: trigger-twitch
+          port: 8002
+        - path: /webhooks/discord
+          pathType: Prefix
+          service: trigger-discord
+          port: 8003
+        - path: /webhooks/slack
+          pathType: Prefix
+          service: trigger-slack
+          port: 8004
+        - path: /api/video-proxy
+          pathType: Prefix
+          service: core-video-proxy
+          port: 8092
+        - path: /api/engagement
+          pathType: Prefix
+          service: core-engagement
+          port: 8091
+        - path: /api/rtc
+          pathType: Prefix
+          service: core-module-rtc
+          port: 8093
+  tls:
+    - secretName: waddlebot-tls
+      hosts:
+        - waddlebot.penguintech.io

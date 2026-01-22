@@ -5,14 +5,13 @@ from typing import Optional
 class Config:
     """Engagement Module Configuration"""
     
-    # Database Configuration
-    _raw_db_url: str = os.getenv(
-        "DATABASE_URL",
+    # Database Configuration - builds URL from DB_* vars if DATABASE_URL not set
+    DATABASE_URL: str = (
+        os.getenv("DATABASE_URL") or
         f"postgres://{os.getenv('DB_USER', 'waddlebot')}:{os.getenv('DB_PASS', 'password')}@"
         f"{os.getenv('DB_HOST', 'localhost')}:{os.getenv('DB_PORT', '5432')}/"
         f"{os.getenv('DB_NAME', 'waddlebot')}"
-    )
-    DATABASE_URL: str = _raw_db_url.replace('postgresql://', 'postgres://')
+    ).replace('postgresql://', 'postgres://')
     DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "10"))
     
     # Module Configuration

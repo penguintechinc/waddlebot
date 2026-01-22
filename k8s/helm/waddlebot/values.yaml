@@ -22,10 +22,13 @@ global:
   # Default storage class for persistent volumes
   storageClass: "standard"
 
+  # Security secrets (set via kubectl create secret or values override)
+  jwtSecret: "change-me-in-production"
+  moduleSecretKey: "change-me-in-production"
+  serviceApiKey: "change-me-in-production"
+
 # Namespace configuration
-namespace:
-  create: true
-  name: waddlebot
+namespace: waddlebot
 
 # Resource presets
 resourcePresets:
@@ -50,7 +53,13 @@ infrastructure:
   # PostgreSQL Database
   postgresql:
     enabled: true
+    username: "waddlebot"
+    database: "waddlebot"
+    password: "changeme"  # Only used for secrets, actual DB already running
     image: postgres:16
+    service:
+      name: "infra-postgres"
+      port: 5432
     port: 5432
     replicas: 1
     resourcePreset: large
@@ -70,6 +79,10 @@ infrastructure:
     enabled: true
     image: redis:7-alpine
     port: 6379
+    password: "changeme"  # Only used for secrets, actual Redis already running
+    service:
+      name: "infra-redis"
+      port: 6379
     replicas: 1
     resourcePreset: medium
     persistence:
@@ -82,6 +95,11 @@ infrastructure:
     image: minio/minio:latest
     apiPort: 9000
     consolePort: 9001
+    bucketName: "waddlebot"
+    service:
+      name: "infra-minio"
+      apiPort: 9000
+      consolePort: 9001
     replicas: 1
     resourcePreset: medium
     persistence:
@@ -96,6 +114,11 @@ infrastructure:
     enabled: true
     image: ollama/ollama:latest
     port: 11434
+    defaultProvider: "ollama"
+    defaultModel: "tinyllama"
+    service:
+      name: "ollama-service"
+      port: 11434
     replicas: 1
     resourcePreset: large
     persistence:
@@ -111,6 +134,9 @@ infrastructure:
     image: qdrant/qdrant:latest
     port: 6333
     grpcPort: 6334
+    service:
+      name: "infra-qdrant"
+      port: 6333
     replicas: 1
     resourcePreset: medium
     persistence:
@@ -125,13 +151,17 @@ infrastructure:
     apiKey: ""
 
 # Processing Module
-processing:
+modules:
+  # Processing Module - Router
   router:
     enabled: true
     name: router
     image: waddlebot-router
     tag: latest
     port: 8000
+    service:
+      type: ClusterIP
+      port: 8000
     replicas: 2
     resourcePreset: large
     autoscaling:
@@ -147,16 +177,18 @@ processing:
       WORKERS: "4"
       THREADS_PER_WORKER: "10"
 
-# Admin Modules
-admin:
+  # Admin Modules
   hub:
     enabled: true
-    name: hub
-    image: waddlebot-hub
+    name: hub-api
+    image: waddlebot-hub-api
     tag: latest
     port: 8060
     replicas: 2
     resourcePreset: large
+    service:
+      type: ClusterIP
+      port: 8060
     env:
       MODULE_NAME: "hub_module"
       MODULE_VERSION: "1.0.0"
@@ -164,14 +196,35 @@ admin:
       LOG_LEVEL: "INFO"
       SESSION_TYPE: "redis"
 
-# Core Modules
-core:
-  identity:
+  hubWebui:
+    enabled: true
+    name: hub-webui
+    image: waddlebot-hub-webui
+    tag: latest
+    port: 80
+    replicas: 2
+    resourcePreset: medium
+    service:
+      type: ClusterIP
+      port: 80
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  # Core Modules
+  identityCore:
     enabled: true
     name: identity-core
     image: waddlebot-identity-core
     tag: latest
     port: 8050
+    service:
+      type: ClusterIP
+      port: 8050
     replicas: 2
     resourcePreset: medium
     env:
@@ -180,12 +233,15 @@ core:
       PORT: "8050"
       LOG_LEVEL: "INFO"
 
-  labels:
+  labelsCore:
     enabled: true
     name: labels-core
     image: waddlebot-labels-core
     tag: latest
     port: 8023
+    service:
+      type: ClusterIP
+      port: 8023
     replicas: 2
     resourcePreset: medium
     env:
@@ -202,6 +258,9 @@ core:
     port: 8027
     replicas: 2
     resourcePreset: medium
+    service:
+      type: ClusterIP
+      port: 8027
     env:
       MODULE_NAME: "browser_source_core_module"
       MODULE_VERSION: "1.0.0"
@@ -214,6 +273,9 @@ core:
     image: waddlebot-reputation
     tag: latest
     port: 8021
+    service:
+      type: ClusterIP
+      port: 8021
     replicas: 2
     resourcePreset: medium
     env:
@@ -228,6 +290,9 @@ core:
     image: waddlebot-community
     tag: latest
     port: 8020
+    service:
+      type: ClusterIP
+      port: 8020
     replicas: 2
     resourcePreset: medium
     env:
@@ -242,6 +307,9 @@ core:
     image: waddlebot-ai-researcher
     tag: latest
     port: 8070
+    service:
+      type: ClusterIP
+      port: 8070
     replicas: 1
     resourcePreset: large
     env:
@@ -250,9 +318,95 @@ core:
       PORT: "8070"
       LOG_LEVEL: "INFO"
 
+  # Video Proxy Module - MarchProxy wrapper for streaming
+  videoProxy:
+    enabled: true
+    name: video-proxy
+    image: waddlebot-video-proxy
+    tag: latest
+    port: 8092
+    grpcPort: 50065
+    service:
+      type: ClusterIP
+      port: 8092
+    replicas: 2
+    resourcePreset: medium
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "256Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1Gi"
+    env:
+      MODULE_NAME: "video_proxy_module"
+      MODULE_VERSION: "1.0.0"
+      MODULE_PORT: "8092"
+      GRPC_PORT: "50065"
+      LOG_LEVEL: "INFO"
+
+  # Engagement Module - Polls and Forms
+  engagement:
+    enabled: true
+    name: engagement
+    image: waddlebot-engagement
+    tag: latest
+    port: 8091
+    grpcPort: 50066
+    service:
+      type: ClusterIP
+      port: 8091
+    replicas: 2
+    resourcePreset: medium
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+    env:
+      MODULE_NAME: "engagement_module"
+      MODULE_VERSION: "1.0.0"
+      MODULE_PORT: "8091"
+      GRPC_PORT: "50066"
+      LOG_LEVEL: "INFO"
+
+  # Module RTC - LiveKit WebRTC for community calls
+  moduleRtc:
+    enabled: true
+    name: module-rtc
+    image: waddlebot-module-rtc
+    tag: latest
+    port: 8093
+    grpcPort: 50067
+    service:
+      type: ClusterIP
+      port: 8093
+    replicas: 2
+    resourcePreset: medium
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "256Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1Gi"
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+    env:
+      MODULE_NAME: "module_rtc"
+      MODULE_VERSION: "1.0.0"
+      REST_PORT: "8093"
+      GRPC_PORT: "50067"
+      LOG_LEVEL: "INFO"
+
 # Trigger Modules - Receivers
-trigger:
-  receivers:
+  # Trigger/Collector Modules
+  collectors:
     twitch:
       enabled: true
       name: twitch-collector
@@ -328,8 +482,7 @@ trigger:
         LOG_LEVEL: "INFO"
         PLATFORM: "kick"
 
-# Action Modules - Interactive
-action:
+  # Action Modules - Interactive
   interactive:
     ai:
       enabled: true
@@ -458,6 +611,17 @@ action:
         PORT: "8032"
         LOG_LEVEL: "INFO"
 
+  # Action Modules - Pushing (disabled for now)
+  pushing:
+    discordAction:
+      enabled: false
+    slackAction:
+      enabled: false
+    twitchAction:
+      enabled: false
+    youtubeAction:
+      enabled: false
+
   # Action Modules - Platform Actions
   platformActions:
     discord:
@@ -527,6 +691,69 @@ action:
         GRPC_PORT: "50054"
         LOG_LEVEL: "INFO"
         PLATFORM: "youtube"
+
+# OAuth Configuration (optional, set via secrets)
+oauth:
+  discord:
+    clientId: ""
+    clientSecret: ""
+    botToken: ""
+    applicationId: ""
+  twitch:
+    clientId: ""
+    clientSecret: ""
+    webhookSecret: ""
+  slack:
+    clientId: ""
+    clientSecret: ""
+    botToken: ""
+    signingSecret: ""
+  youtube:
+    apiKey: ""
+    clientId: ""
+    clientSecret: ""
+    webhookCallbackUrl: ""
+  spotify:
+    clientId: ""
+    clientSecret: ""
+  kick:
+    clientId: ""
+    clientSecret: ""
+    webhookSecret: ""
+
+# Cloud Provider Configuration (optional)
+aws:
+  accessKeyId: ""
+  secretAccessKey: ""
+  region: "us-east-1"
+  lambdaRoleArn: ""
+
+gcp:
+  projectId: ""
+  region: "us-central1"
+  serviceAccountKey: ""
+  serviceAccountEmail: ""
+
+openwhisk:
+  apiHost: "http://openwhisk-service:3233"
+  authKey: "23bc46b1-71f6-4ed5-8c54-816aa4f8c502:123zO3xZCLrMN6v2BKK1dXYFpXlPkccOFqm12CdAsMgRU4VrNZ9lyGVCGuMDGIwP"
+  namespace: "guest"
+  insecure: "true"
+
+waddleai:
+  baseUrl: ""
+  apiKey: ""
+
+# Dependencies Configuration
+dependencies:
+  ollama:
+    enabled: true  # Use existing K8s daemonset/service
+    host: "ollama-service"  # K8s service name
+    port: 11434
+  qdrant:
+    enabled: true  # Use existing K8s service
+    host: "infra-qdrant"
+    port: 6333
 
 # Ingress Configuration
 ingress:

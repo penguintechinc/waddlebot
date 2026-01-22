@@ -16,9 +16,11 @@ class Config:
     """Main configuration class for video proxy module."""
 
     # Database Configuration
-    DATABASE_URL: str = field(default_factory=lambda: os.getenv(
-        'DATABASE_URL',
-        'postgres://waddlebot:password@localhost:5432/waddlebot'
+    DATABASE_URL: str = field(default_factory=lambda: (
+        os.getenv('DATABASE_URL') or
+        f"postgres://{os.getenv('DB_USER', 'waddlebot')}:{os.getenv('DB_PASS', 'password')}@"
+        f"{os.getenv('DB_HOST', 'localhost')}:{os.getenv('DB_PORT', '5432')}/"
+        f"{os.getenv('DB_NAME', 'waddlebot')}"
     ).replace('postgresql://', 'postgres://'))
 
     # HTTP Server Configuration

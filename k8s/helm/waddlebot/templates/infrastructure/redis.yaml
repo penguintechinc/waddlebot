@@ -1,4 +1,4 @@
-{{- if .Values.redis.enabled }}
+{{- if .Values.infrastructure.redis.enabled }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -27,8 +27,8 @@ spec:
     spec:
       containers:
       - name: redis
-        image: {{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}
-        imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+        image: {{ .Values.infrastructure.redis.image }}
+        imagePullPolicy: IfNotPresent
         command:
         - redis-server
         - --requirepass
@@ -36,9 +36,9 @@ spec:
         - --appendonly
         - "yes"
         - --maxmemory
-        - {{ .Values.redis.maxMemory | quote }}
+        - {{ .Values.infrastructure.redis.maxMemory | quote }}
         - --maxmemory-policy
-        - {{ .Values.redis.maxMemoryPolicy | quote }}
+        - {{ .Values.infrastructure.redis.maxMemoryPolicy | quote }}
         ports:
         - name: redis
           containerPort: 6379
@@ -54,11 +54,11 @@ spec:
           mountPath: /data
         resources:
           requests:
-            memory: {{ .Values.redis.resources.requests.memory }}
-            cpu: {{ .Values.redis.resources.requests.cpu }}
+            memory: {{ .Values.infrastructure.redis.resources.requests.memory }}
+            cpu: {{ .Values.infrastructure.redis.resources.requests.cpu }}
           limits:
-            memory: {{ .Values.redis.resources.limits.memory }}
-            cpu: {{ .Values.redis.resources.limits.cpu }}
+            memory: {{ .Values.infrastructure.redis.resources.limits.memory }}
+            cpu: {{ .Values.infrastructure.redis.resources.limits.cpu }}
         livenessProbe:
           exec:
             command:
@@ -83,18 +83,18 @@ spec:
           failureThreshold: 3
       volumes:
       - name: redis-data
-        {{- if .Values.redis.persistence.enabled }}
+        {{- if .Values.infrastructure.redis.persistence.enabled }}
         persistentVolumeClaim:
-          claimName: {{ .Values.redis.persistence.name }}
+          claimName: {{ .Values.infrastructure.redis.persistence.name }}
         {{- else }}
         emptyDir: {}
         {{- end }}
 ---
-{{- if .Values.redis.persistence.enabled }}
+{{- if .Values.infrastructure.redis.persistence.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ .Values.redis.persistence.name }}
+  name: {{ .Values.infrastructure.redis.persistence.name }}
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: redis
@@ -103,19 +103,19 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
   accessModes:
-    - {{ .Values.redis.persistence.accessMode }}
-  {{- if .Values.redis.persistence.storageClass }}
-  storageClassName: {{ .Values.redis.persistence.storageClass }}
+    - {{ .Values.infrastructure.redis.persistence.accessMode }}
+  {{- if .Values.infrastructure.redis.persistence.storageClass }}
+  storageClassName: {{ .Values.infrastructure.redis.persistence.storageClass }}
   {{- end }}
   resources:
     requests:
-      storage: {{ .Values.redis.persistence.size }}
+      storage: {{ .Values.infrastructure.redis.persistence.size }}
 ---
 {{- end }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Values.redis.service.name }}
+  name: {{ .Values.infrastructure.redis.service.name }}
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: redis
@@ -123,9 +123,9 @@ metadata:
     app.kubernetes.io/component: cache
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
-  type: {{ .Values.redis.service.type }}
+  type: {{ .Values.infrastructure.redis.service.type }}
   ports:
-  - port: {{ .Values.redis.service.port }}
+  - port: {{ .Values.infrastructure.redis.service.port }}
     targetPort: redis
     protocol: TCP
     name: redis

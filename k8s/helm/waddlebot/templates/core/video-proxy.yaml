@@ -1,53 +1,56 @@
-{{- if .Values.modules.hub.enabled }}
+{{- if .Values.modules.videoProxy.enabled }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "waddlebot.fullname" . }}-hub-api
+  name: {{ include "waddlebot.fullname" . }}-video-proxy
   labels:
     {{- include "waddlebot.labels" . | nindent 4 }}
-    app.kubernetes.io/component: hub
+    app.kubernetes.io/component: video-proxy
 spec:
-  replicas: {{ .Values.modules.hub.replicas }}
+  replicas: {{ .Values.modules.videoProxy.replicas }}
   selector:
     matchLabels:
       {{- include "waddlebot.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: hub
+      app.kubernetes.io/component: video-proxy
   template:
     metadata:
       labels:
         {{- include "waddlebot.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: hub
+        app.kubernetes.io/component: video-proxy
     spec:
       serviceAccountName: {{ include "waddlebot.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
-      - name: hub
-        image: "{{ .Values.global.imageRegistry }}/hub-api:{{ .Values.modules.hub.imageTag | default .Chart.AppVersion }}"
+      - name: video-proxy
+        image: "{{ .Values.global.imageRegistry }}/core-video-proxy:{{ .Values.modules.videoProxy.imageTag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         securityContext:
           {{- toYaml .Values.securityContext | nindent 10 }}
         ports:
         - name: http
-          containerPort: 8060
+          containerPort: 8092
+          protocol: TCP
+        - name: grpc
+          containerPort: 50065
           protocol: TCP
         envFrom:
         - configMapRef:
             name: {{ include "waddlebot.fullname" . }}-common-config
-        - configMapRef:
-            name: {{ include "waddlebot.fullname" . }}-hub-api-config
-            optional: true
         - secretRef:
             name: {{ include "waddlebot.fullname" . }}-common-secret
-        - secretRef:
-            name: {{ include "waddlebot.fullname" . }}-hub-api-secret
-            optional: true
         env:
         - name: MODULE_NAME
-          value: "hub"
+          value: "video-proxy"
         - name: MODULE_PORT
-          value: "8060"
+          value: "8092"
+        - name: GRPC_PORT
+          value: "50065"
+        - name: MARCHPROXY_GRPC_HOST
+          value: "marchproxy-rtmp"
+        - name: MARCHPROXY_GRPC_PORT
+          value: "50050"
         livenessProbe:
           httpGet:
             path: /health
@@ -65,7 +68,7 @@ spec:
           timeoutSeconds: 3
           failureThreshold: 3
         resources:
-          {{- toYaml .Values.modules.hub.resources | nindent 10 }}
+          {{- toYaml .Values.modules.videoProxy.resources | nindent 10 }}
         volumeMounts:
         - name: logs
           mountPath: /var/log/waddlebotlog
@@ -76,21 +79,22 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "waddlebot.fullname" . }}-hub-api
+  name: {{ include "waddlebot.fullname" . }}-video-proxy
   labels:
     {{- include "waddlebot.labels" . | nindent 4 }}
-    app.kubernetes.io/component: hub
+    app.kubernetes.io/component: video-proxy
 spec:
-  type: {{ .Values.modules.hub.service.type | default "NodePort" }}
+  type: ClusterIP
   ports:
-  - port: 8060
+  - port: 8092
     targetPort: http
     protocol: TCP
     name: http
-    {{- if and (eq (.Values.modules.hub.service.type | default "NodePort") "NodePort") .Values.modules.hub.service.nodePort }}
-    nodePort: {{ .Values.modules.hub.service.nodePort }}
-    {{- end }}
+  - port: 50065
+    targetPort: grpc
+    protocol: TCP
+    name: grpc
   selector:
     {{- include "waddlebot.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: hub
+    app.kubernetes.io/component: video-proxy
 {{- end }}

@@ -1,9 +1,9 @@
-{{- if .Values.minio.enabled }}
+{{- if .Values.infrastructure.minio.enabled }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ .Values.minio.persistence.name }}
+  name: {{ .Values.infrastructure.minio.persistence.name }}
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: minio
@@ -12,13 +12,13 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
   accessModes:
-    - {{ .Values.minio.persistence.accessMode }}
-  {{- if .Values.minio.persistence.storageClass }}
-  storageClassName: {{ .Values.minio.persistence.storageClass }}
+    - {{ .Values.infrastructure.minio.persistence.accessMode }}
+  {{- if .Values.infrastructure.minio.persistence.storageClass }}
+  storageClassName: {{ .Values.infrastructure.minio.persistence.storageClass }}
   {{- end }}
   resources:
     requests:
-      storage: {{ .Values.minio.persistence.size }}
+      storage: {{ .Values.infrastructure.minio.persistence.size }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -47,8 +47,8 @@ spec:
     spec:
       containers:
       - name: minio
-        image: {{ .Values.minio.image.repository }}:{{ .Values.minio.image.tag }}
-        imagePullPolicy: {{ .Values.minio.image.pullPolicy }}
+        image: {{ .Values.infrastructure.minio.image }}
+        imagePullPolicy: IfNotPresent
         command:
         - /bin/sh
         - -c
@@ -72,17 +72,17 @@ spec:
               name: waddlebot-secrets
               key: MINIO_ROOT_PASSWORD
         - name: MINIO_DOMAIN
-          value: {{ .Values.minio.domain | quote }}
+          value: {{ .Values.infrastructure.minio.domain | quote }}
         volumeMounts:
         - name: minio-data
           mountPath: /data
         resources:
           requests:
-            memory: {{ .Values.minio.resources.requests.memory }}
-            cpu: {{ .Values.minio.resources.requests.cpu }}
+            memory: {{ .Values.infrastructure.minio.resources.requests.memory }}
+            cpu: {{ .Values.infrastructure.minio.resources.requests.cpu }}
           limits:
-            memory: {{ .Values.minio.resources.limits.memory }}
-            cpu: {{ .Values.minio.resources.limits.cpu }}
+            memory: {{ .Values.infrastructure.minio.resources.limits.memory }}
+            cpu: {{ .Values.infrastructure.minio.resources.limits.cpu }}
         livenessProbe:
           httpGet:
             path: /minio/health/live
@@ -102,12 +102,12 @@ spec:
       volumes:
       - name: minio-data
         persistentVolumeClaim:
-          claimName: {{ .Values.minio.persistence.name }}
+          claimName: {{ .Values.infrastructure.minio.persistence.name }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Values.minio.service.name }}
+  name: {{ .Values.infrastructure.minio.service.name }}
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: minio
@@ -115,21 +115,21 @@ metadata:
     app.kubernetes.io/component: storage
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
-  type: {{ .Values.minio.service.type }}
+  type: {{ .Values.infrastructure.minio.service.type }}
   ports:
-  - port: {{ .Values.minio.service.apiPort }}
+  - port: {{ .Values.infrastructure.minio.service.apiPort }}
     targetPort: api
     protocol: TCP
     name: api
-    {{- if and (eq .Values.minio.service.type "NodePort") .Values.minio.service.nodePortApi }}
-    nodePort: {{ .Values.minio.service.nodePortApi }}
+    {{- if and (eq .Values.infrastructure.minio.service.type "NodePort") .Values.infrastructure.minio.service.nodePortApi }}
+    nodePort: {{ .Values.infrastructure.minio.service.nodePortApi }}
     {{- end }}
-  - port: {{ .Values.minio.service.consolePort }}
+  - port: {{ .Values.infrastructure.minio.service.consolePort }}
     targetPort: console
     protocol: TCP
     name: console
-    {{- if and (eq .Values.minio.service.type "NodePort") .Values.minio.service.nodePortConsole }}
-    nodePort: {{ .Values.minio.service.nodePortConsole }}
+    {{- if and (eq .Values.infrastructure.minio.service.type "NodePort") .Values.infrastructure.minio.service.nodePortConsole }}
+    nodePort: {{ .Values.infrastructure.minio.service.nodePortConsole }}
     {{- end }}
   selector:
     app.kubernetes.io/name: minio

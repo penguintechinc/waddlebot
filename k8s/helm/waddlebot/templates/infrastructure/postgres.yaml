@@ -1,9 +1,9 @@
-{{- if .Values.postgres.enabled }}
+{{- if .Values.infrastructure.postgresql.enabled }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ .Values.postgres.persistence.name }}
+  name: {{ .Values.infrastructure.postgresql.persistence.name }}
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: postgres
@@ -12,13 +12,13 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
   accessModes:
-    - {{ .Values.postgres.persistence.accessMode }}
-  {{- if .Values.postgres.persistence.storageClass }}
-  storageClassName: {{ .Values.postgres.persistence.storageClass }}
+    - {{ .Values.infrastructure.postgresql.persistence.accessMode }}
+  {{- if .Values.infrastructure.postgresql.persistence.storageClass }}
+  storageClassName: {{ .Values.infrastructure.postgresql.persistence.storageClass }}
   {{- end }}
   resources:
     requests:
-      storage: {{ .Values.postgres.persistence.size }}
+      storage: {{ .Values.infrastructure.postgresql.persistence.size }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -45,9 +45,9 @@ data:
     CREATE SCHEMA IF NOT EXISTS community;
 
     -- Grant permissions
-    GRANT ALL PRIVILEGES ON SCHEMA router TO {{ .Values.postgres.username }};
-    GRANT ALL PRIVILEGES ON SCHEMA identity TO {{ .Values.postgres.username }};
-    GRANT ALL PRIVILEGES ON SCHEMA community TO {{ .Values.postgres.username }};
+    GRANT ALL PRIVILEGES ON SCHEMA router TO {{ .Values.infrastructure.postgresql.username }};
+    GRANT ALL PRIVILEGES ON SCHEMA identity TO {{ .Values.infrastructure.postgresql.username }};
+    GRANT ALL PRIVILEGES ON SCHEMA community TO {{ .Values.infrastructure.postgresql.username }};
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -76,8 +76,8 @@ spec:
     spec:
       containers:
       - name: postgres
-        image: {{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}
-        imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+        image: {{ .Values.infrastructure.postgresql.image }}
+        imagePullPolicy: IfNotPresent
         ports:
         - name: postgres
           containerPort: 5432
@@ -113,17 +113,17 @@ spec:
           readOnly: true
         resources:
           requests:
-            memory: {{ .Values.postgres.resources.requests.memory }}
-            cpu: {{ .Values.postgres.resources.requests.cpu }}
+            memory: {{ .Values.infrastructure.postgresql.resources.requests.memory }}
+            cpu: {{ .Values.infrastructure.postgresql.resources.requests.cpu }}
           limits:
-            memory: {{ .Values.postgres.resources.limits.memory }}
-            cpu: {{ .Values.postgres.resources.limits.cpu }}
+            memory: {{ .Values.infrastructure.postgresql.resources.limits.memory }}
+            cpu: {{ .Values.infrastructure.postgresql.resources.limits.cpu }}
         livenessProbe:
           exec:
             command:
             - /bin/sh
             - -c
-            - pg_isready -U {{ .Values.postgres.username }}
+            - pg_isready -U {{ .Values.infrastructure.postgresql.username }}
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
@@ -133,7 +133,7 @@ spec:
             command:
             - /bin/sh
             - -c
-            - pg_isready -U {{ .Values.postgres.username }}
+            - pg_isready -U {{ .Values.infrastructure.postgresql.username }}
           initialDelaySeconds: 5
           periodSeconds: 10
           timeoutSeconds: 5
@@ -141,7 +141,7 @@ spec:
       volumes:
       - name: postgres-data
         persistentVolumeClaim:
-          claimName: {{ .Values.postgres.persistence.name }}
+          claimName: {{ .Values.infrastructure.postgresql.persistence.name }}
       - name: init-script
         configMap:
           name: postgres-init-script
@@ -149,7 +149,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Values.postgres.service.name }}
+  name: {{ .Values.infrastructure.postgresql.service.name }}
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: postgres
@@ -157,9 +157,9 @@ metadata:
     app.kubernetes.io/component: database
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
-  type: {{ .Values.postgres.service.type }}
+  type: {{ .Values.infrastructure.postgresql.service.type }}
   ports:
-  - port: {{ .Values.postgres.service.port }}
+  - port: {{ .Values.infrastructure.postgresql.service.port }}
     targetPort: postgres
     protocol: TCP
     name: postgres
