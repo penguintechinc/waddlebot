@@ -1,5 +1,6 @@
 """Router Module Configuration"""
 import os
+from urllib.parse import quote_plus
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,8 +11,16 @@ class Config:
     MODULE_VERSION = '2.0.0'
     MODULE_PORT = int(os.getenv('MODULE_PORT', '8000'))
 
-    DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://waddlebot:password@localhost:5432/waddlebot')
-    READ_REPLICA_URL = os.getenv('READ_REPLICA_URL', '')
+    # Database configuration - build URL from components to handle special characters
+    DATABASE_HOST = os.getenv('DATABASE_HOST', 'localhost')
+    DATABASE_PORT = os.getenv('DATABASE_PORT', '5432')
+    DATABASE_NAME = os.getenv('DATABASE_NAME', 'waddlebot')
+    DATABASE_USER = os.getenv('DATABASE_USER', 'waddlebot')
+    DATABASE_PASSWORD = os.getenv('DATABASE_PASSWORD', 'password')
+
+    # Read replica configuration
+    READ_REPLICA_HOST = os.getenv('READ_REPLICA_HOST', '')
+    READ_REPLICA_PORT = os.getenv('READ_REPLICA_PORT', '5432')
 
     REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
     REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
@@ -126,12 +135,39 @@ class Config:
     STREAM_RESPONSES = os.getenv('STREAM_RESPONSES', 'waddlebot:stream:events:responses')
 
 
+# Compute DATABASE_URL after class definition to handle special characters in password
+_db_user = Config.DATABASE_USER
+_db_password = Config.DATABASE_PASSWORD
+_db_host = Config.DATABASE_HOST
+_db_port = Config.DATABASE_PORT
+_db_name = Config.DATABASE_NAME
+
+if _db_password:
+    # URL-encode password to handle special characters like / + = etc.
+    _encoded_db_password = quote_plus(_db_password)
+    Config.DATABASE_URL = f"postgresql://{_db_user}:{_encoded_db_password}@{_db_host}:{_db_port}/{_db_name}"
+else:
+    Config.DATABASE_URL = f"postgresql://{_db_user}@{_db_host}:{_db_port}/{_db_name}"
+
+# Compute READ_REPLICA_URL if configured
+_replica_host = Config.READ_REPLICA_HOST
+_replica_port = Config.READ_REPLICA_PORT
+if _replica_host:
+    if _db_password:
+        Config.READ_REPLICA_URL = f"postgresql://{_db_user}:{_encoded_db_password}@{_replica_host}:{_replica_port}/{_db_name}"
+    else:
+        Config.READ_REPLICA_URL = f"postgresql://{_db_user}@{_replica_host}:{_replica_port}/{_db_name}"
+else:
+    Config.READ_REPLICA_URL = ''
+
 # Compute REDIS_URL after class definition
 _redis_password = Config.REDIS_PASSWORD
 _redis_host = Config.REDIS_HOST
 _redis_port = Config.REDIS_PORT
 _redis_db = Config.REDIS_DB
 if _redis_password:
-    Config.REDIS_URL = f"redis://:{_redis_password}@{_redis_host}:{_redis_port}/{_redis_db}"
+    # URL-encode password to handle special characters like / + = etc.
+    _encoded_password = quote_plus(_redis_password)
+    Config.REDIS_URL = f"redis://:{_encoded_password}@{_redis_host}:{_redis_port}/{_redis_db}"
 else:
     Config.REDIS_URL = f"redis://{_redis_host}:{_redis_port}/{_redis_db}"

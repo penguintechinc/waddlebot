@@ -17,6 +17,11 @@ data:
   DB_TYPE: "postgres"
   POSTGRES_USER: {{ .Values.infrastructure.postgresql.username | quote }}
   POSTGRES_DB: {{ .Values.infrastructure.postgresql.database | quote }}
+  # Alternative naming convention used by some modules (router, etc.)
+  DATABASE_HOST: {{ .Values.infrastructure.postgresql.service.name | quote }}
+  DATABASE_PORT: {{ .Values.infrastructure.postgresql.service.port | quote }}
+  DATABASE_NAME: {{ .Values.infrastructure.postgresql.database | quote }}
+  DATABASE_USER: {{ .Values.infrastructure.postgresql.username | quote }}
 
   # Redis Configuration
   REDIS_HOST: {{ .Values.infrastructure.redis.service.name | quote }}

@@ -24,7 +24,7 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
       - name: calendar-interaction
-        image: "{{ .Values.global.imageRegistry }}/calendar-interaction:{{ .Values.modules.interactive.calendar.imageTag | default .Chart.AppVersion }}"
+        image: "{{ .Values.global.imageRegistry }}/interactive-calendar:{{ .Values.modules.interactive.calendar.imageTag | default .Values.global.imageTag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         securityContext:
           {{- toYaml .Values.securityContext | nindent 10 }}
@@ -34,12 +34,12 @@ spec:
           protocol: TCP
         envFrom:
         - configMapRef:
-            name: {{ include "waddlebot.fullname" . }}-common-config
+            name: {{ include "waddlebot.fullname" . }}-config
         - configMapRef:
             name: {{ include "waddlebot.fullname" . }}-calendar-interaction-config
             optional: true
         - secretRef:
-            name: {{ include "waddlebot.fullname" . }}-common-secret
+            name: {{ include "waddlebot.fullname" . }}-secrets
         - secretRef:
             name: {{ include "waddlebot.fullname" . }}-calendar-interaction-secret
             optional: true

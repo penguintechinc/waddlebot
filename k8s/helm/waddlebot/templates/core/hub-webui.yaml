@@ -24,13 +24,13 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
       - name: hub-webui
-        image: "{{ .Values.global.imageRegistry }}/hub-webui:{{ .Values.modules.hubWebui.imageTag | default .Chart.AppVersion }}"
+        image: "{{ .Values.global.imageRegistry }}/hub-webui:{{ .Values.modules.hubWebui.imageTag | default .Values.global.imageTag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         securityContext:
           {{- toYaml .Values.securityContext | nindent 10 }}
         ports:
         - name: http
-          containerPort: 80
+          containerPort: 8080
           protocol: TCP
         livenessProbe:
           httpGet:
@@ -50,6 +50,16 @@ spec:
           failureThreshold: 3
         resources:
           {{- toYaml .Values.modules.hubWebui.resources | nindent 10 }}
+        volumeMounts:
+        - name: nginx-cache
+          mountPath: /var/cache/nginx
+        - name: nginx-run
+          mountPath: /var/run
+      volumes:
+      - name: nginx-cache
+        emptyDir: {}
+      - name: nginx-run
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

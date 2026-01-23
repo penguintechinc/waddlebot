@@ -13,6 +13,7 @@ networks:
 
 volumes:
   postgres-data:
+  postgres-replica-data:
   redis-data:
   rabbitmq-data:
   minio-data:
@@ -24,17 +25,38 @@ services:
   # INFRASTRUCTURE SERVICES (Internal Only - NOT exposed to host)
   # =============================================================================
 
-  postgres:
-    image: postgres:15-alpine
-    container_name: waddlebot-postgres
+  infra-postgres:
+    image: postgres:15-bookworm
+    container_name: infra-postgres
     environment:
       POSTGRES_USER: waddlebot
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: waddlebot
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+      # Allow replication connections from any host on the internal network
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./config/postgres/performance.conf:/etc/postgresql/performance.conf:ro
+      - ./config/postgres/replication.conf:/etc/postgresql/replication.conf:ro
+      - ./config/postgres/pg_hba.conf:/var/lib/postgresql/pg_hba.conf:ro
+    command:
+      - postgres
+      - -c
+      - hba_file=/var/lib/postgresql/pg_hba.conf
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - hot_standby=on
+      - -c
+      - max_connections=400
+      - -c
+      - listen_addresses=*
     networks:
       - waddlebot-internal
     # NO ports exposed - internal only
@@ -45,9 +67,62 @@ services:
       retries: 5
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    container_name: waddlebot-redis
+  # PostgreSQL Read Replica - routes SELECT queries here to reduce primary load
+  infra-postgres-replica:
+    image: postgres:15-bookworm
+    container_name: infra-postgres-replica
+    user: postgres
+    environment:
+      POSTGRES_USER: waddlebot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: waddlebot
+      PGUSER: waddlebot
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-replica-data:/var/lib/postgresql/data
+      - ./config/postgres/performance.conf:/etc/postgresql/performance.conf:ro
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -e
+
+        # Wait for primary to be ready
+        until pg_isready -h infra-postgres -p 5432 -U waddlebot 2>/dev/null; do
+          echo "Waiting for primary postgres..."
+          sleep 2
+        done
+        echo "Primary is ready!"
+
+        # If replica data doesn't exist, create base backup from primary
+        if [ ! -f "$${PGDATA}/PG_VERSION" ]; then
+          echo "Creating base backup from primary..."
+          mkdir -p "$${PGDATA}"
+          rm -rf "$${PGDATA}"/*
+          PGPASSWORD="$${POSTGRES_PASSWORD}" pg_basebackup -h infra-postgres -p 5432 -U waddlebot -D "$${PGDATA}" -Fp -Xs -P -R
+          chmod 700 "$${PGDATA}"
+          echo "Base backup complete!"
+        fi
+
+        # Start postgres in standby mode
+        exec postgres -D "$${PGDATA}" -c hot_standby=on -c max_connections=400
+    networks:
+      - waddlebot-internal
+    depends_on:
+      infra-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U waddlebot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
+  infra-redis:
+    image: redis:7-bookworm
+    container_name: infra-redis
     entrypoint: ["/usr/local/bin/docker-entrypoint.sh"]
     environment:
       # Admin password for maintenance
@@ -80,9 +155,9 @@ services:
       retries: 5
     restart: unless-stopped
 
-  minio:
+  infra-minio:
     image: minio/minio:RELEASE.2024-01-16T16-07-38Z
-    container_name: waddlebot-minio
+    container_name: infra-minio
     ports:
       - "9000:9000"   # MinIO API
       - "9001:9001"   # MinIO Console
@@ -103,10 +178,11 @@ services:
       - waddlebot-public
     restart: unless-stopped
 
-  # Ollama for local AI inference testing
-  ollama:
+  # Ollama for local AI inference - auto-pulls tinyllama model on startup
+  # For GPU support: docker compose --profile gpu up -d
+  ai-ollama:
     image: ollama/ollama:latest
-    container_name: waddlebot-ollama
+    container_name: ai-ollama
     volumes:
       - ollama-data:/root/.ollama
     networks:
@@ -115,25 +191,75 @@ services:
     environment:
       OLLAMA_HOST: 0.0.0.0
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 30s
       timeout: 10s
-      start_period: 30s
-      retries: 3
+      start_period: 120s
+      retries: 5
     restart: unless-stopped
-    # Uncomment to use GPU acceleration
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+
+  # Ollama with GPU - use with: docker compose --profile gpu up -d
+  # Requires nvidia-container-toolkit to be installed
+  ai-ollama-gpu:
+    image: ollama/ollama:latest
+    container_name: ai-ollama-gpu
+    profiles:
+      - gpu
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - waddlebot-internal
+      - waddlebot-public
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+      NVIDIA_VISIBLE_DEVICES: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 5
+    restart: unless-stopped
+
+  # Ollama model puller - pulls tinyllama on first startup
+  ai-ollama-pull:
+    image: ollama/ollama:latest
+    container_name: ai-ollama-pull
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - waddlebot-internal
+    environment:
+      OLLAMA_HOST: http://ai-ollama:11434
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        echo "Waiting for Ollama server..."
+        sleep 10
+        # Use ollama list to check if server is ready (retries built-in)
+        until ollama list 2>/dev/null; do
+          echo "Ollama not ready, retrying..."
+          sleep 5
+        done
+        echo "Ollama server ready, pulling tinyllama..."
+        ollama pull tinyllama
+        echo "tinyllama model ready!"
+    depends_on:
+      - ai-ollama
+    restart: "no"
 
   # Qdrant vector database for AI memory and research
-  qdrant:
+  infra-qdrant:
     image: qdrant/qdrant:latest
-    container_name: waddlebot-qdrant
+    container_name: infra-qdrant
     volumes:
       - qdrant-data:/qdrant/storage
     networks:
@@ -180,12 +306,12 @@ services:
   # Note: Kong is docker-compose only. Kubernetes uses Nginx Ingress Controller.
   # =============================================================================
 
-  kong:
+  core-kong:
     image: kong:3.5-ubuntu
-    container_name: waddlebot-kong
+    container_name: core-kong
     environment:
       KONG_DATABASE: postgres
-      KONG_PG_HOST: postgres
+      KONG_PG_HOST: infra-postgres
       KONG_PG_PORT: 5432
       KONG_PG_DATABASE: kong
       KONG_PG_USER: kong
@@ -216,11 +342,11 @@ services:
       - waddlebot-public
       - waddlebot-internal
     depends_on:
-      postgres:
+      infra-postgres:
         condition: service_healthy
-      hub:
+      hub-api:
         condition: service_started
-      router:
+      core-router:
         condition: service_started
     healthcheck:
       test: ["CMD", "kong", "health"]
@@ -233,25 +359,25 @@ services:
   # CORE MODULES
   # =============================================================================
 
-  router:
+  core-router:
     build:
       context: .
       dockerfile: processing/router_module/Dockerfile
-    container_name: waddlebot-router
+    container_name: core-router
     environment:
       MODULE_NAME: router
       MODULE_PORT: 8000
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       # Redis ACL: user=router, prefix=router:*, waddlebot:session:*, waddlebot:rate:*, waddlebot:cmd:*
-      REDIS_URL: redis://router:${REDIS_ROUTER_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://router:${REDIS_ROUTER_PASSWORD}@infra-redis:6379/0
       REDIS_KEY_PREFIX: "router:"
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      postgres:
+      infra-postgres:
         condition: service_healthy
-      redis:
+      infra-redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -262,17 +388,17 @@ services:
 
   # marketplace service removed - functionality now in hub admin panel
 
-  hub:
+  hub-api:
     build:
       context: .
       dockerfile: admin/hub_module/Dockerfile
-    container_name: waddlebot-hub
+    container_name: hub-api
     environment:
       NODE_ENV: ${NODE_ENV}
       PORT: 8060
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       # Redis ACL: user=hub, prefix=hub:*, waddlebot:session:*, waddlebot:auth:*
-      REDIS_URL: redis://hub:${REDIS_HUB_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://hub:${REDIS_HUB_PASSWORD}@infra-redis:6379/0
       REDIS_KEY_PREFIX: "hub:"
       JWT_SECRET: ${JWT_SECRET}
       BASE_DOMAIN: ${BASE_DOMAIN}
@@ -284,16 +410,16 @@ services:
       SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
       SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
       # Internal service URLs
-      ROUTER_API_URL: http://router:8000
-      IDENTITY_API_URL: http://identity-core:8050
-      INVENTORY_API_URL: http://inventory-interaction:8024
-      REPUTATION_API_URL: http://reputation:8021
-      CALENDAR_API_URL: http://calendar-interaction:8030
-      MEMORIES_API_URL: http://memories-interaction:8031
-      LABELS_API_URL: http://labels-core:8023
-      SHOUTOUT_API_URL: http://shoutout-interaction:8011
-      BROWSER_SOURCE_API_URL: http://browser-source:8027
-      LOYALTY_API_URL: http://loyalty-interaction:8032
+      ROUTER_API_URL: http://core-router:8000
+      IDENTITY_API_URL: http://core-identity:8050
+      INVENTORY_API_URL: http://interactive-inventory:8024
+      REPUTATION_API_URL: http://core-reputation:8021
+      CALENDAR_API_URL: http://interactive-calendar:8030
+      MEMORIES_API_URL: http://interactive-memories:8031
+      LABELS_API_URL: http://core-labels:8023
+      SHOUTOUT_API_URL: http://interactive-shoutout:8011
+      BROWSER_SOURCE_API_URL: http://core-browser-source:8027
+      LOYALTY_API_URL: http://interactive-loyalty:8032
       # Overlay Configuration
       OVERLAY_BASE_URL: ${OVERLAY_BASE_URL}
       # S3 Storage Configuration (MinIO)
@@ -310,33 +436,34 @@ services:
       - waddlebot-public
       - waddlebot-internal
     depends_on:
-      postgres:
+      infra-postgres:
         condition: service_healthy
-      redis:
+      infra-redis:
         condition: service_healthy
-      minio:
+      infra-minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8060/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8060/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      start_period: 30s
+      retries: 5
     restart: unless-stopped
 
   # =============================================================================
   # COLLECTOR MODULES (Internal)
   # =============================================================================
 
-  twitch-collector:
+  trigger-twitch:
     build:
       context: .
       dockerfile: trigger/receiver/twitch_module/Dockerfile
-    container_name: waddlebot-twitch
+    container_name: trigger-twitch
     environment:
       MODULE_NAME: twitch-collector
       MODULE_PORT: 8002
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID}
       TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET}
       TWITCH_WEBHOOK_SECRET: ${TWITCH_WEBHOOK_SECRET}
@@ -344,7 +471,7 @@ services:
     networks:
       - waddlebot-internal
     depends_on:
-      - router
+      - core-router
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
       interval: 30s
@@ -352,23 +479,23 @@ services:
       retries: 3
     restart: unless-stopped
 
-  discord-collector:
+  trigger-discord:
     build:
       context: .
       dockerfile: trigger/receiver/discord_module/Dockerfile
-    container_name: waddlebot-discord
+    container_name: trigger-discord
     environment:
       MODULE_NAME: discord-collector
       MODULE_PORT: 8003
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
       DISCORD_APPLICATION_ID: ${DISCORD_APPLICATION_ID}
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
+      - core-router
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
       interval: 30s
@@ -376,23 +503,23 @@ services:
       retries: 3
     restart: unless-stopped
 
-  slack-collector:
+  trigger-slack:
     build:
       context: .
       dockerfile: trigger/receiver/slack_module/Dockerfile
-    container_name: waddlebot-slack
+    container_name: trigger-slack
     environment:
       MODULE_NAME: slack-collector
       MODULE_PORT: 8004
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
       SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
+      - core-router
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')"]
       interval: 30s
@@ -400,16 +527,16 @@ services:
       retries: 3
     restart: unless-stopped
 
-  youtube-live-collector:
+  trigger-youtube:
     build:
       context: .
       dockerfile: trigger/receiver/youtube_live_module/Dockerfile
-    container_name: waddlebot-youtube-live
+    container_name: trigger-youtube
     environment:
       MODULE_NAME: youtube-live-collector
       MODULE_PORT: 8006
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
       YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID}
       YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET}
@@ -418,7 +545,7 @@ services:
     networks:
       - waddlebot-internal
     depends_on:
-      - router
+      - core-router
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8006/health')"]
       interval: 30s
@@ -426,16 +553,16 @@ services:
       retries: 3
     restart: unless-stopped
 
-  kick-collector:
+  trigger-kick:
     build:
       context: .
       dockerfile: trigger/receiver/kick_module_flask/Dockerfile
-    container_name: waddlebot-kick
+    container_name: trigger-kick
     environment:
       MODULE_NAME: kick-collector
       MODULE_PORT: 8007
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       KICK_CLIENT_ID: ${KICK_CLIENT_ID}
       KICK_CLIENT_SECRET: ${KICK_CLIENT_SECRET}
       KICK_WEBHOOK_SECRET: ${KICK_WEBHOOK_SECRET}
@@ -443,7 +570,7 @@ services:
     networks:
       - waddlebot-internal
     depends_on:
-      - router
+      - core-router
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8007/health')"]
       interval: 30s
@@ -455,16 +582,16 @@ services:
   # INTERACTION MODULES (Internal)
   # =============================================================================
 
-  ai-interaction:
+  interactive-ai:
     build:
       context: .
       dockerfile: action/interactive/ai_interaction_module/Dockerfile
-    container_name: waddlebot-ai
+    container_name: interactive-ai
     environment:
       MODULE_NAME: ai-interaction
       MODULE_PORT: 8005
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       AI_PROVIDER: ${AI_PROVIDER}
       OLLAMA_HOST: ${OLLAMA_HOST}
       OLLAMA_PORT: ${OLLAMA_PORT}
@@ -476,8 +603,8 @@ services:
     networks:
       - waddlebot-internal
     depends_on:
-      - router
-      - ollama
+      - core-router
+      - ai-ollama
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')"]
       interval: 30s
@@ -485,21 +612,21 @@ services:
       retries: 3
     restart: unless-stopped
 
-  alias-interaction:
+  interactive-alias:
     build:
       context: .
       dockerfile: action/interactive/alias_interaction_module/Dockerfile
-    container_name: waddlebot-alias
+    container_name: interactive-alias
     environment:
       MODULE_NAME: alias-interaction
       MODULE_PORT: 8010
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
+      - core-router
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/health')"]
       interval: 30s
@@ -507,21 +634,21 @@ services:
       retries: 3
     restart: unless-stopped
 
-  shoutout-interaction:
+  interactive-shoutout:
     build:
       context: .
       dockerfile: action/interactive/shoutout_interaction_module/Dockerfile
-    container_name: waddlebot-shoutout
+    container_name: interactive-shoutout
     environment:
       MODULE_NAME: shoutout-interaction
       MODULE_PORT: 8011
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
+      - core-router
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8011/health')"]
       interval: 30s
@@ -529,21 +656,21 @@ services:
       retries: 3
     restart: unless-stopped
 
-  inventory-interaction:
+  interactive-inventory:
     build:
       context: .
       dockerfile: action/interactive/inventory_interaction_module/Dockerfile
-    container_name: waddlebot-inventory
+    container_name: interactive-inventory
     environment:
       MODULE_NAME: inventory-interaction
       MODULE_PORT: 8024
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
+      - core-router
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8024/health')"]
       interval: 30s
@@ -551,21 +678,21 @@ services:
       retries: 3
     restart: unless-stopped
 
-  calendar-interaction:
+  interactive-calendar:
     build:
       context: .
       dockerfile: action/interactive/calendar_interaction_module/Dockerfile
-    container_name: waddlebot-calendar
+    container_name: interactive-calendar
     environment:
       MODULE_NAME: calendar-interaction
       MODULE_PORT: 8030
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
+      - core-router
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8030/health')"]
       interval: 30s
@@ -573,21 +700,21 @@ services:
       retries: 3
     restart: unless-stopped
 
-  memories-interaction:
+  interactive-memories:
     build:
       context: .
       dockerfile: action/interactive/memories_interaction_module/Dockerfile
-    container_name: waddlebot-memories
+    container_name: interactive-memories
     environment:
       MODULE_NAME: memories-interaction
       MODULE_PORT: 8031
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
+      - core-router
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8031/health')"]
       interval: 30s
@@ -595,24 +722,24 @@ services:
       retries: 3
     restart: unless-stopped
 
-  youtube-music:
+  interactive-youtube-music:
     build:
       context: .
       dockerfile: action/interactive/youtube_music_interaction_module/Dockerfile
-    container_name: waddlebot-youtube-music
+    container_name: interactive-youtube-music
     environment:
       MODULE_NAME: youtube-music
       MODULE_PORT: 8025
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
-      BROWSER_SOURCE_API_URL: http://browser-source:8027
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
+      BROWSER_SOURCE_API_URL: http://core-browser-source:8027
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
-      - browser-source
+      - core-router
+      - core-browser-source
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8025/health')"]
       interval: 30s
@@ -620,25 +747,25 @@ services:
       retries: 3
     restart: unless-stopped
 
-  spotify-interaction:
+  interactive-spotify:
     build:
       context: .
       dockerfile: action/interactive/spotify_interaction_module/Dockerfile
-    container_name: waddlebot-spotify
+    container_name: interactive-spotify
     environment:
       MODULE_NAME: spotify-interaction
       MODULE_PORT: 8026
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
-      BROWSER_SOURCE_API_URL: http://browser-source:8027
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
+      BROWSER_SOURCE_API_URL: http://core-browser-source:8027
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID}
       SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET}
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
-      - browser-source
+      - core-router
+      - core-browser-source
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8026/health')"]
       interval: 30s
@@ -646,25 +773,25 @@ services:
       retries: 3
     restart: unless-stopped
 
-  loyalty-interaction:
+  interactive-loyalty:
     build:
       context: .
       dockerfile: action/interactive/loyalty_interaction_module/Dockerfile
-    container_name: waddlebot-loyalty-interaction
+    container_name: interactive-loyalty
     environment:
       MODULE_NAME: loyalty-interaction
       MODULE_PORT: 8032
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
-      REPUTATION_API_URL: http://reputation:8021
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
+      REPUTATION_API_URL: http://core-reputation:8021
       SERVICE_API_KEY: ${SERVICE_API_KEY}
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - postgres
-      - router
-      - reputation
+      - infra-postgres
+      - core-router
+      - core-reputation
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8032/health')"]
       interval: 30s
@@ -676,25 +803,25 @@ services:
   # CORE SYSTEM MODULES (Internal)
   # =============================================================================
 
-  labels-core:
+  core-labels:
     build:
       context: .
       dockerfile: core/labels_core_module/Dockerfile
-    container_name: waddlebot-labels
+    container_name: core-labels
     environment:
       MODULE_NAME: labels-core
       MODULE_PORT: 8023
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       # Redis ACL: uses router credentials for shared cache access
-      REDIS_URL: redis://router:${REDIS_ROUTER_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://router:${REDIS_ROUTER_PASSWORD}@infra-redis:6379/0
       REDIS_KEY_PREFIX: "labels:"
-      ROUTER_API_URL: http://router:8000
+      ROUTER_API_URL: http://core-router:8000
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
-      - redis
+      - core-router
+      - infra-redis
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8023/health')"]
       interval: 30s
@@ -702,16 +829,16 @@ services:
       retries: 3
     restart: unless-stopped
 
-  browser-source:
+  core-browser-source:
     build:
       context: .
       dockerfile: core/browser_source_core_module/Dockerfile
-    container_name: waddlebot-browser-source
+    container_name: core-browser-source
     environment:
       MODULE_NAME: browser-source
       MODULE_PORT: 8027
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       OVERLAY_BASE_URL: ${OVERLAY_BASE_URL}
       OVERLAY_KEY_GRACE_PERIOD_MINUTES: ${OVERLAY_KEY_GRACE_PERIOD_MINUTES}
       LOG_LEVEL: ${LOG_LEVEL}
@@ -721,7 +848,7 @@ services:
       - waddlebot-public
       - waddlebot-internal
     depends_on:
-      - router
+      - core-router
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8027/health')"]
       interval: 30s
@@ -729,25 +856,25 @@ services:
       retries: 3
     restart: unless-stopped
 
-  identity-core:
+  core-identity:
     build:
       context: .
       dockerfile: core/identity_core_module/Dockerfile
-    container_name: waddlebot-identity
+    container_name: core-identity
     environment:
       MODULE_NAME: identity-core
       MODULE_PORT: 8050
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       # Redis ACL: uses hub credentials for session/auth data
-      REDIS_URL: redis://hub:${REDIS_HUB_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://hub:${REDIS_HUB_PASSWORD}@infra-redis:6379/0
       REDIS_KEY_PREFIX: "identity:"
-      ROUTER_API_URL: http://router:8000
+      ROUTER_API_URL: http://core-router:8000
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
-      - redis
+      - core-router
+      - infra-redis
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8050/health')"]
       interval: 30s
@@ -759,16 +886,16 @@ services:
     build:
       context: .
       dockerfile: core/ai_researcher_module/Dockerfile
-    container_name: waddlebot-ai-researcher
+    container_name: ai-researcher
     environment:
       MODULE_NAME: ai_researcher_module
       MODULE_VERSION: 1.0.0
       MODULE_PORT: 8070
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       # Redis ACL: user=ai_researcher, prefix=ai:*, waddlebot:ai:*, waddlebot:rate:ai:*
-      REDIS_URL: redis://ai_researcher:${REDIS_AI_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://ai_researcher:${REDIS_AI_PASSWORD}@infra-redis:6379/0
       REDIS_KEY_PREFIX: "ai:"
-      ROUTER_API_URL: http://router:8000/api/v1/router
+      ROUTER_API_URL: http://core-router:8000/api/v1/router
       OLLAMA_HOST: ${OLLAMA_HOST}
       OLLAMA_PORT: ${OLLAMA_PORT}
       AI_PROVIDER: ${AI_PROVIDER}
@@ -779,11 +906,11 @@ services:
     networks:
       - waddlebot-internal
     depends_on:
-      postgres:
+      infra-postgres:
         condition: service_healthy
-      redis:
+      infra-redis:
         condition: service_healthy
-      qdrant:
+      infra-qdrant:
         condition: service_healthy
     # Port removed - access via Kong at api.waddlebot.io
     # ports:
@@ -795,57 +922,58 @@ services:
       retries: 3
     restart: unless-stopped
 
-  workflow-core:
+  core-workflow:
     build:
       context: .
       dockerfile: core/workflow_core_module/Dockerfile
-    container_name: waddlebot-workflow-core
+    container_name: core-workflow
     environment:
       MODULE_NAME: workflow-core
       MODULE_PORT: 8090
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       # Redis ACL: user=workflow, prefix=workflow:*, waddlebot:jobs:*, waddlebot:schedule:*, waddlebot:lock:*
-      REDIS_URL: redis://workflow:${REDIS_WORKFLOW_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://workflow:${REDIS_WORKFLOW_PASSWORD}@infra-redis:6379/0
       REDIS_KEY_PREFIX: "workflow:"
-      ROUTER_API_URL: http://router:8000
+      ROUTER_API_URL: http://core-router:8000
       LICENSE_SERVER_URL: ${LICENSE_SERVER_URL}
       RELEASE_MODE: ${RELEASE_MODE}
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      postgres:
+      infra-postgres:
         condition: service_healthy
-      redis:
+      infra-redis:
         condition: service_healthy
-      router:
+      core-router:
         condition: service_started
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health')"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8070/health')"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      start_period: 30s
+      retries: 5
     restart: unless-stopped
 
   # =============================================================================
   # SUPPORTING MODULES (Internal)
   # =============================================================================
 
-  community:
+  core-community:
     build:
       context: .
       dockerfile: core/community_module/Dockerfile
-    container_name: waddlebot-community
+    container_name: core-community
     environment:
       MODULE_NAME: community
       MODULE_PORT: 8020
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
+      - core-router
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')"]
       interval: 30s
@@ -853,21 +981,21 @@ services:
       retries: 3
     restart: unless-stopped
 
-  reputation:
+  core-reputation:
     build:
       context: .
       dockerfile: core/reputation_module/Dockerfile
-    container_name: waddlebot-reputation
+    container_name: core-reputation
     environment:
       MODULE_NAME: reputation
       MODULE_PORT: 8021
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
-      ROUTER_API_URL: http://router:8000
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      ROUTER_API_URL: http://core-router:8000
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
+      - core-router
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8021/health')"]
       interval: 30s
@@ -875,25 +1003,25 @@ services:
       retries: 3
     restart: unless-stopped
 
-  analytics-core:
+  core-analytics:
     build:
       context: .
       dockerfile: core/analytics_core_module/Dockerfile
-    container_name: waddlebot-analytics
+    container_name: core-analytics
     environment:
       MODULE_NAME: analytics-core
       MODULE_PORT: 8040
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       # Redis ACL: user=analytics, prefix=analytics:*, waddlebot:metrics:*, waddlebot:counters:*
-      REDIS_URL: redis://analytics:${REDIS_ANALYTICS_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://analytics:${REDIS_ANALYTICS_PASSWORD}@infra-redis:6379/0
       REDIS_KEY_PREFIX: "analytics:"
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      postgres:
+      infra-postgres:
         condition: service_healthy
-      redis:
+      infra-redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8040/health')"]
@@ -902,26 +1030,26 @@ services:
       retries: 3
     restart: unless-stopped
 
-  security-core:
+  core-security:
     build:
       context: .
       dockerfile: core/security_core_module/Dockerfile
-    container_name: waddlebot-security
+    container_name: core-security
     environment:
       MODULE_NAME: security-core
       MODULE_PORT: 8041
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       # Redis ACL: user=security, prefix=security:*, waddlebot:blacklist:*, waddlebot:threat:*
-      REDIS_URL: redis://security:${REDIS_SECURITY_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://security:${REDIS_SECURITY_PASSWORD}@infra-redis:6379/0
       REDIS_KEY_PREFIX: "security:"
-      REPUTATION_API_URL: http://reputation:8021
+      REPUTATION_API_URL: http://core-reputation:8021
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      postgres:
+      infra-postgres:
         condition: service_healthy
-      redis:
+      infra-redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8041/health')"]
@@ -934,66 +1062,68 @@ services:
   # PUSHING ACTION MODULES (Platform Integration)
   # =============================================================================
 
-  discord-action:
+  action-discord:
     build:
       context: .
       dockerfile: action/pushing/discord_action_module/Dockerfile
-    container_name: waddlebot-discord-action
+    container_name: action-discord
     environment:
       MODULE_NAME: discord-action
       GRPC_PORT: 50051
       REST_PORT: 8070
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
       MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
-      - postgres
+      - core-router
+      - infra-postgres
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8070/health')"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      start_period: 20s
+      retries: 5
     restart: unless-stopped
 
-  slack-action:
+  action-slack:
     build:
       context: .
       dockerfile: action/pushing/slack_action_module/Dockerfile
-    container_name: waddlebot-slack-action
+    container_name: action-slack
     environment:
       MODULE_NAME: slack-action
       GRPC_PORT: 50052
       REST_PORT: 8071
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
       MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
       LOG_LEVEL: ${LOG_LEVEL}
     networks:
       - waddlebot-internal
     depends_on:
-      - router
-      - postgres
+      - core-router
+      - infra-postgres
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8071/health')"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      start_period: 20s
+      retries: 5
     restart: unless-stopped
 
-  twitch-action:
+  action-twitch:
     build:
       context: .
       dockerfile: action/pushing/twitch_action_module/Dockerfile
-    container_name: waddlebot-twitch-action
+    container_name: action-twitch
     environment:
       MODULE_NAME: twitch-action
       GRPC_PORT: 50053
       REST_PORT: 8072
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID}
       TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET}
       MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
@@ -1001,25 +1131,26 @@ services:
     networks:
       - waddlebot-internal
     depends_on:
-      - router
-      - postgres
+      - core-router
+      - infra-postgres
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8072/health')"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      start_period: 20s
+      retries: 5
     restart: unless-stopped
 
-  youtube-action:
+  action-youtube:
     build:
       context: .
       dockerfile: action/pushing/youtube_action_module/Dockerfile
-    container_name: waddlebot-youtube-action
+    container_name: action-youtube
     environment:
       MODULE_NAME: youtube-action
       GRPC_PORT: 50054
       REST_PORT: 8073
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
       YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID}
       YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET}
@@ -1028,10 +1159,122 @@ services:
     networks:
       - waddlebot-internal
     depends_on:
-      - router
-      - postgres
+      - core-router
+      - infra-postgres
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8073/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 5
+    restart: unless-stopped
+
+  # =============================================================================
+  # VIDEO & ENGAGEMENT MODULES
+  # =============================================================================
+
+  core-video-proxy:
+    build:
+      context: .
+      dockerfile: core/video_proxy_module/Dockerfile
+    container_name: core-video-proxy
+    environment:
+      MODULE_NAME: video-proxy
+      MODULE_PORT: 8092
+      GRPC_PORT: 50065
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      MARCHPROXY_GRPC_HOST: marchproxy-rtmp
+      MARCHPROXY_GRPC_PORT: 50050
+      MINIO_ENDPOINT: infra-minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: video-proxy
+      LICENSE_SERVER_URL: ${LICENSE_SERVER_URL}
+      RELEASE_MODE: ${RELEASE_MODE}
+      JWT_SECRET_KEY: ${JWT_SECRET}
+      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+      LOG_LEVEL: ${LOG_LEVEL}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      infra-postgres:
+        condition: service_healthy
+      infra-minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8092/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  core-engagement:
+    build:
+      context: .
+      dockerfile: core/engagement_module/Dockerfile
+    container_name: core-engagement
+    environment:
+      MODULE_NAME: engagement
+      MODULE_PORT: 8091
+      GRPC_PORT: 50066
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      JWT_SECRET_KEY: ${JWT_SECRET}
+      MODULE_SECRET_KEY: ${MODULE_SECRET_KEY}
+      LOG_LEVEL: ${LOG_LEVEL}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      infra-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8091/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  core-module-rtc:
+    build:
+      context: ./core/module_rtc
+      dockerfile: Dockerfile
+    container_name: core-module-rtc
+    environment:
+      MODULE_NAME: module-rtc
+      MODULE_PORT: 8093
+      GRPC_PORT: 50067
+      LIVEKIT_HOST: ${LIVEKIT_HOST:-livekit:7880}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
+      HUB_API_URL: http://hub-api:8060
+      LOG_LEVEL: ${LOG_LEVEL}
+    networks:
+      - waddlebot-internal
+    depends_on:
+      infra-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8093/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # MarchProxy RTMP sidecar for video proxy
+  marchproxy-rtmp:
+    image: ghcr.io/penguintech/marchproxy:latest
+    container_name: marchproxy-rtmp
+    environment:
+      MARCHPROXY_MODE: rtmp
+      MARCHPROXY_GRPC_PORT: 50050
+      MARCHPROXY_RTMP_PORT: 1935
+    ports:
+      - "1935:1935"  # RTMP ingest
+    networks:
+      - waddlebot-internal
+      - waddlebot-public
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1041,16 +1284,16 @@ services:
   # SERVERLESS PLATFORM ACTION MODULES
   # =============================================================================
 
-  lambda-action:
+  action-lambda:
     build:
       context: .
       dockerfile: action/pushing/lambda_action_module/Dockerfile
-    container_name: waddlebot-lambda-action
+    container_name: action-lambda
     environment:
       MODULE_NAME: lambda-action
       GRPC_PORT: 50060
       REST_PORT: 8080
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_REGION: ${AWS_REGION}
@@ -1060,25 +1303,26 @@ services:
     networks:
       - waddlebot-internal
     depends_on:
-      - router
-      - postgres
+      - core-router
+      - infra-postgres
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      start_period: 20s
+      retries: 5
     restart: unless-stopped
 
-  gcp-functions-action:
+  action-gcp-functions:
     build:
       context: .
       dockerfile: action/pushing/gcp_functions_action_module/Dockerfile
-    container_name: waddlebot-gcp-functions-action
+    container_name: action-gcp-functions
     environment:
       MODULE_NAME: gcp-functions-action
       GRPC_PORT: 50061
       REST_PORT: 8081
-      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+      DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
       GCP_PROJECT_ID: ${GCP_PROJECT_ID}
       GCP_REGION: ${GCP_REGION}
       GCP_SERVICE_ACCOUNT_KEY: ${GCP_SERVICE_ACCOUNT_KEY}
@@ -1088,13 +1332,14 @@ services:
     networks:
       - waddlebot-internal
     depends_on:
-      - router
-      - postgres
+      - core-router
+      - infra-postgres
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/health')"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      start_period: 20s
+      retries: 5
     restart: unless-stopped
 
   # OpenWhisk action module disabled - requires native ARM64 OpenWhisk image
@@ -1108,7 +1353,7 @@ services:
   #     MODULE_NAME: openwhisk-action
   #     GRPC_PORT: 50062
   #     REST_PORT: 8082
-  #     DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@postgres:5432/waddlebot
+  #     DATABASE_URL: postgresql://waddlebot:${POSTGRES_PASSWORD}@infra-postgres:5432/waddlebot
   #     OPENWHISK_API_HOST: ${OPENWHISK_API_HOST}
   #     OPENWHISK_AUTH_KEY: ${OPENWHISK_AUTH_KEY}
   #     OPENWHISK_NAMESPACE: ${OPENWHISK_NAMESPACE}
@@ -1119,8 +1364,8 @@ services:
   #     - waddlebot-internal
   #     - waddlebot-public
   #   depends_on:
-  #     - router
-  #     - postgres
+  #     - core-router
+  #     - infra-postgres
   #     - openwhisk
   #   healthcheck:
   #     test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/health')"]

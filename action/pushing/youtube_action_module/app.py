@@ -72,10 +72,12 @@ app.config["SECRET_KEY"] = Config.MODULE_SECRET_KEY
 
 
 # Initialize database
+# Use fake_migrate=True to check schema without trying to create tables
 db = DAL(
     Config.DATABASE_URL,
     folder=Config.LOG_DIR,
-    migrate=True,
+    migrate=False,
+    fake_migrate_all=True,
     pool_size=10,
 )
 

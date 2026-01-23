@@ -58,7 +58,7 @@ export const publicApi = {
   getCommunityProfile: (id) => api.get(`/api/v1/public/communities/${id}/profile`),
   getLiveStreams: (params) => api.get('/api/v1/public/live', { params }),
   getStreamDetails: (entityId) => api.get(`/api/v1/public/streams/${entityId}`),
-  getSignupSettings: () => api.get('/api/v1/public/signup-settings'),
+  getSignupSettings: () => api.get('/api/v1/signup-settings'),
 };
 
 export const communityApi = {

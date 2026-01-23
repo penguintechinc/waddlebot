@@ -30,7 +30,7 @@ export function CookieConsentProvider({ children }) {
         setError(null);
 
         // Get current policy version from server
-        const policyResponse = await api.get('/api/v1/cookie-consent/policy');
+        const policyResponse = await api.get('/api/v1/cookie/policy');
         const currentVersion = policyResponse.data?.version || '1.0';
 
         // Check localStorage for existing consent
@@ -56,7 +56,7 @@ export function CookieConsentProvider({ children }) {
         const token = localStorage.getItem('token');
         if (token) {
           try {
-            const userConsentResponse = await api.get('/api/v1/cookie-consent/user');
+            const userConsentResponse = await api.get('/api/v1/cookie');
             if (userConsentResponse.data?.consent) {
               setConsent(userConsentResponse.data.consent);
               setConsentId(userConsentResponse.data.id);
@@ -96,7 +96,7 @@ export function CookieConsentProvider({ children }) {
       const token = localStorage.getItem('token');
       if (token) {
         try {
-          const response = await api.post('/api/v1/cookie-consent/consent', newConsent);
+          const response = await api.post('/api/v1/cookie', newConsent);
           if (response.data?.id) {
             setConsentId(response.data.id);
           }
@@ -132,7 +132,7 @@ export function CookieConsentProvider({ children }) {
       const token = localStorage.getItem('token');
       if (token) {
         try {
-          const response = await api.post('/api/v1/cookie-consent/consent', newConsent);
+          const response = await api.post('/api/v1/cookie', newConsent);
           if (response.data?.id) {
             setConsentId(response.data.id);
           }
@@ -167,7 +167,7 @@ export function CookieConsentProvider({ children }) {
       const token = localStorage.getItem('token');
       if (token) {
         try {
-          const response = await api.post('/api/v1/cookie-consent/consent', newConsent);
+          const response = await api.post('/api/v1/cookie', newConsent);
           if (response.data?.id) {
             setConsentId(response.data.id);
           }

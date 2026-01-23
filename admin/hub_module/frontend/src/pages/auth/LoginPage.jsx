@@ -21,7 +21,7 @@ function LoginPage() {
   useEffect(() => {
     const fetchSignupSettings = async () => {
       try {
-        const response = await axios.get('/api/v1/public/signup-settings');
+        const response = await axios.get('/api/v1/signup-settings');
         setSignupSettings({
           signupEnabled: response.data.signupEnabled,
           allowedDomains: response.data.allowedDomains,

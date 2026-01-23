@@ -122,7 +122,8 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 # Initialize database
-db = DAL(Config.DATABASE_URL, folder="databases", pool_size=10)
+# Use fake_migrate=True to check schema without trying to create tables
+db = DAL(Config.DATABASE_URL, folder="databases", pool_size=10, migrate_enabled=False, fake_migrate_all=True)
 
 # Initialize services
 token_manager = TokenManager(db, Config.TWITCH_CLIENT_ID, Config.TWITCH_CLIENT_SECRET)
