@@ -2,9 +2,14 @@
 # WaddleBot Comprehensive API Smoke Tests
 # Tests all major API endpoints across all route files
 #
-# Usage: ./tests/smoke/smoke-api-comprehensive.sh [BASE_URL]
+# Usage: ./tests/smoke/smoke-api-comprehensive.sh [BASE_URL] [ALB_HOST]
 #   BASE_URL defaults to http://localhost:8060 for local testing
-#   For beta: ./tests/smoke/smoke-api-comprehensive.sh https://waddlebot.penguintech.io
+#   For beta: ./tests/smoke/smoke-api-comprehensive.sh https://waddlebot.penguintech.io dal2.penguintech.io
+#   ALB_HOST (optional) - ALB DNS name to bypass Cloudflare
+#
+# Environment variables:
+#   ALB_HOST - ALB DNS name (overrides parameter)
+#   VHOST - Virtual host header (extracted from BASE_URL if not set)
 #
 # Exit codes:
 #   0 - All endpoints responding correctly (PASS)
@@ -14,10 +19,23 @@ set -e
 
 # Configuration
 BASE_URL="${1:-http://localhost:8060}"
+ALB_HOST="${ALB_HOST:-${2}}"
 TIMEOUT=5
 PASSED=0
 FAILED=0
 WARNINGS=0
+
+# Extract virtual host from BASE_URL for Host header
+if [ -z "$VHOST" ]; then
+    VHOST=$(echo "$BASE_URL" | sed -E 's#https?://([^/]+).*#\1#')
+fi
+
+# Determine if we're using ALB bypass
+SSL_FLAG=""
+if [ -n "$ALB_HOST" ]; then
+    echo "Using ALB bypass: $ALB_HOST with Host header: $VHOST"
+    SSL_FLAG="-k"
+fi
 
 # Colors
 RED='\033[0;31m'
@@ -43,18 +61,25 @@ test_endpoint() {
     local data="$5"
     local token="$6"
 
-    local url="${BASE_URL}${endpoint}"
+    local url
     local actual_status
     local headers=(-H "Content-Type: application/json")
+
+    if [ -n "$ALB_HOST" ]; then
+        url="https://$ALB_HOST${endpoint}"
+        headers+=(-H "Host: $VHOST")
+    else
+        url="${BASE_URL}${endpoint}"
+    fi
 
     if [ -n "$token" ]; then
         headers+=(-H "Authorization: Bearer $token")
     fi
 
     if [ "$method" = "GET" ]; then
-        actual_status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" "${headers[@]}" "$url" 2>/dev/null || echo "000")
+        actual_status=$(curl $SSL_FLAG -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" "${headers[@]}" "$url" 2>/dev/null || echo "000")
     elif [ "$method" = "POST" ]; then
-        actual_status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" \
+        actual_status=$(curl $SSL_FLAG -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" \
             -X POST "${headers[@]}" -d "$data" "$url" 2>/dev/null || echo "000")
     fi
 
@@ -81,18 +106,25 @@ test_exists() {
     local data="$4"
     local token="$5"
 
-    local url="${BASE_URL}${endpoint}"
+    local url
     local actual_status
     local headers=(-H "Content-Type: application/json")
+
+    if [ -n "$ALB_HOST" ]; then
+        url="https://$ALB_HOST${endpoint}"
+        headers+=(-H "Host: $VHOST")
+    else
+        url="${BASE_URL}${endpoint}"
+    fi
 
     if [ -n "$token" ]; then
         headers+=(-H "Authorization: Bearer $token")
     fi
 
     if [ "$method" = "GET" ]; then
-        actual_status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" "${headers[@]}" "$url" 2>/dev/null || echo "000")
+        actual_status=$(curl $SSL_FLAG -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" "${headers[@]}" "$url" 2>/dev/null || echo "000")
     elif [ "$method" = "POST" ]; then
-        actual_status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" \
+        actual_status=$(curl $SSL_FLAG -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" \
             -X POST "${headers[@]}" -d "$data" "$url" 2>/dev/null || echo "000")
     fi
 

@@ -5,8 +5,13 @@
 # IMPORTANT: This test MUST pass after deployment to beta cluster.
 # All critical endpoints must respond correctly - no 404s or 500s on expected routes.
 #
-# Usage: ./tests/beta-smoke-test.sh [BASE_URL]
+# Usage: ./tests/beta-smoke-test.sh [BASE_URL] [ALB_HOST]
 #   BASE_URL defaults to https://waddlebot.penguintech.io
+#   ALB_HOST (optional) - ALB DNS name to bypass Cloudflare (e.g., dal2.penguintech.io)
+#
+# Environment variables:
+#   ALB_HOST - ALB DNS name (overrides parameter)
+#   VHOST - Virtual host header (extracted from BASE_URL if not set)
 #
 # Exit codes:
 #   0 - All endpoints responding correctly (PASS)
@@ -16,10 +21,26 @@ set -e
 
 # Configuration
 BASE_URL="${1:-https://waddlebot.penguintech.io}"
+ALB_HOST="${ALB_HOST:-${2}}"
 TIMEOUT=10
 PASSED=0
 FAILED=0
 WARNINGS=0
+
+# Extract virtual host from BASE_URL for Host header
+if [ -z "$VHOST" ]; then
+    VHOST=$(echo "$BASE_URL" | sed -E 's#https?://([^/]+).*#\1#')
+fi
+
+# Determine if we're using ALB bypass
+if [ -n "$ALB_HOST" ]; then
+    # Use ALB DNS with Host header to bypass Cloudflare
+    CURL_BASE="curl -sk -H \"Host: $VHOST\" https://$ALB_HOST"
+    echo "Using ALB bypass: $ALB_HOST with Host header: $VHOST"
+else
+    # Direct connection
+    CURL_BASE="curl -s"
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -43,17 +64,33 @@ test_endpoint() {
     local expected_status="$4"
     local data="$5"
 
-    local url="${BASE_URL}${endpoint}"
+    local url
     local actual_status
 
-    if [ "$method" = "GET" ]; then
-        actual_status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" "$url" 2>/dev/null || echo "000")
-    elif [ "$method" = "POST" ]; then
-        actual_status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" \
-            -X POST \
-            -H "Content-Type: application/json" \
-            -d "$data" \
-            "$url" 2>/dev/null || echo "000")
+    if [ -n "$ALB_HOST" ]; then
+        # Using ALB bypass
+        url="https://$ALB_HOST${endpoint}"
+        if [ "$method" = "GET" ]; then
+            actual_status=$(curl -sk -H "Host: $VHOST" -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" "$url" 2>/dev/null || echo "000")
+        elif [ "$method" = "POST" ]; then
+            actual_status=$(curl -sk -H "Host: $VHOST" -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" \
+                -X POST \
+                -H "Content-Type: application/json" \
+                -d "$data" \
+                "$url" 2>/dev/null || echo "000")
+        fi
+    else
+        # Direct connection
+        url="${BASE_URL}${endpoint}"
+        if [ "$method" = "GET" ]; then
+            actual_status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" "$url" 2>/dev/null || echo "000")
+        elif [ "$method" = "POST" ]; then
+            actual_status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" \
+                -X POST \
+                -H "Content-Type: application/json" \
+                -d "$data" \
+                "$url" 2>/dev/null || echo "000")
+        fi
     fi
 
     if [ "$actual_status" = "$expected_status" ]; then
@@ -78,17 +115,33 @@ test_not_404() {
     local endpoint="$3"
     local data="$4"
 
-    local url="${BASE_URL}${endpoint}"
+    local url
     local actual_status
 
-    if [ "$method" = "GET" ]; then
-        actual_status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" "$url" 2>/dev/null || echo "000")
-    elif [ "$method" = "POST" ]; then
-        actual_status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" \
-            -X POST \
-            -H "Content-Type: application/json" \
-            -d "$data" \
-            "$url" 2>/dev/null || echo "000")
+    if [ -n "$ALB_HOST" ]; then
+        # Using ALB bypass
+        url="https://$ALB_HOST${endpoint}"
+        if [ "$method" = "GET" ]; then
+            actual_status=$(curl -sk -H "Host: $VHOST" -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" "$url" 2>/dev/null || echo "000")
+        elif [ "$method" = "POST" ]; then
+            actual_status=$(curl -sk -H "Host: $VHOST" -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" \
+                -X POST \
+                -H "Content-Type: application/json" \
+                -d "$data" \
+                "$url" 2>/dev/null || echo "000")
+        fi
+    else
+        # Direct connection
+        url="${BASE_URL}${endpoint}"
+        if [ "$method" = "GET" ]; then
+            actual_status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" "$url" 2>/dev/null || echo "000")
+        elif [ "$method" = "POST" ]; then
+            actual_status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$TIMEOUT" \
+                -X POST \
+                -H "Content-Type: application/json" \
+                -d "$data" \
+                "$url" 2>/dev/null || echo "000")
+        fi
     fi
 
     if [ "$actual_status" = "404" ]; then
