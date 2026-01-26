@@ -83,7 +83,9 @@ async function initializeDatabase() {
         username VARCHAR(255) UNIQUE,
         email VARCHAR(255) UNIQUE,
         password_hash VARCHAR(255),
+        avatar_url TEXT,
         is_super_admin BOOLEAN DEFAULT false,
+        is_vendor BOOLEAN DEFAULT false,
         email_verified BOOLEAN DEFAULT false,
         email_verification_token VARCHAR(255),
         password_reset_token VARCHAR(255),
@@ -92,6 +94,32 @@ async function initializeDatabase() {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         is_active BOOLEAN DEFAULT true
       )
+    `);
+
+    // Add missing columns to hub_users if they don't exist (for existing databases)
+    await query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'hub_users' AND column_name = 'avatar_url') THEN
+          ALTER TABLE hub_users ADD COLUMN avatar_url TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'hub_users' AND column_name = 'is_vendor') THEN
+          ALTER TABLE hub_users ADD COLUMN is_vendor BOOLEAN DEFAULT false;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'hub_users' AND column_name = 'username') THEN
+          ALTER TABLE hub_users ADD COLUMN username VARCHAR(255) UNIQUE;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'hub_users' AND column_name = 'password_hash') THEN
+          ALTER TABLE hub_users ADD COLUMN password_hash VARCHAR(255);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'hub_users' AND column_name = 'is_super_admin') THEN
+          ALTER TABLE hub_users ADD COLUMN is_super_admin BOOLEAN DEFAULT false;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'hub_users' AND column_name = 'email_verified') THEN
+          ALTER TABLE hub_users ADD COLUMN email_verified BOOLEAN DEFAULT false;
+        END IF;
+      END
+      $$;
     `);
 
     // Create hub_user_identities table if not exists
