@@ -626,9 +626,9 @@ async function initializeDatabase() {
       const adminId = adminResult.rows[0].id;
       logger.system('Default admin user created (email: admin@localhost.local, password: admin123)');
 
-      // Add admin to global community if it exists
+      // Add admin to global community if it exists (check config->>'is_global')
       const globalCommunity = await query(
-        'SELECT id FROM communities WHERE is_global = true LIMIT 1'
+        "SELECT id FROM communities WHERE config->>'is_global' = 'true' LIMIT 1"
       );
       if (globalCommunity.rows.length > 0) {
         await query(

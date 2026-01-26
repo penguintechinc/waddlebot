@@ -1317,9 +1317,9 @@ async function exchangeOAuthCode(platform, code, redirectUri) {
  */
 async function addUserToGlobalCommunity(userId) {
   try {
-    // Find the global community
+    // Find the global community (check config->>'is_global')
     const globalCommunity = await query(
-      'SELECT id FROM communities WHERE is_global = true AND is_active = true LIMIT 1'
+      "SELECT id FROM communities WHERE config->>'is_global' = 'true' AND is_active = true LIMIT 1"
     );
 
     if (globalCommunity.rows.length === 0) {

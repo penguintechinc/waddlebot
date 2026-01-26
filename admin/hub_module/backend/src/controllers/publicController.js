@@ -279,3 +279,186 @@ export async function getSignupSettings(req, res, next) {
     next(err);
   }
 }
+
+/**
+ * Browse marketplace modules (public endpoint)
+ * GET /api/v1/marketplace/modules
+ */
+export async function getMarketplaceModules(req, res, next) {
+  try {
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '25', 10)));
+    const offset = (page - 1) * limit;
+    const search = req.query.search || '';
+    const category = req.query.category;
+
+    let whereClause = 'WHERE is_published = true';
+    const params = [];
+    let paramIndex = 1;
+
+    if (search) {
+      whereClause += ` AND (name ILIKE $${paramIndex} OR display_name ILIKE $${paramIndex} OR description ILIKE $${paramIndex})`;
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    if (category) {
+      whereClause += ` AND category = $${paramIndex}`;
+      params.push(category);
+      paramIndex++;
+    }
+
+    // Get total count
+    const countResult = await query(
+      `SELECT COUNT(*) as count FROM hub_modules ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0]?.count || 0, 10);
+
+    // Get modules with aggregate stats
+    const modulesResult = await query(
+      `SELECT
+        m.id, m.name, m.display_name, m.description, m.version,
+        m.author, m.category, m.icon_url, m.is_core, m.created_at,
+        COALESCE(AVG(r.rating), 0) as avg_rating,
+        COUNT(DISTINCT r.id) as review_count,
+        COUNT(DISTINCT inst.id) as install_count
+       FROM hub_modules m
+       LEFT JOIN hub_module_reviews r ON r.module_id = m.id
+       LEFT JOIN hub_module_installations inst ON inst.module_id = m.id
+       ${whereClause}
+       GROUP BY m.id
+       ORDER BY m.is_core DESC, m.created_at DESC
+       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      [...params, limit, offset]
+    );
+
+    const modules = modulesResult.rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      displayName: row.display_name || row.name,
+      description: row.description,
+      version: row.version,
+      author: row.author,
+      category: row.category,
+      iconUrl: row.icon_url,
+      isCore: row.is_core,
+      avgRating: parseFloat(row.avg_rating || 0).toFixed(1),
+      reviewCount: parseInt(row.review_count || 0, 10),
+      installCount: parseInt(row.install_count || 0, 10),
+      createdAt: row.created_at?.toISOString(),
+    }));
+
+    res.json({
+      success: true,
+      modules,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Get marketplace module details (public endpoint)
+ * GET /api/v1/marketplace/modules/:id
+ */
+export async function getMarketplaceModule(req, res, next) {
+  try {
+    const moduleId = parseInt(req.params.id, 10);
+
+    if (isNaN(moduleId)) {
+      return next(errors.badRequest('Invalid module ID'));
+    }
+
+    const moduleResult = await query(
+      `SELECT
+        m.id, m.name, m.display_name, m.description, m.version,
+        m.author, m.category, m.icon_url, m.is_core, m.config_schema, m.created_at,
+        COALESCE(AVG(r.rating), 0) as avg_rating,
+        COUNT(DISTINCT r.id) as review_count,
+        COUNT(DISTINCT inst.id) as install_count
+       FROM hub_modules m
+       LEFT JOIN hub_module_reviews r ON r.module_id = m.id
+       LEFT JOIN hub_module_installations inst ON inst.module_id = m.id
+       WHERE m.id = $1 AND m.is_published = true
+       GROUP BY m.id`,
+      [moduleId]
+    );
+
+    if (moduleResult.rows.length === 0) {
+      return next(errors.notFound('Module not found'));
+    }
+
+    const row = moduleResult.rows[0];
+
+    // Get recent reviews
+    const reviewsResult = await query(
+      `SELECT r.id, r.rating, r.review_text, r.created_at,
+              u.display_name, u.avatar_url
+       FROM hub_module_reviews r
+       LEFT JOIN hub_users u ON u.id = r.user_id
+       WHERE r.module_id = $1
+       ORDER BY r.created_at DESC
+       LIMIT 10`,
+      [moduleId]
+    );
+
+    const module = {
+      id: row.id,
+      name: row.name,
+      displayName: row.display_name || row.name,
+      description: row.description,
+      version: row.version,
+      author: row.author,
+      category: row.category,
+      iconUrl: row.icon_url,
+      isCore: row.is_core,
+      configSchema: row.config_schema,
+      avgRating: parseFloat(row.avg_rating || 0).toFixed(1),
+      reviewCount: parseInt(row.review_count || 0, 10),
+      installCount: parseInt(row.install_count || 0, 10),
+      createdAt: row.created_at?.toISOString(),
+      reviews: reviewsResult.rows.map(r => ({
+        id: r.id,
+        rating: r.rating,
+        reviewText: r.review_text,
+        author: r.display_name || 'Anonymous',
+        authorAvatar: r.avatar_url,
+        createdAt: r.created_at?.toISOString(),
+      })),
+    };
+
+    res.json({ success: true, module });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Get marketplace categories (public endpoint)
+ * GET /api/v1/marketplace/categories
+ */
+export async function getMarketplaceCategories(req, res, next) {
+  try {
+    const result = await query(`
+      SELECT category, COUNT(*) as module_count
+      FROM hub_modules
+      WHERE is_published = true AND category IS NOT NULL
+      GROUP BY category
+      ORDER BY module_count DESC, category ASC
+    `);
+
+    const categories = result.rows.map(row => ({
+      name: row.category,
+      moduleCount: parseInt(row.module_count || 0, 10),
+    }));
+
+    res.json({
+      success: true,
+      categories,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
