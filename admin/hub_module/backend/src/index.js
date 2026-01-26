@@ -80,7 +80,14 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS hub_users (
         id SERIAL PRIMARY KEY,
         display_name VARCHAR(255),
-        email VARCHAR(255),
+        username VARCHAR(255) UNIQUE,
+        email VARCHAR(255) UNIQUE,
+        password_hash VARCHAR(255),
+        is_super_admin BOOLEAN DEFAULT false,
+        email_verified BOOLEAN DEFAULT false,
+        email_verification_token VARCHAR(255),
+        password_reset_token VARCHAR(255),
+        password_reset_expires TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         is_active BOOLEAN DEFAULT true
@@ -376,23 +383,113 @@ async function initializeDatabase() {
       ON analytics_suspected_bots(community_id, confidence_score DESC)
     `);
 
+    // Create hub_settings table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS hub_settings (
+        id SERIAL PRIMARY KEY,
+        setting_key VARCHAR(255) UNIQUE NOT NULL,
+        setting_value TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by INTEGER REFERENCES hub_users(id)
+      )
+    `);
+
+    // Create index for hub_settings
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_hub_settings_key
+      ON hub_settings(setting_key)
+    `);
+
+    // Create cookie_policy_versions table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS cookie_policy_versions (
+        id SERIAL PRIMARY KEY,
+        version VARCHAR(50) UNIQUE NOT NULL,
+        content TEXT NOT NULL,
+        changes_summary TEXT,
+        is_active BOOLEAN DEFAULT false,
+        effective_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_by INTEGER REFERENCES hub_users(id),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create index for active cookie policy
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_cookie_policy_active
+      ON cookie_policy_versions(is_active) WHERE is_active = true
+    `);
+
+    // Create cookie_consent table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS cookie_consent (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES hub_users(id) ON DELETE SET NULL,
+        consent_id VARCHAR(255) UNIQUE NOT NULL,
+        preferences JSONB DEFAULT '{"necessary": true, "functional": false, "analytics": false, "marketing": false}',
+        consent_version VARCHAR(50) NOT NULL,
+        consent_method VARCHAR(50) DEFAULT 'banner',
+        ip_address VARCHAR(45),
+        user_agent TEXT,
+        consented_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP
+      )
+    `);
+
+    // Create indexes for cookie_consent
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_cookie_consent_user
+      ON cookie_consent(user_id) WHERE user_id IS NOT NULL
+    `);
+
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_cookie_consent_expires
+      ON cookie_consent(expires_at)
+    `);
+
+    // Create cookie_audit_log table if not exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS cookie_audit_log (
+        id SERIAL PRIMARY KEY,
+        consent_id VARCHAR(255),
+        user_id INTEGER REFERENCES hub_users(id) ON DELETE SET NULL,
+        action VARCHAR(50) NOT NULL,
+        category VARCHAR(50),
+        previous_value BOOLEAN,
+        new_value BOOLEAN,
+        consent_version VARCHAR(50),
+        ip_address VARCHAR(45),
+        user_agent TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create index for cookie audit log
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_cookie_audit_log_user
+      ON cookie_audit_log(user_id, created_at DESC)
+    `);
+
     // Check if default admin exists in hub_users (unified auth system)
     const adminCheck = await query(
       'SELECT id FROM hub_users WHERE email = $1',
-      ['admin@localhost.net']
+      ['admin@localhost.local']
     );
 
     if (adminCheck.rows.length === 0) {
       // Create default admin with password 'admin123'
+      // Username is set to email for consistency across SSO/local logins
       const passwordHash = await bcrypt.hash('admin123', 12);
+      const adminEmail = 'admin@localhost.local';
       const adminResult = await query(
         `INSERT INTO hub_users (email, username, password_hash, is_super_admin, is_active, email_verified)
          VALUES ($1, $2, $3, true, true, true)
          RETURNING id`,
-        ['admin@localhost.net', 'admin', passwordHash]
+        [adminEmail, adminEmail, passwordHash]
       );
       const adminId = adminResult.rows[0].id;
-      logger.system('Default admin user created (email: admin@localhost.net, password: admin123)');
+      logger.system('Default admin user created (email: admin@localhost.local, password: admin123)');
 
       // Add admin to global community if it exists
       const globalCommunity = await query(
@@ -414,6 +511,66 @@ async function initializeDatabase() {
         );
         logger.system('Admin user added to global community');
       }
+    }
+
+    // Seed default hub_settings if not exists
+    const defaultSettings = [
+      { key: 'signup_enabled', value: 'true' },
+      { key: 'email_configured', value: 'false' },
+      { key: 'signup_allowed_domains', value: '' },
+      { key: 'require_email_verification', value: 'false' },
+      { key: 'storage_type', value: 'local' },
+    ];
+
+    for (const setting of defaultSettings) {
+      await query(
+        `INSERT INTO hub_settings (setting_key, setting_value, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (setting_key) DO NOTHING`,
+        [setting.key, setting.value]
+      );
+    }
+    logger.system('Default hub settings initialized');
+
+    // Seed default cookie policy if none exists
+    const policyCheck = await query(
+      'SELECT id FROM cookie_policy_versions LIMIT 1'
+    );
+
+    if (policyCheck.rows.length === 0) {
+      const defaultPolicyContent = `
+# Cookie Policy
+
+## What Are Cookies
+Cookies are small text files stored on your device when you visit our website.
+
+## Types of Cookies We Use
+
+### Necessary Cookies (Required)
+These cookies are essential for the website to function properly. They enable basic features like page navigation and access to secure areas.
+
+### Functional Cookies (Optional)
+These cookies enable enhanced functionality and personalization, such as remembering your preferences and settings.
+
+### Analytics Cookies (Optional)
+These cookies help us understand how visitors interact with our website by collecting and reporting information anonymously.
+
+### Marketing Cookies (Optional)
+These cookies are used to track visitors across websites to display relevant advertisements.
+
+## Your Choices
+You can manage your cookie preferences at any time through the cookie settings panel. Note that disabling certain cookies may affect website functionality.
+
+## Contact Us
+If you have questions about our cookie policy, please contact us at privacy@waddlebot.io.
+      `.trim();
+
+      await query(
+        `INSERT INTO cookie_policy_versions (version, content, changes_summary, is_active, effective_date)
+         VALUES ($1, $2, $3, true, NOW())`,
+        ['1.0.0', defaultPolicyContent, 'Initial cookie policy']
+      );
+      logger.system('Default cookie policy created');
     }
 
     logger.system('Database initialized successfully');
