@@ -118,7 +118,7 @@ test_exists() {
 echo "----------------------------------------"
 echo "1. Public API Endpoints (public.js)"
 echo "----------------------------------------"
-test_endpoint "Health check" "GET" "/api/v1/health" "200"
+test_endpoint "Health check" "GET" "/health" "200"
 test_exists "Signup settings" "GET" "/api/v1/signup-settings"
 test_exists "Public stats" "GET" "/api/v1/stats"
 test_exists "Public communities" "GET" "/api/v1/communities"

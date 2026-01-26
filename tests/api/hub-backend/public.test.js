@@ -8,10 +8,10 @@ const request = require('supertest');
 const API_BASE_URL = global.TEST_CONFIG.API_BASE_URL;
 
 describe('Public API - /api/v1', () => {
-  describe('GET /api/v1/health', () => {
+  describe('GET /health', () => {
     it('should return 200 OK', async () => {
       const response = await request(API_BASE_URL)
-        .get('/api/v1/health');
+        .get('/health');
 
       expect(response.status).toBe(200);
     });
