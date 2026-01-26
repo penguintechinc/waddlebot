@@ -499,6 +499,113 @@ async function initializeDatabase() {
       ON cookie_audit_log(user_id, created_at DESC)
     `);
 
+    // Create hub_oauth_states table for OAuth flow state management
+    await query(`
+      CREATE TABLE IF NOT EXISTS hub_oauth_states (
+        id SERIAL PRIMARY KEY,
+        state VARCHAR(255) UNIQUE NOT NULL,
+        mode VARCHAR(50) NOT NULL DEFAULT 'login',
+        platform VARCHAR(50) NOT NULL,
+        user_id INTEGER REFERENCES hub_users(id) ON DELETE CASCADE,
+        redirect_uri TEXT,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create index for hub_oauth_states cleanup
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_hub_oauth_states_expires
+      ON hub_oauth_states(expires_at)
+    `);
+
+    // Create hub_user_profiles table for extended profile info
+    await query(`
+      CREATE TABLE IF NOT EXISTS hub_user_profiles (
+        id SERIAL PRIMARY KEY,
+        hub_user_id INTEGER UNIQUE NOT NULL REFERENCES hub_users(id) ON DELETE CASCADE,
+        display_name VARCHAR(255),
+        bio TEXT,
+        location VARCHAR(255),
+        location_city VARCHAR(100),
+        location_state VARCHAR(100),
+        location_country VARCHAR(2),
+        website_url VARCHAR(500),
+        custom_avatar_url TEXT,
+        banner_url TEXT,
+        visibility VARCHAR(50) DEFAULT 'public',
+        show_activity BOOLEAN DEFAULT true,
+        show_communities BOOLEAN DEFAULT true,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create platform_configs table for platform OAuth and settings
+    await query(`
+      CREATE TABLE IF NOT EXISTS platform_configs (
+        id SERIAL PRIMARY KEY,
+        platform VARCHAR(50) NOT NULL,
+        config_key VARCHAR(100) NOT NULL,
+        config_value TEXT,
+        is_encrypted BOOLEAN DEFAULT false,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by INTEGER REFERENCES hub_users(id),
+        UNIQUE(platform, config_key)
+      )
+    `);
+
+    // Create audit_log table for security and activity logging
+    await query(`
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES hub_users(id) ON DELETE SET NULL,
+        action VARCHAR(100) NOT NULL,
+        target_type VARCHAR(50),
+        target_id VARCHAR(255),
+        details JSONB DEFAULT '{}',
+        ip_address VARCHAR(45),
+        user_agent TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create index for audit_log queries
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_audit_log_user
+      ON audit_log(user_id, created_at DESC)
+    `);
+
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_audit_log_action
+      ON audit_log(action, created_at DESC)
+    `);
+
+    // Create community_servers table for multi-platform server linking
+    await query(`
+      CREATE TABLE IF NOT EXISTS community_servers (
+        id SERIAL PRIMARY KEY,
+        community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+        platform VARCHAR(50) NOT NULL,
+        platform_server_id VARCHAR(255) NOT NULL,
+        platform_server_name VARCHAR(255),
+        link_type VARCHAR(50) DEFAULT 'standard',
+        status VARCHAR(50) DEFAULT 'pending',
+        is_primary BOOLEAN DEFAULT false,
+        config JSONB DEFAULT '{}',
+        added_by INTEGER REFERENCES hub_users(id),
+        approved_by INTEGER REFERENCES hub_users(id),
+        verified_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(community_id, platform, platform_server_id)
+      )
+    `);
+
+    // Create index for community_servers
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_community_servers_community
+      ON community_servers(community_id)
+    `);
+
     // Check if default admin exists in hub_users (unified auth system)
     const adminCheck = await query(
       'SELECT id FROM hub_users WHERE email = $1',
