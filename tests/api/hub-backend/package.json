@@ -1,0 +1,32 @@
+{
+  "name": "waddlebot-api-tests",
+  "version": "1.0.0",
+  "description": "API integration tests for WaddleBot Hub Backend",
+  "scripts": {
+    "test": "jest --runInBand --verbose",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/*.test.js"
+    ],
+    "setupFilesAfterEnv": [
+      "./setup.js"
+    ],
+    "collectCoverageFrom": [
+      "../../../admin/hub_module/backend/src/**/*.js"
+    ],
+    "coveragePathIgnorePatterns": [
+      "/node_modules/",
+      "/tests/"
+    ]
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "jest": "^29.7.0",
+    "supertest": "^6.3.3",
+    "nock": "^13.5.0"
+  }
+}
