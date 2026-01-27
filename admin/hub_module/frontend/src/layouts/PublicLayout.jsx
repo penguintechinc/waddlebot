@@ -20,7 +20,7 @@ function PublicLayout() {
             {/* Logo */}
             <div className="flex items-center">
               <Link to="/" className="flex items-center space-x-2">
-                <span className="text-2xl">🐧</span>
+                <img src="/waddlebot-logo.png" alt="WaddleBot" className="w-8 h-8" />
                 <span className="text-xl font-bold text-gold-400">WaddleBot</span>
               </Link>
             </div>
@@ -101,7 +101,7 @@ function PublicLayout() {
           <div className="grid md:grid-cols-4 gap-8">
             <div>
               <div className="flex items-center space-x-2 mb-4">
-                <span className="text-2xl">🐧</span>
+                <img src="/waddlebot-logo.png" alt="WaddleBot" className="w-8 h-8" />
                 <span className="text-lg font-bold text-gold-400">WaddleBot</span>
               </div>
               <p className="text-sm">
