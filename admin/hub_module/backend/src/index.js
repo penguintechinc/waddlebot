@@ -90,6 +90,7 @@ async function initializeDatabase() {
         email_verification_token VARCHAR(255),
         password_reset_token VARCHAR(255),
         password_reset_expires TIMESTAMP,
+        last_login TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         is_active BOOLEAN DEFAULT true
@@ -117,6 +118,9 @@ async function initializeDatabase() {
         END IF;
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'hub_users' AND column_name = 'email_verified') THEN
           ALTER TABLE hub_users ADD COLUMN email_verified BOOLEAN DEFAULT false;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'hub_users' AND column_name = 'last_login') THEN
+          ALTER TABLE hub_users ADD COLUMN last_login TIMESTAMP;
         END IF;
       END
       $$;
