@@ -137,14 +137,18 @@ ingress:
   hosts:
     - host: waddlebot.penguintech.io
       paths:
-        - path: /
+        - path: /socket.io
           pathType: Prefix
-          service: hub-webui
-          port: 80
+          service: hub-api
+          port: 8060
         - path: /api
           pathType: Prefix
           service: hub-api
           port: 8060
+        - path: /
+          pathType: Prefix
+          service: hub-webui
+          port: 80
         - path: /api/router
           pathType: Prefix
           service: router
