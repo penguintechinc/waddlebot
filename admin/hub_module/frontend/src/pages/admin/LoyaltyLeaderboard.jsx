@@ -1,6 +1,38 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import api from '../../services/api';
+import { FormModalBuilder } from '@penguin/react_libs';
+
+// WaddleBot theme colors matching the existing UI
+const waddlebotColors = {
+  modalBackground: 'bg-navy-800',
+  headerBackground: 'bg-navy-800',
+  footerBackground: 'bg-navy-850',
+  overlayBackground: 'bg-black bg-opacity-50',
+  titleText: 'text-sky-100',
+  labelText: 'text-sky-100',
+  descriptionText: 'text-navy-400',
+  errorText: 'text-red-400',
+  buttonText: 'text-white',
+  fieldBackground: 'bg-navy-700',
+  fieldBorder: 'border-navy-600',
+  fieldText: 'text-sky-100',
+  fieldPlaceholder: 'placeholder-navy-400',
+  focusRing: 'focus:ring-gold-500',
+  focusBorder: 'focus:border-gold-500',
+  primaryButton: 'bg-sky-600',
+  primaryButtonHover: 'hover:bg-sky-700',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-600',
+  activeTab: 'text-gold-400',
+  activeTabBorder: 'border-gold-500',
+  inactiveTab: 'text-navy-400',
+  inactiveTabHover: 'hover:text-navy-300 hover:border-navy-500',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
+};
 
 const PLATFORM_ICONS = {
   discord: '🎮',
@@ -31,8 +63,6 @@ function LoyaltyLeaderboard() {
   // Modal states
   const [showAdjustModal, setShowAdjustModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
-  const [adjustAmount, setAdjustAmount] = useState('');
-  const [adjustReason, setAdjustReason] = useState('');
   const [showWipeModal, setShowWipeModal] = useState(false);
 
   useEffect(() => {
@@ -61,54 +91,48 @@ function LoyaltyLeaderboard() {
 
   function openAdjustModal(user) {
     setSelectedUser(user);
-    setAdjustAmount('');
-    setAdjustReason('');
     setShowAdjustModal(true);
   }
 
   function closeAdjustModal() {
     setShowAdjustModal(false);
     setSelectedUser(null);
-    setAdjustAmount('');
-    setAdjustReason('');
   }
 
-  async function handleAdjustBalance(action) {
-    if (!adjustAmount || isNaN(adjustAmount) || parseFloat(adjustAmount) <= 0) {
+  async function handleAdjustBalance(data) {
+    const amount = parseFloat(data.amount);
+    if (!data.amount || isNaN(amount) || amount <= 0) {
       setMessage({ type: 'error', text: 'Please enter a valid amount' });
-      return;
+      throw new Error('Please enter a valid amount');
     }
 
-    if (!adjustReason.trim()) {
+    if (!data.reason?.trim()) {
       setMessage({ type: 'error', text: 'Please provide a reason for this adjustment' });
-      return;
+      throw new Error('Please provide a reason for this adjustment');
     }
 
     setActionLoading(true);
     try {
       await api.put(`/api/v1/admin/${communityId}/loyalty/user/${selectedUser.userId}/balance`, {
-        action,
-        amount: parseFloat(adjustAmount),
-        reason: adjustReason
+        action: data.action,
+        amount: amount,
+        reason: data.reason.trim()
       });
-      setMessage({ type: 'success', text: `Balance ${action} successful` });
+      setMessage({ type: 'success', text: `Balance ${data.action} successful` });
       closeAdjustModal();
       fetchData();
     } catch (err) {
       setMessage({
         type: 'error',
-        text: err.response?.data?.error?.message || `Failed to ${action} balance`
+        text: err.response?.data?.error?.message || `Failed to ${data.action} balance`
       });
+      throw err;
     } finally {
       setActionLoading(false);
     }
   }
 
   async function handleWipeAll() {
-    if (!confirm('⚠️ WARNING: This will reset ALL user balances to zero. This action cannot be undone. Are you absolutely sure?')) {
-      return;
-    }
-
     setActionLoading(true);
     try {
       await api.post(`/api/v1/admin/${communityId}/loyalty/wipe`);
@@ -120,10 +144,56 @@ function LoyaltyLeaderboard() {
         type: 'error',
         text: err.response?.data?.error?.message || 'Failed to wipe balances'
       });
+      throw err;
     } finally {
       setActionLoading(false);
     }
   }
+
+  // Build fields for Adjust Balance Modal
+  const adjustBalanceFields = useMemo(() => [
+    {
+      name: 'action',
+      type: 'select',
+      label: 'Action',
+      required: true,
+      defaultValue: 'add',
+      options: [
+        { value: 'add', label: 'Add - Increase balance' },
+        { value: 'remove', label: 'Remove - Decrease balance' },
+        { value: 'set', label: 'Set Exact - Set to specific amount' },
+      ],
+    },
+    {
+      name: 'amount',
+      type: 'number',
+      label: 'Amount',
+      required: true,
+      placeholder: 'Enter amount...',
+      min: 0,
+      step: 1,
+    },
+    {
+      name: 'reason',
+      type: 'textarea',
+      label: 'Reason',
+      required: true,
+      placeholder: 'Why are you adjusting this balance?',
+      rows: 3,
+    },
+  ], []);
+
+  // Build fields for Wipe Confirmation Modal
+  const wipeConfirmFields = useMemo(() => [
+    {
+      name: 'confirmation',
+      type: 'text',
+      label: 'Type "WIPE ALL" to confirm',
+      required: true,
+      placeholder: 'WIPE ALL',
+      helpText: `This will reset ALL user loyalty currency balances to zero. ${stats?.usersWithBalance || 0} users will lose a total of ${formatCurrency(stats?.totalCurrency || 0)} currency.`,
+    },
+  ], [stats]);
 
   function formatCurrency(amount) {
     return `💰 ${amount.toLocaleString()}`;
@@ -304,143 +374,38 @@ function LoyaltyLeaderboard() {
       </div>
 
       {/* Adjust Balance Modal */}
-      {showAdjustModal && selectedUser && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="card max-w-md w-full p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-sky-100">Adjust Balance</h2>
-              <button
-                onClick={closeAdjustModal}
-                className="text-navy-400 hover:text-sky-100 text-2xl"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="mb-4">
-              <div className="flex items-center space-x-3 mb-3">
-                {selectedUser.avatarUrl ? (
-                  <img src={selectedUser.avatarUrl} alt="" className="w-10 h-10 rounded-full" />
-                ) : (
-                  <div className="w-10 h-10 rounded-full bg-navy-700 flex items-center justify-center">
-                    {selectedUser.username?.[0]?.toUpperCase() || '?'}
-                  </div>
-                )}
-                <div>
-                  <div className="font-medium text-sky-100">{selectedUser.username}</div>
-                  <div className="text-xs text-navy-500">{selectedUser.platform}</div>
-                </div>
-              </div>
-
-              <div className="bg-navy-800 p-3 rounded-lg mb-4">
-                <div className="text-sm text-navy-400">Current Balance</div>
-                <div className="text-2xl font-bold text-gold-400">
-                  {formatCurrency(selectedUser.balance)}
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-sm font-medium text-navy-300 mb-1">
-                    Amount
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={adjustAmount}
-                    onChange={(e) => setAdjustAmount(e.target.value)}
-                    placeholder="Enter amount..."
-                    className="input w-full"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-navy-300 mb-1">
-                    Reason
-                  </label>
-                  <textarea
-                    value={adjustReason}
-                    onChange={(e) => setAdjustReason(e.target.value)}
-                    placeholder="Why are you adjusting this balance?"
-                    className="input w-full h-20 resize-none"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="flex space-x-2">
-              <button
-                onClick={() => handleAdjustBalance('add')}
-                disabled={actionLoading}
-                className="btn bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 flex-1 disabled:opacity-50"
-              >
-                {actionLoading ? 'Processing...' : 'Add'}
-              </button>
-              <button
-                onClick={() => handleAdjustBalance('remove')}
-                disabled={actionLoading}
-                className="btn bg-red-500/20 text-red-300 border border-red-500/30 hover:bg-red-500/30 flex-1 disabled:opacity-50"
-              >
-                {actionLoading ? 'Processing...' : 'Remove'}
-              </button>
-              <button
-                onClick={() => handleAdjustBalance('set')}
-                disabled={actionLoading}
-                className="btn btn-secondary flex-1 disabled:opacity-50"
-              >
-                {actionLoading ? 'Processing...' : 'Set Exact'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <FormModalBuilder
+        title={`Adjust Balance - ${selectedUser?.username || ''}`}
+        description={selectedUser ? `Current Balance: ${formatCurrency(selectedUser.balance)} | Platform: ${selectedUser.platform}` : ''}
+        fields={adjustBalanceFields}
+        isOpen={showAdjustModal && !!selectedUser}
+        onClose={closeAdjustModal}
+        onSubmit={handleAdjustBalance}
+        submitButtonText={actionLoading ? 'Processing...' : 'Apply Adjustment'}
+        cancelButtonText="Cancel"
+        width="md"
+        colors={waddlebotColors}
+      />
 
       {/* Wipe Confirmation Modal */}
-      {showWipeModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="card max-w-md w-full p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-red-400">⚠️ Wipe All Currency</h2>
-              <button
-                onClick={() => setShowWipeModal(false)}
-                className="text-navy-400 hover:text-sky-100 text-2xl"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="mb-6">
-              <p className="text-navy-300 mb-4">
-                This will permanently reset ALL user loyalty currency balances to zero.
-              </p>
-              <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-4">
-                <p className="text-red-300 font-bold mb-2">This action cannot be undone!</p>
-                <p className="text-red-300 text-sm">
-                  {stats?.usersWithBalance || 0} users will lose a total of {formatCurrency(stats?.totalCurrency || 0)} currency.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex space-x-3">
-              <button
-                onClick={() => setShowWipeModal(false)}
-                disabled={actionLoading}
-                className="btn btn-secondary flex-1"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleWipeAll}
-                disabled={actionLoading}
-                className="btn bg-red-500/20 text-red-300 border border-red-500/30 hover:bg-red-500/30 flex-1 disabled:opacity-50"
-              >
-                {actionLoading ? 'Wiping...' : 'Confirm Wipe'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <FormModalBuilder
+        title="Wipe All Currency"
+        description="This will permanently reset ALL user loyalty currency balances to zero. This action cannot be undone!"
+        fields={wipeConfirmFields}
+        isOpen={showWipeModal}
+        onClose={() => setShowWipeModal(false)}
+        onSubmit={(data) => {
+          if (data.confirmation !== 'WIPE ALL') {
+            setMessage({ type: 'error', text: 'Please type "WIPE ALL" to confirm' });
+            throw new Error('Confirmation text does not match');
+          }
+          return handleWipeAll();
+        }}
+        submitButtonText={actionLoading ? 'Wiping...' : 'Confirm Wipe'}
+        cancelButtonText="Cancel"
+        width="md"
+        colors={waddlebotColors}
+      />
     </div>
   );
 }

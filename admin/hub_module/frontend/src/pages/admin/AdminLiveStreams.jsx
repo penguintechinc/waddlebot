@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   VideoCameraIcon,
@@ -11,6 +11,38 @@ import {
   SignalIcon,
 } from '@heroicons/react/24/outline';
 import { adminApi } from '../../services/api';
+import { FormModalBuilder } from '@penguin/react_libs';
+
+// WaddleBot theme colors matching the existing UI
+const waddlebotColors = {
+  modalBackground: 'bg-navy-800',
+  headerBackground: 'bg-navy-800',
+  footerBackground: 'bg-navy-850',
+  overlayBackground: 'bg-black bg-opacity-50',
+  titleText: 'text-sky-100',
+  labelText: 'text-sky-100',
+  descriptionText: 'text-navy-400',
+  errorText: 'text-red-400',
+  buttonText: 'text-white',
+  fieldBackground: 'bg-navy-700',
+  fieldBorder: 'border-navy-600',
+  fieldText: 'text-sky-100',
+  fieldPlaceholder: 'placeholder-navy-400',
+  focusRing: 'focus:ring-gold-500',
+  focusBorder: 'focus:border-gold-500',
+  primaryButton: 'bg-sky-600',
+  primaryButtonHover: 'hover:bg-sky-700',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-600',
+  activeTab: 'text-gold-400',
+  activeTabBorder: 'border-gold-500',
+  inactiveTab: 'text-navy-400',
+  inactiveTabHover: 'hover:text-navy-300 hover:border-navy-500',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
+};
 
 function AdminLiveStreams() {
   const { communityId } = useParams();
@@ -22,7 +54,6 @@ function AdminLiveStreams() {
   const [message, setMessage] = useState(null);
   const [showKey, setShowKey] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newDest, setNewDest] = useState({ platform: 'twitch', rtmp_url: '', stream_key: '', max_resolution: '1080p' });
 
   useEffect(() => {
     loadStreamConfig();
@@ -75,17 +106,66 @@ function AdminLiveStreams() {
     setMessage({ type: 'success', text: 'Copied to clipboard' });
   };
 
-  const addDestination = async () => {
+  const addDestination = async (data) => {
     try {
-      await adminApi.addStreamDestination(communityId, newDest);
+      await adminApi.addStreamDestination(communityId, {
+        platform: data.platform,
+        rtmp_url: data.rtmp_url,
+        stream_key: data.stream_key,
+        max_resolution: data.max_resolution,
+      });
       setMessage({ type: 'success', text: 'Destination added' });
       setShowAddModal(false);
-      setNewDest({ platform: 'twitch', rtmp_url: '', stream_key: '', max_resolution: '1080p' });
       loadStreamConfig();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to add destination');
+      throw err;
     }
   };
+
+  // Build fields for FormModalBuilder
+  const destinationFields = useMemo(() => [
+    {
+      name: 'platform',
+      type: 'select',
+      label: 'Platform',
+      required: true,
+      defaultValue: 'twitch',
+      options: [
+        { value: 'twitch', label: 'Twitch' },
+        { value: 'youtube', label: 'YouTube' },
+        { value: 'kick', label: 'Kick' },
+        { value: 'custom', label: 'Custom RTMP' },
+      ],
+    },
+    {
+      name: 'rtmp_url',
+      type: 'text',
+      label: 'RTMP URL',
+      required: true,
+      placeholder: 'rtmp://live.twitch.tv/app',
+    },
+    {
+      name: 'stream_key',
+      type: 'password',
+      label: 'Stream Key',
+      required: true,
+      placeholder: 'Your platform stream key',
+    },
+    {
+      name: 'max_resolution',
+      type: 'select',
+      label: 'Max Resolution',
+      required: true,
+      defaultValue: '1080p',
+      options: [
+        { value: '720p', label: '720p' },
+        { value: '1080p', label: '1080p' },
+        { value: '1440p', label: '1440p (2K)' },
+        { value: '2160p', label: '2160p (4K)' },
+      ],
+    },
+  ], []);
 
   const removeDestination = async (destId) => {
     if (!window.confirm('Remove this destination?')) return;
@@ -273,65 +353,17 @@ function AdminLiveStreams() {
       )}
 
       {/* Add Destination Modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="card p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold text-white mb-4">Add Destination</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Platform</label>
-                <select
-                  value={newDest.platform}
-                  onChange={(e) => setNewDest({ ...newDest, platform: e.target.value })}
-                  className="input w-full"
-                >
-                  <option value="twitch">Twitch</option>
-                  <option value="youtube">YouTube</option>
-                  <option value="kick">Kick</option>
-                  <option value="custom">Custom RTMP</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">RTMP URL</label>
-                <input
-                  type="text"
-                  value={newDest.rtmp_url}
-                  onChange={(e) => setNewDest({ ...newDest, rtmp_url: e.target.value })}
-                  placeholder="rtmp://live.twitch.tv/app"
-                  className="input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Stream Key</label>
-                <input
-                  type="password"
-                  value={newDest.stream_key}
-                  onChange={(e) => setNewDest({ ...newDest, stream_key: e.target.value })}
-                  placeholder="Your platform stream key"
-                  className="input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Max Resolution</label>
-                <select
-                  value={newDest.max_resolution}
-                  onChange={(e) => setNewDest({ ...newDest, max_resolution: e.target.value })}
-                  className="input w-full"
-                >
-                  <option value="720p">720p</option>
-                  <option value="1080p">1080p</option>
-                  <option value="1440p">1440p (2K)</option>
-                  <option value="2160p">2160p (4K)</option>
-                </select>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 mt-6">
-              <button onClick={() => setShowAddModal(false)} className="btn btn-secondary">Cancel</button>
-              <button onClick={addDestination} className="btn btn-primary">Add</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <FormModalBuilder
+        title="Add Destination"
+        fields={destinationFields}
+        isOpen={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        onSubmit={addDestination}
+        submitButtonText="Add"
+        cancelButtonText="Cancel"
+        width="md"
+        colors={waddlebotColors}
+      />
     </div>
   );
 }

@@ -2,10 +2,36 @@ import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { publicApi, communityApi } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { FormModalBuilder } from '@anthropic/react_libs';
 import {
   GlobeAltIcon,
   LockClosedIcon,
 } from '@heroicons/react/24/outline';
+
+// WaddleBot theme colors for FormModalBuilder
+const waddlebotColors = {
+  primary: '#0ea5e9',      // sky-500
+  secondary: '#1e3a5f',    // navy-700
+  background: '#0d1f33',   // navy-900
+  surface: '#152a43',      // navy-800
+  border: '#1e3a5f',       // navy-700
+  text: '#e0f2fe',         // sky-100
+  textSecondary: '#64748b', // navy-400
+  error: '#ef4444',        // red-500
+  gold: '#fbbf24',         // gold-400
+};
+
+// Field definitions for Join Request modal
+const joinRequestFields = [
+  {
+    name: 'message',
+    type: 'textarea',
+    label: 'Message (optional)',
+    placeholder: 'Tell the admins why you want to join...',
+    rows: 3,
+    required: false,
+  },
+];
 
 const SOCIAL_ICONS = {
   twitter: { name: 'Twitter/X', color: '#1DA1F2' },
@@ -22,7 +48,6 @@ function CommunityPublicPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [joining, setJoining] = useState(false);
-  const [joinMessage, setJoinMessage] = useState('');
   const [joinResult, setJoinResult] = useState(null);
   const [showJoinModal, setShowJoinModal] = useState(false);
 
@@ -44,7 +69,7 @@ function CommunityPublicPage() {
     fetchCommunity();
   }, [id]);
 
-  const handleJoin = async () => {
+  const handleJoin = async (data = {}) => {
     if (!isAuthenticated) {
       navigate('/login', { state: { returnTo: `/communities/${id}` } });
       return;
@@ -54,7 +79,7 @@ function CommunityPublicPage() {
     setJoinResult(null);
 
     try {
-      const response = await communityApi.join(id, joinMessage);
+      const response = await communityApi.join(id, data.message || '');
       setJoinResult(response.data);
       setShowJoinModal(false);
 
@@ -252,38 +277,18 @@ function CommunityPublicPage() {
       </div>
 
       {/* Join Request Modal */}
-      {showJoinModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="card max-w-md w-full p-6">
-            <h3 className="text-xl font-semibold mb-4 text-sky-100">Request to Join</h3>
-            <p className="text-navy-400 mb-4">
-              This community requires approval to join. You can include a message with your request.
-            </p>
-            <textarea
-              value={joinMessage}
-              onChange={(e) => setJoinMessage(e.target.value)}
-              placeholder="Tell the admins why you want to join... (optional)"
-              className="w-full p-3 bg-navy-800 border border-navy-600 rounded-lg text-sky-100 placeholder-navy-500 focus:border-sky-500 focus:outline-none mb-4"
-              rows={3}
-            />
-            <div className="flex justify-end space-x-3">
-              <button
-                onClick={() => setShowJoinModal(false)}
-                className="btn btn-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleJoin}
-                disabled={joining}
-                className="btn btn-primary disabled:opacity-50"
-              >
-                {joining ? 'Submitting...' : 'Submit Request'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <FormModalBuilder
+        isOpen={showJoinModal}
+        onClose={() => setShowJoinModal(false)}
+        onSubmit={handleJoin}
+        title="Request to Join"
+        description="This community requires approval to join. You can include a message with your request."
+        fields={joinRequestFields}
+        submitLabel={joining ? 'Submitting...' : 'Submit Request'}
+        cancelLabel="Cancel"
+        isSubmitting={joining}
+        colors={waddlebotColors}
+      />
     </div>
   );
 }

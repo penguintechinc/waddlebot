@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   PhoneIcon,
@@ -11,6 +11,38 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { adminApi } from '../../services/api';
+import { FormModalBuilder } from '@penguin/react_libs';
+
+// WaddleBot theme colors matching the existing UI
+const waddlebotColors = {
+  modalBackground: 'bg-navy-800',
+  headerBackground: 'bg-navy-800',
+  footerBackground: 'bg-navy-850',
+  overlayBackground: 'bg-black bg-opacity-50',
+  titleText: 'text-sky-100',
+  labelText: 'text-sky-100',
+  descriptionText: 'text-navy-400',
+  errorText: 'text-red-400',
+  buttonText: 'text-white',
+  fieldBackground: 'bg-navy-700',
+  fieldBorder: 'border-navy-600',
+  fieldText: 'text-sky-100',
+  fieldPlaceholder: 'placeholder-navy-400',
+  focusRing: 'focus:ring-gold-500',
+  focusBorder: 'focus:border-gold-500',
+  primaryButton: 'bg-sky-600',
+  primaryButtonHover: 'hover:bg-sky-700',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-600',
+  activeTab: 'text-gold-400',
+  activeTabBorder: 'border-gold-500',
+  inactiveTab: 'text-navy-400',
+  inactiveTabHover: 'hover:text-navy-300 hover:border-navy-500',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
+};
 
 function AdminCommunityCalls() {
   const { communityId } = useParams();
@@ -20,7 +52,6 @@ function AdminCommunityCalls() {
   const [message, setMessage] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedRoom, setSelectedRoom] = useState(null);
-  const [newRoom, setNewRoom] = useState({ room_name: '', max_participants: 100 });
 
   useEffect(() => {
     loadRooms();
@@ -38,17 +69,41 @@ function AdminCommunityCalls() {
     }
   };
 
-  const createRoom = async () => {
+  const createRoom = async (data) => {
     try {
-      await adminApi.createCallRoom(communityId, newRoom);
+      await adminApi.createCallRoom(communityId, {
+        room_name: data.room_name?.trim(),
+        max_participants: data.max_participants,
+      });
       setMessage({ type: 'success', text: 'Room created' });
       setShowCreateModal(false);
-      setNewRoom({ room_name: '', max_participants: 100 });
       loadRooms();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to create room');
+      throw err;
     }
   };
+
+  // Build fields for FormModalBuilder
+  const roomFields = useMemo(() => [
+    {
+      name: 'room_name',
+      type: 'text',
+      label: 'Room Name',
+      required: true,
+      placeholder: 'Weekly Community Call',
+    },
+    {
+      name: 'max_participants',
+      type: 'number',
+      label: 'Max Participants',
+      required: true,
+      defaultValue: 100,
+      min: 2,
+      max: 1000,
+      helpText: 'Minimum 2, maximum 1000 participants',
+    },
+  ], []);
 
   const deleteRoom = async (roomName) => {
     if (!window.confirm('Delete this room?')) return;
@@ -266,40 +321,17 @@ function AdminCommunityCalls() {
       </div>
 
       {/* Create Room Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="card p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold text-white mb-4">Create Call Room</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Room Name</label>
-                <input
-                  type="text"
-                  value={newRoom.room_name}
-                  onChange={(e) => setNewRoom({ ...newRoom, room_name: e.target.value })}
-                  placeholder="Weekly Community Call"
-                  className="input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Max Participants</label>
-                <input
-                  type="number"
-                  value={newRoom.max_participants}
-                  onChange={(e) => setNewRoom({ ...newRoom, max_participants: parseInt(e.target.value) })}
-                  min="2"
-                  max="1000"
-                  className="input w-full"
-                />
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 mt-6">
-              <button onClick={() => setShowCreateModal(false)} className="btn btn-secondary">Cancel</button>
-              <button onClick={createRoom} className="btn btn-primary">Create</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <FormModalBuilder
+        title="Create Call Room"
+        fields={roomFields}
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onSubmit={createRoom}
+        submitButtonText="Create"
+        cancelButtonText="Cancel"
+        width="md"
+        colors={waddlebotColors}
+      />
     </div>
   );
 }

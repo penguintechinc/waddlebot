@@ -1,9 +1,41 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { adminApi } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
 import BotScoreBadge from '../../components/BotScoreBadge';
 import { ShieldCheckIcon, ExclamationTriangleIcon, UserGroupIcon, ClockIcon } from '@heroicons/react/24/outline';
+import { FormModalBuilder } from '@penguin/react_libs';
+
+// WaddleBot theme colors matching the existing UI
+const waddlebotColors = {
+  modalBackground: 'bg-navy-800',
+  headerBackground: 'bg-navy-800',
+  footerBackground: 'bg-navy-850',
+  overlayBackground: 'bg-black bg-opacity-50',
+  titleText: 'text-sky-100',
+  labelText: 'text-sky-100',
+  descriptionText: 'text-navy-400',
+  errorText: 'text-red-400',
+  buttonText: 'text-white',
+  fieldBackground: 'bg-navy-700',
+  fieldBorder: 'border-navy-600',
+  fieldText: 'text-sky-100',
+  fieldPlaceholder: 'placeholder-navy-400',
+  focusRing: 'focus:ring-gold-500',
+  focusBorder: 'focus:border-gold-500',
+  primaryButton: 'bg-sky-600',
+  primaryButtonHover: 'hover:bg-sky-700',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-600',
+  activeTab: 'text-gold-400',
+  activeTabBorder: 'border-gold-500',
+  inactiveTab: 'text-navy-400',
+  inactiveTabHover: 'hover:text-navy-300 hover:border-navy-500',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
+};
 
 const CONFIDENCE_COLORS = {
   low: 'text-emerald-400',
@@ -32,11 +64,6 @@ function AdminBotDetection() {
   });
   const [selectedDetection, setSelectedDetection] = useState(null);
   const [showReviewModal, setShowReviewModal] = useState(false);
-  const [reviewData, setReviewData] = useState({
-    action: 'none',
-    notes: '',
-  });
-  const [submitting, setSubmitting] = useState(false);
   const [botScore, setBotScore] = useState(null);
   const [botScoreLoading, setBotScoreLoading] = useState(true);
   const isPremium = user?.isPremium || false;
@@ -94,36 +121,50 @@ function AdminBotDetection() {
 
   function openReviewModal(detection) {
     setSelectedDetection(detection);
-    setReviewData({
-      action: detection.recommendedAction || 'none',
-      notes: '',
-    });
     setShowReviewModal(true);
   }
 
   function closeReviewModal() {
     setShowReviewModal(false);
     setSelectedDetection(null);
-    setReviewData({ action: 'none', notes: '' });
   }
 
-  async function submitReview() {
+  async function submitReview(data) {
     if (!selectedDetection) return;
 
-    setSubmitting(true);
     try {
       await adminApi.reviewBotDetection(communityId, selectedDetection.id, {
-        action: reviewData.action,
-        notes: reviewData.notes,
+        action: data.action,
+        notes: data.notes?.trim() || '',
       });
       closeReviewModal();
       fetchDetections();
     } catch (err) {
       console.error('Failed to submit review:', err);
-    } finally {
-      setSubmitting(false);
+      throw err;
     }
   }
+
+  // Build fields for the review modal
+  const reviewFields = useMemo(() => [
+    {
+      name: 'action',
+      type: 'select',
+      label: 'Action',
+      defaultValue: selectedDetection?.recommendedAction || 'none',
+      options: RECOMMENDED_ACTIONS.map((action) => ({
+        value: action.id,
+        label: action.name,
+      })),
+    },
+    {
+      name: 'notes',
+      type: 'textarea',
+      label: 'Notes (Optional)',
+      placeholder: 'Add any notes about this review...',
+      rows: 4,
+    },
+  ], [selectedDetection]);
 
   async function markAsReviewed(detectionId) {
     try {
@@ -416,21 +457,18 @@ function AdminBotDetection() {
       </div>
 
       {/* Review Modal */}
-      {showReviewModal && selectedDetection && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="card p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-sky-100">Review Bot Detection</h2>
-              <button
-                onClick={closeReviewModal}
-                className="text-navy-400 hover:text-sky-100 transition-colors"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
+      <FormModalBuilder
+        title="Review Bot Detection"
+        fields={reviewFields}
+        isOpen={showReviewModal && selectedDetection !== null}
+        onClose={closeReviewModal}
+        onSubmit={submitReview}
+        submitButtonText="Submit Review"
+        cancelButtonText="Cancel"
+        width="lg"
+        colors={waddlebotColors}
+        headerContent={selectedDetection && (
+          <>
             {/* User Details */}
             <div className="mb-6 p-4 bg-navy-800 rounded-lg">
               <div className="flex items-center gap-4 mb-4">
@@ -489,58 +527,9 @@ function AdminBotDetection() {
                 </div>
               </div>
             )}
-
-            {/* Action Selection */}
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-navy-300 mb-2">
-                Action
-              </label>
-              <select
-                value={reviewData.action}
-                onChange={(e) => setReviewData({ ...reviewData, action: e.target.value })}
-                className="w-full px-4 py-2 bg-navy-800 border border-navy-600 rounded-lg text-sky-100 focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-              >
-                {RECOMMENDED_ACTIONS.map((action) => (
-                  <option key={action.id} value={action.id}>
-                    {action.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Notes */}
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-navy-300 mb-2">
-                Notes (Optional)
-              </label>
-              <textarea
-                value={reviewData.notes}
-                onChange={(e) => setReviewData({ ...reviewData, notes: e.target.value })}
-                rows={4}
-                placeholder="Add any notes about this review..."
-                className="w-full px-4 py-2 bg-navy-800 border border-navy-600 rounded-lg text-sky-100 placeholder-navy-400 focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-              />
-            </div>
-
-            {/* Actions */}
-            <div className="flex gap-3">
-              <button
-                onClick={submitReview}
-                disabled={submitting}
-                className="btn btn-primary flex-1 disabled:opacity-50"
-              >
-                {submitting ? 'Submitting...' : 'Submit Review'}
-              </button>
-              <button
-                onClick={closeReviewModal}
-                className="btn btn-secondary flex-1"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      />
     </div>
   );
 }

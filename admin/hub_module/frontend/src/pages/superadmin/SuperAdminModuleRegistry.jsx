@@ -1,6 +1,38 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { superAdminApi } from '../../services/api';
 import { Search, Plus, Edit2, Trash2, Eye, EyeOff, Star, Download, Package } from 'lucide-react';
+import { FormModalBuilder } from '@penguin/react_libs';
+
+// WaddleBot theme colors matching the existing UI
+const waddlebotColors = {
+  modalBackground: 'bg-navy-800',
+  headerBackground: 'bg-navy-800',
+  footerBackground: 'bg-navy-800',
+  overlayBackground: 'bg-black bg-opacity-50',
+  titleText: 'text-gold-400',
+  labelText: 'text-gray-400',
+  descriptionText: 'text-gray-500',
+  errorText: 'text-red-400',
+  buttonText: 'text-navy-900',
+  fieldBackground: 'bg-navy-700',
+  fieldBorder: 'border-navy-600',
+  fieldText: 'text-white',
+  fieldPlaceholder: 'placeholder-gray-500',
+  focusRing: 'focus:ring-sky-500',
+  focusBorder: 'focus:border-sky-500',
+  primaryButton: 'bg-gold-500',
+  primaryButtonHover: 'hover:bg-gold-600',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-600',
+  activeTab: 'text-gold-400',
+  activeTabBorder: 'border-gold-500',
+  inactiveTab: 'text-gray-400',
+  inactiveTabHover: 'hover:text-gray-300 hover:border-navy-500',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
+};
 
 export default function SuperAdminModuleRegistry() {
   const [modules, setModules] = useState([]);
@@ -15,7 +47,7 @@ export default function SuperAdminModuleRegistry() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingModule, setEditingModule] = useState(null);
-  const [formData, setFormData] = useState({
+  const [editInitialValues, setEditInitialValues] = useState({
     name: '',
     displayName: '',
     description: '',
@@ -60,30 +92,29 @@ export default function SuperAdminModuleRegistry() {
     }
   };
 
-  const handleCreate = async (e) => {
-    e.preventDefault();
+  const handleCreate = async (data) => {
     try {
-      await superAdminApi.createModule(formData);
+      await superAdminApi.createModule(data);
       setSuccess('Module created successfully');
       setShowCreateModal(false);
-      resetForm();
       loadModules();
     } catch (err) {
       setError(err.response?.data?.error?.message || 'Failed to create module');
+      throw err; // Re-throw to prevent modal from closing
     }
   };
 
-  const handleUpdate = async (e) => {
-    e.preventDefault();
+  const handleUpdate = async (data) => {
+    if (!editingModule) return;
     try {
-      await superAdminApi.updateModule(editingModule.id, formData);
+      await superAdminApi.updateModule(editingModule.id, data);
       setSuccess('Module updated successfully');
       setShowEditModal(false);
       setEditingModule(null);
-      resetForm();
       loadModules();
     } catch (err) {
       setError(err.response?.data?.error?.message || 'Failed to update module');
+      throw err; // Re-throw to prevent modal from closing
     }
   };
 
@@ -111,7 +142,7 @@ export default function SuperAdminModuleRegistry() {
 
   const openEditModal = (module) => {
     setEditingModule(module);
-    setFormData({
+    setEditInitialValues({
       name: module.name,
       displayName: module.displayName,
       description: module.description,
@@ -124,18 +155,131 @@ export default function SuperAdminModuleRegistry() {
     setShowEditModal(true);
   };
 
-  const resetForm = () => {
-    setFormData({
-      name: '',
-      displayName: '',
-      description: '',
-      version: '1.0.0',
-      author: 'WaddleBot',
-      category: 'general',
-      iconUrl: '',
-      isCore: false,
-    });
-  };
+  // Category options for select fields (filter out empty value for form selects)
+  const categoryOptions = categories
+    .filter(c => c.value)
+    .map(c => ({ value: c.value, label: c.label }));
+
+  // Field definitions for create modal
+  const createModuleFields = useMemo(() => [
+    {
+      name: 'name',
+      type: 'text',
+      label: 'Module Name',
+      required: true,
+      placeholder: 'e.g., my-module',
+    },
+    {
+      name: 'displayName',
+      type: 'text',
+      label: 'Display Name',
+      required: true,
+      placeholder: 'e.g., My Module',
+    },
+    {
+      name: 'description',
+      type: 'textarea',
+      label: 'Description',
+      required: true,
+      placeholder: 'Describe what this module does...',
+      rows: 4,
+    },
+    {
+      name: 'version',
+      type: 'text',
+      label: 'Version',
+      required: true,
+      defaultValue: '1.0.0',
+      placeholder: 'e.g., 1.0.0',
+    },
+    {
+      name: 'author',
+      type: 'text',
+      label: 'Author',
+      required: true,
+      defaultValue: 'WaddleBot',
+      placeholder: 'e.g., WaddleBot',
+    },
+    {
+      name: 'category',
+      type: 'select',
+      label: 'Category',
+      defaultValue: 'general',
+      options: categoryOptions,
+    },
+    {
+      name: 'iconUrl',
+      type: 'text',
+      label: 'Icon URL (optional)',
+      placeholder: 'https://example.com/icon.png',
+    },
+    {
+      name: 'isCore',
+      type: 'checkbox',
+      label: 'Mark as Core Module',
+      defaultValue: false,
+    },
+  ], [categoryOptions]);
+
+  // Field definitions for edit modal (with initial values)
+  const editModuleFields = useMemo(() => [
+    {
+      name: 'name',
+      type: 'text',
+      label: 'Module Name',
+      required: true,
+      disabled: true,
+      defaultValue: editInitialValues.name,
+    },
+    {
+      name: 'displayName',
+      type: 'text',
+      label: 'Display Name',
+      required: true,
+      defaultValue: editInitialValues.displayName,
+    },
+    {
+      name: 'description',
+      type: 'textarea',
+      label: 'Description',
+      required: true,
+      rows: 4,
+      defaultValue: editInitialValues.description,
+    },
+    {
+      name: 'version',
+      type: 'text',
+      label: 'Version',
+      required: true,
+      defaultValue: editInitialValues.version,
+    },
+    {
+      name: 'author',
+      type: 'text',
+      label: 'Author',
+      required: true,
+      defaultValue: editInitialValues.author,
+    },
+    {
+      name: 'category',
+      type: 'select',
+      label: 'Category',
+      defaultValue: editInitialValues.category,
+      options: categoryOptions,
+    },
+    {
+      name: 'iconUrl',
+      type: 'text',
+      label: 'Icon URL (optional)',
+      defaultValue: editInitialValues.iconUrl,
+    },
+    {
+      name: 'isCore',
+      type: 'checkbox',
+      label: 'Mark as Core Module',
+      defaultValue: editInitialValues.isCore,
+    },
+  ], [editInitialValues, categoryOptions]);
 
   return (
     <div className="min-h-screen bg-navy-900 text-white p-6">
@@ -318,128 +462,34 @@ export default function SuperAdminModuleRegistry() {
           </div>
         )}
 
-        {/* Create/Edit Modal */}
-        {(showCreateModal || showEditModal) && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-navy-800 border border-navy-700 rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-              <h2 className="text-2xl font-bold text-gold-400 mb-6">
-                {showCreateModal ? 'Create Module' : 'Edit Module'}
-              </h2>
-              <form onSubmit={showCreateModal ? handleCreate : handleUpdate}>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-1">Module Name</label>
-                    <input
-                      type="text"
-                      value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                      disabled={showEditModal}
-                      className="w-full px-4 py-2 bg-navy-700 border border-navy-600 rounded-lg text-white focus:outline-none focus:border-sky-500 disabled:opacity-50"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-1">Display Name</label>
-                    <input
-                      type="text"
-                      value={formData.displayName}
-                      onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
-                      className="w-full px-4 py-2 bg-navy-700 border border-navy-600 rounded-lg text-white focus:outline-none focus:border-sky-500"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-1">Description</label>
-                    <textarea
-                      value={formData.description}
-                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                      className="w-full px-4 py-2 bg-navy-700 border border-navy-600 rounded-lg text-white focus:outline-none focus:border-sky-500"
-                      rows={4}
-                      required
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-400 mb-1">Version</label>
-                      <input
-                        type="text"
-                        value={formData.version}
-                        onChange={(e) => setFormData({ ...formData, version: e.target.value })}
-                        className="w-full px-4 py-2 bg-navy-700 border border-navy-600 rounded-lg text-white focus:outline-none focus:border-sky-500"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-400 mb-1">Author</label>
-                      <input
-                        type="text"
-                        value={formData.author}
-                        onChange={(e) => setFormData({ ...formData, author: e.target.value })}
-                        className="w-full px-4 py-2 bg-navy-700 border border-navy-600 rounded-lg text-white focus:outline-none focus:border-sky-500"
-                        required
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-1">Category</label>
-                    <select
-                      value={formData.category}
-                      onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                      className="w-full px-4 py-2 bg-navy-700 border border-navy-600 rounded-lg text-white focus:outline-none focus:border-sky-500"
-                    >
-                      {categories.filter(c => c.value).map((cat) => (
-                        <option key={cat.value} value={cat.value}>
-                          {cat.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-1">Icon URL (optional)</label>
-                    <input
-                      type="text"
-                      value={formData.iconUrl}
-                      onChange={(e) => setFormData({ ...formData, iconUrl: e.target.value })}
-                      className="w-full px-4 py-2 bg-navy-700 border border-navy-600 rounded-lg text-white focus:outline-none focus:border-sky-500"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="isCore"
-                      checked={formData.isCore}
-                      onChange={(e) => setFormData({ ...formData, isCore: e.target.checked })}
-                      className="w-4 h-4"
-                    />
-                    <label htmlFor="isCore" className="text-sm text-gray-400">
-                      Mark as Core Module
-                    </label>
-                  </div>
-                </div>
-                <div className="mt-6 flex justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowCreateModal(false);
-                      setShowEditModal(false);
-                      setEditingModule(null);
-                      resetForm();
-                    }}
-                    className="px-4 py-2 bg-navy-700 hover:bg-navy-600 text-white rounded-lg transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 bg-gold-500 hover:bg-gold-600 text-navy-900 rounded-lg font-semibold transition-colors"
-                  >
-                    {showCreateModal ? 'Create' : 'Update'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
+        {/* Create Module Modal */}
+        <FormModalBuilder
+          title="Create Module"
+          fields={createModuleFields}
+          isOpen={showCreateModal}
+          onClose={() => setShowCreateModal(false)}
+          onSubmit={handleCreate}
+          submitButtonText="Create"
+          cancelButtonText="Cancel"
+          width="lg"
+          colors={waddlebotColors}
+        />
+
+        {/* Edit Module Modal */}
+        <FormModalBuilder
+          title="Edit Module"
+          fields={editModuleFields}
+          isOpen={showEditModal && editingModule !== null}
+          onClose={() => {
+            setShowEditModal(false);
+            setEditingModule(null);
+          }}
+          onSubmit={handleUpdate}
+          submitButtonText="Update"
+          cancelButtonText="Cancel"
+          width="lg"
+          colors={waddlebotColors}
+        />
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   ChartBarIcon,
@@ -8,6 +8,38 @@ import {
   ClockIcon,
 } from '@heroicons/react/24/outline';
 import { adminApi } from '../../services/api';
+import { FormModalBuilder } from '@penguin/react_libs';
+
+// WaddleBot theme colors matching the existing UI
+const waddlebotColors = {
+  modalBackground: 'bg-navy-800',
+  headerBackground: 'bg-navy-800',
+  footerBackground: 'bg-navy-850',
+  overlayBackground: 'bg-black bg-opacity-50',
+  titleText: 'text-sky-100',
+  labelText: 'text-sky-100',
+  descriptionText: 'text-navy-400',
+  errorText: 'text-red-400',
+  buttonText: 'text-white',
+  fieldBackground: 'bg-navy-700',
+  fieldBorder: 'border-navy-600',
+  fieldText: 'text-sky-100',
+  fieldPlaceholder: 'placeholder-navy-400',
+  focusRing: 'focus:ring-gold-500',
+  focusBorder: 'focus:border-gold-500',
+  primaryButton: 'bg-sky-600',
+  primaryButtonHover: 'hover:bg-sky-700',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-600',
+  activeTab: 'text-gold-400',
+  activeTabBorder: 'border-gold-500',
+  inactiveTab: 'text-navy-400',
+  inactiveTabHover: 'hover:text-navy-300 hover:border-navy-500',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
+};
 
 function AdminPolls() {
   const { communityId } = useParams();
@@ -17,16 +49,6 @@ function AdminPolls() {
   const [message, setMessage] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedPoll, setSelectedPoll] = useState(null);
-  const [newPoll, setNewPoll] = useState({
-    title: '',
-    description: '',
-    options: ['', ''],
-    view_visibility: 'community',
-    submit_visibility: 'community',
-    allow_multiple_choices: false,
-    max_choices: 1,
-    expires_at: '',
-  });
 
   useEffect(() => {
     loadPolls();
@@ -44,32 +66,30 @@ function AdminPolls() {
     }
   };
 
-  const createPoll = async () => {
+  const createPoll = async (data) => {
+    // options comes as string[] from multiline field (split by newline, trimmed, filtered)
+    const validOptions = data.options || [];
+    if (validOptions.length < 2) {
+      setError('At least 2 options required');
+      throw new Error('At least 2 options required');
+    }
     try {
-      const validOptions = newPoll.options.filter(o => o.trim());
-      if (validOptions.length < 2) {
-        setError('At least 2 options required');
-        return;
-      }
       await adminApi.createPoll(communityId, {
-        ...newPoll,
+        title: data.title?.trim(),
+        description: data.description?.trim() || '',
         options: validOptions,
+        view_visibility: data.view_visibility,
+        submit_visibility: data.submit_visibility,
+        allow_multiple_choices: data.allow_multiple_choices || false,
+        max_choices: data.allow_multiple_choices ? null : 1,
+        expires_at: data.expires_at || null,
       });
       setMessage({ type: 'success', text: 'Poll created' });
       setShowCreateModal(false);
-      setNewPoll({
-        title: '',
-        description: '',
-        options: ['', ''],
-        view_visibility: 'community',
-        submit_visibility: 'community',
-        allow_multiple_choices: false,
-        max_choices: 1,
-        expires_at: '',
-      });
       loadPolls();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to create poll');
+      throw err;
     }
   };
 
@@ -93,23 +113,67 @@ function AdminPolls() {
     }
   };
 
-  const addOption = () => {
-    setNewPoll({ ...newPoll, options: [...newPoll.options, ''] });
-  };
-
-  const removeOption = (index) => {
-    if (newPoll.options.length <= 2) return;
-    setNewPoll({
-      ...newPoll,
-      options: newPoll.options.filter((_, i) => i !== index),
-    });
-  };
-
-  const updateOption = (index, value) => {
-    const options = [...newPoll.options];
-    options[index] = value;
-    setNewPoll({ ...newPoll, options });
-  };
+  // Build fields for FormModalBuilder
+  const pollFields = useMemo(() => [
+    {
+      name: 'title',
+      type: 'text',
+      label: 'Title',
+      required: true,
+      placeholder: "What's your favorite...?",
+    },
+    {
+      name: 'description',
+      type: 'textarea',
+      label: 'Description (optional)',
+      placeholder: 'Add more context...',
+      rows: 3,
+    },
+    {
+      name: 'options',
+      type: 'multiline',
+      label: 'Options',
+      required: true,
+      placeholder: 'Enter one option per line (minimum 2)',
+      rows: 4,
+      helpText: 'Enter one option per line. At least 2 options required.',
+    },
+    {
+      name: 'view_visibility',
+      type: 'select',
+      label: 'Who can view',
+      defaultValue: 'community',
+      options: [
+        { value: 'public', label: 'Public' },
+        { value: 'registered', label: 'Registered Users' },
+        { value: 'community', label: 'Community Members' },
+        { value: 'admins', label: 'Admins Only' },
+      ],
+    },
+    {
+      name: 'submit_visibility',
+      type: 'select',
+      label: 'Who can vote',
+      defaultValue: 'community',
+      options: [
+        { value: 'public', label: 'Public' },
+        { value: 'registered', label: 'Registered Users' },
+        { value: 'community', label: 'Community Members' },
+        { value: 'admins', label: 'Admins Only' },
+      ],
+    },
+    {
+      name: 'allow_multiple_choices',
+      type: 'checkbox',
+      label: 'Allow multiple choices',
+      defaultValue: false,
+    },
+    {
+      name: 'expires_at',
+      type: 'datetime-local',
+      label: 'Expires at (optional)',
+    },
+  ], []);
 
   const getTotalVotes = (poll) => {
     if (!poll.vote_counts) return 0;
@@ -239,109 +303,17 @@ function AdminPolls() {
       </div>
 
       {/* Create Poll Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-y-auto py-8">
-          <div className="card p-6 w-full max-w-lg">
-            <h3 className="text-lg font-semibold text-white mb-4">Create Poll</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Title</label>
-                <input
-                  type="text"
-                  value={newPoll.title}
-                  onChange={(e) => setNewPoll({ ...newPoll, title: e.target.value })}
-                  placeholder="What's your favorite...?"
-                  className="input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Description (optional)</label>
-                <textarea
-                  value={newPoll.description}
-                  onChange={(e) => setNewPoll({ ...newPoll, description: e.target.value })}
-                  placeholder="Add more context..."
-                  className="input w-full h-20"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Options</label>
-                {newPoll.options.map((opt, i) => (
-                  <div key={i} className="flex gap-2 mb-2">
-                    <input
-                      type="text"
-                      value={opt}
-                      onChange={(e) => updateOption(i, e.target.value)}
-                      placeholder={`Option ${i + 1}`}
-                      className="input flex-1"
-                    />
-                    {newPoll.options.length > 2 && (
-                      <button onClick={() => removeOption(i)} className="btn btn-secondary">
-                        <TrashIcon className="h-4 w-4" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-                <button onClick={addOption} className="btn btn-sm btn-secondary mt-2">
-                  <PlusIcon className="h-4 w-4 mr-1" />
-                  Add Option
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Who can view</label>
-                  <select
-                    value={newPoll.view_visibility}
-                    onChange={(e) => setNewPoll({ ...newPoll, view_visibility: e.target.value })}
-                    className="input w-full"
-                  >
-                    <option value="public">Public</option>
-                    <option value="registered">Registered Users</option>
-                    <option value="community">Community Members</option>
-                    <option value="admins">Admins Only</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Who can vote</label>
-                  <select
-                    value={newPoll.submit_visibility}
-                    onChange={(e) => setNewPoll({ ...newPoll, submit_visibility: e.target.value })}
-                    className="input w-full"
-                  >
-                    <option value="public">Public</option>
-                    <option value="registered">Registered Users</option>
-                    <option value="community">Community Members</option>
-                    <option value="admins">Admins Only</option>
-                  </select>
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <label className="flex items-center gap-2 text-sm text-gray-300">
-                  <input
-                    type="checkbox"
-                    checked={newPoll.allow_multiple_choices}
-                    onChange={(e) => setNewPoll({ ...newPoll, allow_multiple_choices: e.target.checked })}
-                    className="rounded"
-                  />
-                  Allow multiple choices
-                </label>
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Expires at (optional)</label>
-                <input
-                  type="datetime-local"
-                  value={newPoll.expires_at}
-                  onChange={(e) => setNewPoll({ ...newPoll, expires_at: e.target.value })}
-                  className="input w-full"
-                />
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 mt-6">
-              <button onClick={() => setShowCreateModal(false)} className="btn btn-secondary">Cancel</button>
-              <button onClick={createPoll} className="btn btn-primary">Create Poll</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <FormModalBuilder
+        title="Create Poll"
+        fields={pollFields}
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onSubmit={createPoll}
+        submitButtonText="Create Poll"
+        cancelButtonText="Cancel"
+        width="lg"
+        colors={waddlebotColors}
+      />
     </div>
   );
 }

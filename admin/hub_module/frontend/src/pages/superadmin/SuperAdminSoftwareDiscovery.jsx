@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { superAdminApi } from '../../services/api';
 import {
   FolderGit2,
@@ -7,18 +7,45 @@ import {
   RefreshCw,
   Check,
   X,
-  Eye,
-  EyeOff,
   AlertCircle,
   GitBranch,
   Package,
   Clock,
   ExternalLink,
-  Search,
-  Settings,
-  Play,
   Loader2,
 } from 'lucide-react';
+import { FormModalBuilder } from '@penguin/react_libs';
+
+// WaddleBot theme colors matching the existing UI
+const waddlebotColors = {
+  modalBackground: 'bg-navy-800',
+  headerBackground: 'bg-navy-800',
+  footerBackground: 'bg-navy-800',
+  overlayBackground: 'bg-black bg-opacity-50',
+  titleText: 'text-gold-400',
+  labelText: 'text-gray-400',
+  descriptionText: 'text-gray-500',
+  errorText: 'text-red-400',
+  buttonText: 'text-navy-900',
+  fieldBackground: 'bg-navy-700',
+  fieldBorder: 'border-navy-600',
+  fieldText: 'text-white',
+  fieldPlaceholder: 'placeholder-gray-500',
+  focusRing: 'focus:ring-sky-500',
+  focusBorder: 'focus:border-sky-500',
+  primaryButton: 'bg-gold-500',
+  primaryButtonHover: 'hover:bg-gold-600',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-600',
+  activeTab: 'text-gold-400',
+  activeTabBorder: 'border-gold-500',
+  inactiveTab: 'text-gray-400',
+  inactiveTabHover: 'hover:text-gray-300 hover:border-navy-500',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
+};
 
 // Git provider icons
 const GitHubIcon = () => (
@@ -96,17 +123,127 @@ export default function SuperAdminSoftwareDiscovery() {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [showSecrets, setShowSecrets] = useState({});
-  const [selectedProvider, setSelectedProvider] = useState('github');
-  const [formData, setFormData] = useState({
-    url: '',
-    name: '',
-    branch: 'main',
-    auto_scan: true,
-    scan_interval_hours: 24,
-  });
-  const [authData, setAuthData] = useState({});
-  const [addingRepo, setAddingRepo] = useState(false);
+
+  // Provider options for select field
+  const providerOptions = useMemo(() => [
+    { value: 'github', label: 'GitHub' },
+    { value: 'gitlab', label: 'GitLab' },
+    { value: 'bitbucket', label: 'Bitbucket' },
+    { value: 'azure', label: 'Azure DevOps' },
+  ], []);
+
+  // Scan interval options
+  const scanIntervalOptions = useMemo(() => [
+    { value: '1', label: 'Every hour' },
+    { value: '6', label: 'Every 6 hours' },
+    { value: '12', label: 'Every 12 hours' },
+    { value: '24', label: 'Daily' },
+    { value: '168', label: 'Weekly' },
+  ], []);
+
+  // Field definitions for add repository modal
+  const addRepositoryFields = useMemo(() => [
+    {
+      name: 'provider',
+      type: 'select',
+      label: 'Git Provider',
+      required: true,
+      defaultValue: 'github',
+      options: providerOptions,
+      helpText: 'Select the git hosting provider for your repository',
+    },
+    {
+      name: 'url',
+      type: 'url',
+      label: 'Repository URL',
+      required: true,
+      placeholder: 'https://github.com/owner/repo',
+      helpText: 'The full URL to your git repository',
+    },
+    {
+      name: 'name',
+      type: 'text',
+      label: 'Display Name',
+      placeholder: 'Auto-detected from URL',
+      helpText: 'Optional friendly name for the repository',
+    },
+    {
+      name: 'branch',
+      type: 'text',
+      label: 'Default Branch',
+      defaultValue: 'main',
+      placeholder: 'main',
+      helpText: 'The branch to scan for dependencies',
+    },
+    // GitHub authentication
+    {
+      name: 'github_access_token',
+      type: 'password',
+      label: 'Personal Access Token (PAT)',
+      placeholder: 'ghp_xxxxxxxxxxxx',
+      helpText: 'Required for private repositories. Leave empty for public repos.',
+      showWhen: (values) => values.provider === 'github',
+      tab: 'Authentication',
+    },
+    // GitLab authentication
+    {
+      name: 'gitlab_access_token',
+      type: 'password',
+      label: 'Access Token',
+      placeholder: 'glpat-xxxxxxxxxxxx',
+      helpText: 'Required for private repositories. Leave empty for public repos.',
+      showWhen: (values) => values.provider === 'gitlab',
+      tab: 'Authentication',
+    },
+    // Bitbucket authentication
+    {
+      name: 'bitbucket_username',
+      type: 'text',
+      label: 'Username',
+      placeholder: 'Your Bitbucket username',
+      helpText: 'Your Bitbucket account username',
+      showWhen: (values) => values.provider === 'bitbucket',
+      tab: 'Authentication',
+    },
+    {
+      name: 'bitbucket_app_password',
+      type: 'password',
+      label: 'App Password',
+      placeholder: 'App password with repo access',
+      helpText: 'Create an app password in Bitbucket settings with repository read access',
+      showWhen: (values) => values.provider === 'bitbucket',
+      tab: 'Authentication',
+    },
+    // Azure DevOps authentication
+    {
+      name: 'azure_access_token',
+      type: 'password',
+      label: 'Personal Access Token',
+      placeholder: 'Azure DevOps PAT',
+      helpText: 'Required for private repositories. Leave empty for public repos.',
+      showWhen: (values) => values.provider === 'azure',
+      tab: 'Authentication',
+    },
+    // Auto-scan options
+    {
+      name: 'auto_scan',
+      type: 'checkbox',
+      label: 'Auto-scan for dependencies',
+      defaultValue: true,
+      helpText: 'Automatically scan for package.json, requirements.txt, go.mod, and other dependency files',
+      tab: 'Scan Settings',
+    },
+    {
+      name: 'scan_interval_hours',
+      type: 'select',
+      label: 'Scan Interval',
+      defaultValue: '24',
+      options: scanIntervalOptions,
+      helpText: 'How often to automatically scan for dependency changes',
+      showWhen: (values) => values.auto_scan === true,
+      tab: 'Scan Settings',
+    },
+  ], [providerOptions, scanIntervalOptions]);
 
   useEffect(() => {
     loadRepositories();
@@ -124,57 +261,6 @@ export default function SuperAdminSoftwareDiscovery() {
     }
   };
 
-  const detectProvider = (url) => {
-    if (url.includes('github.com')) return 'github';
-    if (url.includes('gitlab.com') || url.includes('gitlab')) return 'gitlab';
-    if (url.includes('bitbucket.org') || url.includes('bitbucket')) return 'bitbucket';
-    if (url.includes('dev.azure.com') || url.includes('visualstudio.com')) return 'azure';
-    return 'github'; // default
-  };
-
-  const handleUrlChange = (url) => {
-    setFormData(prev => ({ ...prev, url }));
-    const detected = detectProvider(url);
-    if (detected !== selectedProvider) {
-      setSelectedProvider(detected);
-      setAuthData({});
-    }
-  };
-
-  const handleAddRepository = async () => {
-    if (!formData.url.trim()) {
-      setError('Repository URL is required');
-      return;
-    }
-
-    try {
-      setAddingRepo(true);
-      setError(null);
-
-      const payload = {
-        provider: selectedProvider,
-        url: formData.url.trim(),
-        name: formData.name.trim() || extractRepoName(formData.url),
-        branch: formData.branch.trim() || 'main',
-        auto_scan: formData.auto_scan,
-        scan_interval_hours: parseInt(formData.scan_interval_hours) || 24,
-        auth: Object.keys(authData).length > 0 ? authData : null,
-      };
-
-      await superAdminApi.addSoftwareRepository(payload);
-      setSuccess('Repository added successfully');
-      setShowAddModal(false);
-      resetForm();
-      loadRepositories();
-
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to add repository');
-    } finally {
-      setAddingRepo(false);
-    }
-  };
-
   const extractRepoName = (url) => {
     try {
       const parts = url.replace(/\.git$/, '').split('/');
@@ -184,16 +270,42 @@ export default function SuperAdminSoftwareDiscovery() {
     }
   };
 
-  const resetForm = () => {
-    setFormData({
-      url: '',
-      name: '',
-      branch: 'main',
-      auto_scan: true,
-      scan_interval_hours: 24,
-    });
-    setAuthData({});
-    setSelectedProvider('github');
+  const handleAddRepository = async (data) => {
+    try {
+      setError(null);
+
+      // Build auth object based on provider
+      let auth = null;
+      if (data.provider === 'github' && data.github_access_token) {
+        auth = { access_token: data.github_access_token };
+      } else if (data.provider === 'gitlab' && data.gitlab_access_token) {
+        auth = { access_token: data.gitlab_access_token };
+      } else if (data.provider === 'bitbucket' && (data.bitbucket_username || data.bitbucket_app_password)) {
+        auth = { username: data.bitbucket_username, app_password: data.bitbucket_app_password };
+      } else if (data.provider === 'azure' && data.azure_access_token) {
+        auth = { access_token: data.azure_access_token };
+      }
+
+      const payload = {
+        provider: data.provider,
+        url: data.url.trim(),
+        name: data.name?.trim() || extractRepoName(data.url),
+        branch: data.branch?.trim() || 'main',
+        auto_scan: data.auto_scan,
+        scan_interval_hours: parseInt(data.scan_interval_hours) || 24,
+        auth,
+      };
+
+      await superAdminApi.addSoftwareRepository(payload);
+      setSuccess('Repository added successfully');
+      setShowAddModal(false);
+      loadRepositories();
+
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to add repository');
+      throw err; // Re-throw to prevent modal from closing
+    }
   };
 
   const handleScanRepository = async (repoId) => {
@@ -228,10 +340,6 @@ export default function SuperAdminSoftwareDiscovery() {
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to remove repository');
     }
-  };
-
-  const toggleShowSecret = (key) => {
-    setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
   const getStatusBadge = (status) => {
@@ -432,203 +540,17 @@ export default function SuperAdminSoftwareDiscovery() {
       )}
 
       {/* Add Repository Modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-navy-900 border border-navy-700 rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b border-navy-700">
-              <h2 className="text-xl font-semibold text-sky-100">Add Git Repository</h2>
-              <p className="text-navy-400 text-sm mt-1">
-                Connect a repository to automatically discover dependencies
-              </p>
-            </div>
-
-            <div className="p-6 space-y-6">
-              {/* Provider Selection */}
-              <div>
-                <label className="block text-sm font-medium text-navy-300 mb-3">
-                  Git Provider
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  {Object.entries(PROVIDER_CONFIG).map(([key, config]) => {
-                    const IconComponent = config.icon;
-                    return (
-                      <button
-                        key={key}
-                        onClick={() => {
-                          setSelectedProvider(key);
-                          setAuthData({});
-                        }}
-                        className={`p-4 rounded-lg border transition-colors ${
-                          selectedProvider === key
-                            ? 'bg-gold-500/20 border-gold-500/50 text-gold-400'
-                            : 'bg-navy-800 border-navy-700 text-navy-300 hover:border-navy-600'
-                        }`}
-                      >
-                        <div className="flex flex-col items-center gap-2">
-                          <IconComponent />
-                          <span className="text-sm font-medium">{config.name}</span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Repository URL */}
-              <div>
-                <label className="block text-sm font-medium text-navy-300 mb-2">
-                  Repository URL <span className="text-red-400">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.url}
-                  onChange={(e) => handleUrlChange(e.target.value)}
-                  placeholder={PROVIDER_CONFIG[selectedProvider].urlPlaceholder}
-                  className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-sky-100 placeholder-navy-500 focus:outline-none focus:border-gold-500"
-                />
-              </div>
-
-              {/* Repository Name (optional) */}
-              <div>
-                <label className="block text-sm font-medium text-navy-300 mb-2">
-                  Display Name (optional)
-                </label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                  placeholder={extractRepoName(formData.url) || 'Auto-detected from URL'}
-                  className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-sky-100 placeholder-navy-500 focus:outline-none focus:border-gold-500"
-                />
-              </div>
-
-              {/* Branch */}
-              <div>
-                <label className="block text-sm font-medium text-navy-300 mb-2">
-                  Default Branch
-                </label>
-                <input
-                  type="text"
-                  value={formData.branch}
-                  onChange={(e) => setFormData(prev => ({ ...prev, branch: e.target.value }))}
-                  placeholder="main"
-                  className="w-full px-4 py-2 bg-navy-800 border border-navy-700 rounded-lg text-sky-100 placeholder-navy-500 focus:outline-none focus:border-gold-500"
-                />
-              </div>
-
-              {/* Authentication Section */}
-              <div className="bg-navy-800 rounded-lg p-4 border border-navy-700">
-                <h3 className="text-sm font-medium text-sky-100 mb-3 flex items-center gap-2">
-                  <Settings className="w-4 h-4" />
-                  Authentication (Optional)
-                </h3>
-                <p className="text-navy-400 text-xs mb-4">
-                  {PROVIDER_CONFIG[selectedProvider].description}. Provide credentials for private repositories.
-                </p>
-
-                {PROVIDER_CONFIG[selectedProvider].authFields.map((field) => (
-                  <div key={field.key} className="mb-3 last:mb-0">
-                    <label className="block text-sm font-medium text-navy-300 mb-1">
-                      {field.label}
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={field.secret && !showSecrets[field.key] ? 'password' : 'text'}
-                        value={authData[field.key] || ''}
-                        onChange={(e) => setAuthData(prev => ({ ...prev, [field.key]: e.target.value }))}
-                        placeholder={field.placeholder}
-                        className="w-full px-4 py-2 bg-navy-900 border border-navy-600 rounded-lg text-sky-100 placeholder-navy-500 focus:outline-none focus:border-gold-500 pr-10"
-                      />
-                      {field.secret && (
-                        <button
-                          type="button"
-                          onClick={() => toggleShowSecret(field.key)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-navy-400 hover:text-navy-300"
-                        >
-                          {showSecrets[field.key] ? (
-                            <EyeOff className="w-4 h-4" />
-                          ) : (
-                            <Eye className="w-4 h-4" />
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Auto Scan Options */}
-              <div className="bg-navy-800 rounded-lg p-4 border border-navy-700">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <h3 className="text-sm font-medium text-sky-100">Auto-scan for dependencies</h3>
-                    <p className="text-navy-400 text-xs mt-1">
-                      Automatically scan for package.json, requirements.txt, go.mod, and other dependency files
-                    </p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formData.auto_scan}
-                      onChange={(e) => setFormData(prev => ({ ...prev, auto_scan: e.target.checked }))}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-navy-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-gold-500"></div>
-                  </label>
-                </div>
-
-                {formData.auto_scan && (
-                  <div>
-                    <label className="block text-sm font-medium text-navy-300 mb-1">
-                      Scan Interval (hours)
-                    </label>
-                    <select
-                      value={formData.scan_interval_hours}
-                      onChange={(e) => setFormData(prev => ({ ...prev, scan_interval_hours: e.target.value }))}
-                      className="w-full px-4 py-2 bg-navy-900 border border-navy-600 rounded-lg text-sky-100 focus:outline-none focus:border-gold-500"
-                    >
-                      <option value={1}>Every hour</option>
-                      <option value={6}>Every 6 hours</option>
-                      <option value={12}>Every 12 hours</option>
-                      <option value={24}>Daily</option>
-                      <option value={168}>Weekly</option>
-                    </select>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="p-6 border-t border-navy-700 flex justify-end gap-3">
-              <button
-                onClick={() => {
-                  setShowAddModal(false);
-                  resetForm();
-                }}
-                className="px-4 py-2 text-navy-300 hover:text-sky-100 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleAddRepository}
-                disabled={addingRepo || !formData.url.trim()}
-                className="btn btn-primary flex items-center gap-2 disabled:opacity-50"
-              >
-                {addingRepo ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Adding...
-                  </>
-                ) : (
-                  <>
-                    <Plus className="w-4 h-4" />
-                    Add Repository
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <FormModalBuilder
+        title="Add Git Repository"
+        fields={addRepositoryFields}
+        isOpen={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        onSubmit={handleAddRepository}
+        submitButtonText="Add Repository"
+        cancelButtonText="Cancel"
+        width="lg"
+        colors={waddlebotColors}
+      />
 
       {/* Info Section */}
       <div className="bg-navy-800 border border-navy-700 rounded-lg p-6">

@@ -2,25 +2,53 @@
  * Super Admin Vendor Requests
  * Allows super admins to review and approve/reject vendor role requests
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import {
   CheckCircleIcon,
   XCircleIcon,
   ClockIcon,
-  EyeIcon,
 } from '@heroicons/react/24/outline';
 import api from '../../services/api';
+import { FormModalBuilder } from '@penguin/react_libs';
+
+// WaddleBot theme colors for FormModalBuilder
+const waddlebotColors = {
+  modalBackground: 'bg-navy-900',
+  headerBackground: 'bg-navy-900',
+  footerBackground: 'bg-navy-900',
+  overlayBackground: 'bg-black bg-opacity-50',
+  titleText: 'text-gold-400',
+  labelText: 'text-navy-300',
+  descriptionText: 'text-navy-400',
+  errorText: 'text-red-400',
+  buttonText: 'text-navy-950',
+  fieldBackground: 'bg-navy-800',
+  fieldBorder: 'border-navy-700',
+  fieldText: 'text-sky-100',
+  fieldPlaceholder: 'placeholder-navy-400',
+  focusRing: 'focus:ring-gold-500',
+  focusBorder: 'focus:border-gold-500',
+  primaryButton: 'bg-gold-500',
+  primaryButtonHover: 'hover:bg-gold-600',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-700',
+  activeTab: 'text-gold-400',
+  activeTabBorder: 'border-gold-500',
+  inactiveTab: 'text-navy-400',
+  inactiveTabHover: 'hover:text-navy-300',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
+};
 
 function SuperAdminVendorRequests() {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedRequest, setSelectedRequest] = useState(null);
-  const [showModal, setShowModal] = useState(false);
-  const [modalAction, setModalAction] = useState(null);
-  const [modalReason, setModalReason] = useState('');
-  const [modalNotes, setModalNotes] = useState('');
-  const [modalLoading, setModalLoading] = useState(false);
+  const [showApproveModal, setShowApproveModal] = useState(false);
+  const [showRejectModal, setShowRejectModal] = useState(false);
   const [filters, setFilters] = useState({
     status: 'pending',
   });
@@ -46,61 +74,82 @@ function SuperAdminVendorRequests() {
     }
   };
 
-  const openModal = (request, action) => {
+  const openApproveModal = (request) => {
     setSelectedRequest(request);
-    setModalAction(action);
-    setModalReason('');
-    setModalNotes('');
-    setShowModal(true);
+    setShowApproveModal(true);
   };
 
-  const closeModal = () => {
-    setShowModal(false);
-    setSelectedRequest(null);
-    setModalAction(null);
+  const openRejectModal = (request) => {
+    setSelectedRequest(request);
+    setShowRejectModal(true);
   };
 
-  const handleApprove = async () => {
+  const handleApprove = async (formData) => {
     if (!selectedRequest) return;
 
     try {
-      setModalLoading(true);
       await api.post(`/admin/vendor/requests/${selectedRequest.request_id}/approve`, {
-        adminNotes: modalNotes,
+        adminNotes: formData.adminNotes || '',
       });
 
       setError(null);
-      closeModal();
       await loadRequests();
     } catch (err) {
       setError(err.response?.data?.error?.message || 'Failed to approve request');
-    } finally {
-      setModalLoading(false);
+      throw err; // Re-throw to prevent modal from closing
     }
   };
 
-  const handleReject = async () => {
-    if (!selectedRequest || !modalReason) {
+  const handleReject = async (formData) => {
+    if (!selectedRequest) return;
+
+    if (!formData.rejectionReason) {
       setError('Rejection reason is required');
-      return;
+      throw new Error('Rejection reason is required');
     }
 
     try {
-      setModalLoading(true);
       await api.post(`/admin/vendor/requests/${selectedRequest.request_id}/reject`, {
-        rejectionReason: modalReason,
-        adminNotes: modalNotes,
+        rejectionReason: formData.rejectionReason,
+        adminNotes: formData.adminNotes || '',
       });
 
       setError(null);
-      closeModal();
       await loadRequests();
     } catch (err) {
       setError(err.response?.data?.error?.message || 'Failed to reject request');
-    } finally {
-      setModalLoading(false);
+      throw err; // Re-throw to prevent modal from closing
     }
   };
+
+  // Form field definitions for approve modal
+  const approveFields = useMemo(() => [
+    {
+      name: 'adminNotes',
+      type: 'textarea',
+      label: 'Admin Notes (Optional)',
+      placeholder: 'Internal notes about this approval...',
+      required: false,
+    },
+  ], []);
+
+  // Form field definitions for reject modal
+  const rejectFields = useMemo(() => [
+    {
+      name: 'rejectionReason',
+      type: 'textarea',
+      label: 'Rejection Reason',
+      placeholder: 'Explain why you are rejecting this request...',
+      required: true,
+    },
+    {
+      name: 'adminNotes',
+      type: 'textarea',
+      label: 'Admin Notes (Optional)',
+      placeholder: 'Internal notes about this decision...',
+      required: false,
+    },
+  ], []);
 
   const getStatusIcon = (status) => {
     switch (status) {
@@ -239,14 +288,14 @@ function SuperAdminVendorRequests() {
               {request.status === 'pending' && (
                 <div className="flex items-center space-x-3 pt-4 border-t border-navy-700">
                   <button
-                    onClick={() => openModal(request, 'approve')}
+                    onClick={() => openApproveModal(request)}
                     className="flex items-center space-x-2 text-emerald-400 hover:text-emerald-300 transition-colors"
                   >
                     <CheckCircleIcon className="w-4 h-4" />
                     <span>Approve</span>
                   </button>
                   <button
-                    onClick={() => openModal(request, 'reject')}
+                    onClick={() => openRejectModal(request)}
                     className="flex items-center space-x-2 text-red-400 hover:text-red-300 transition-colors ml-4 pl-4 border-l border-navy-700"
                   >
                     <XCircleIcon className="w-4 h-4" />
@@ -265,68 +314,31 @@ function SuperAdminVendorRequests() {
         </div>
       )}
 
-      {/* Action Modal */}
-      {showModal && selectedRequest && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-navy-800 border border-navy-700 rounded-lg p-6 max-w-md w-full mx-4">
-            <h2 className="text-xl font-bold text-white mb-4">
-              {modalAction === 'approve' ? 'Approve Vendor Request' : 'Reject Vendor Request'}
-            </h2>
+      {/* Approve Modal */}
+      <FormModalBuilder
+        title={`Approve Vendor Request${selectedRequest ? ` - ${selectedRequest.user_display_name}` : ''}`}
+        description={selectedRequest ? `Company: ${selectedRequest.company_name}` : ''}
+        fields={approveFields}
+        isOpen={showApproveModal && selectedRequest !== null}
+        onClose={() => setShowApproveModal(false)}
+        onSubmit={handleApprove}
+        submitButtonText="Approve"
+        cancelButtonText="Cancel"
+        colors={waddlebotColors}
+      />
 
-            <div className="space-y-4 mb-6">
-              <div>
-                <p className="text-sm text-navy-300 mb-2">User: {selectedRequest.user_display_name}</p>
-                <p className="text-sm text-navy-300">Company: {selectedRequest.company_name}</p>
-              </div>
-
-              {modalAction === 'reject' && (
-                <div>
-                  <label className="block text-sm font-medium text-navy-300 mb-2">Rejection Reason *</label>
-                  <textarea
-                    value={modalReason}
-                    onChange={(e) => setModalReason(e.target.value)}
-                    placeholder="Explain why you're rejecting this request..."
-                    rows="3"
-                    className="w-full bg-navy-900 border border-navy-600 rounded px-3 py-2 text-white focus:outline-none focus:border-gold-400"
-                  />
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium text-navy-300 mb-2">Admin Notes (Optional)</label>
-                <textarea
-                  value={modalNotes}
-                  onChange={(e) => setModalNotes(e.target.value)}
-                  placeholder="Internal notes about this decision..."
-                  rows="2"
-                  className="w-full bg-navy-900 border border-navy-600 rounded px-3 py-2 text-white focus:outline-none focus:border-gold-400"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center space-x-3">
-              <button
-                onClick={() => (modalAction === 'approve' ? handleApprove() : handleReject())}
-                disabled={modalLoading || (modalAction === 'reject' && !modalReason)}
-                className={`flex-1 py-2 rounded-lg font-medium transition-colors ${
-                  modalAction === 'approve'
-                    ? 'bg-emerald-600 hover:bg-emerald-700 disabled:bg-navy-600'
-                    : 'bg-red-600 hover:bg-red-700 disabled:bg-navy-600'
-                } text-white disabled:cursor-not-allowed`}
-              >
-                {modalLoading ? 'Processing...' : modalAction === 'approve' ? 'Approve' : 'Reject'}
-              </button>
-              <button
-                onClick={closeModal}
-                disabled={modalLoading}
-                className="px-6 py-2 text-navy-300 hover:text-white transition-colors disabled:cursor-not-allowed"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Reject Modal */}
+      <FormModalBuilder
+        title={`Reject Vendor Request${selectedRequest ? ` - ${selectedRequest.user_display_name}` : ''}`}
+        description={selectedRequest ? `Company: ${selectedRequest.company_name}` : ''}
+        fields={rejectFields}
+        isOpen={showRejectModal && selectedRequest !== null}
+        onClose={() => setShowRejectModal(false)}
+        onSubmit={handleReject}
+        submitButtonText="Reject"
+        cancelButtonText="Cancel"
+        colors={waddlebotColors}
+      />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   DocumentTextIcon,
@@ -8,6 +8,38 @@ import {
   ArrowDownTrayIcon,
 } from '@heroicons/react/24/outline';
 import { adminApi } from '../../services/api';
+import { FormModalBuilder } from '@penguin/react_libs';
+
+// WaddleBot theme colors matching the existing UI
+const waddlebotColors = {
+  modalBackground: 'bg-navy-800',
+  headerBackground: 'bg-navy-800',
+  footerBackground: 'bg-navy-850',
+  overlayBackground: 'bg-black bg-opacity-50',
+  titleText: 'text-sky-100',
+  labelText: 'text-sky-100',
+  descriptionText: 'text-navy-400',
+  errorText: 'text-red-400',
+  buttonText: 'text-white',
+  fieldBackground: 'bg-navy-700',
+  fieldBorder: 'border-navy-600',
+  fieldText: 'text-sky-100',
+  fieldPlaceholder: 'placeholder-navy-400',
+  focusRing: 'focus:ring-gold-500',
+  focusBorder: 'focus:border-gold-500',
+  primaryButton: 'bg-sky-600',
+  primaryButtonHover: 'hover:bg-sky-700',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-600',
+  activeTab: 'text-gold-400',
+  activeTabBorder: 'border-gold-500',
+  inactiveTab: 'text-navy-400',
+  inactiveTabHover: 'hover:text-navy-300 hover:border-navy-500',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
+};
 
 const FIELD_TYPES = [
   { value: 'text', label: 'Text' },
@@ -20,6 +52,40 @@ const FIELD_TYPES = [
   { value: 'date', label: 'Date' },
 ];
 
+// Visibility options for form access control
+const VISIBILITY_OPTIONS = [
+  { value: 'public', label: 'Public' },
+  { value: 'registered', label: 'Registered Users' },
+  { value: 'community', label: 'Community Members' },
+  { value: 'admins', label: 'Admins Only' },
+];
+
+/**
+ * Parse field definitions from multiline format.
+ * Format: type|label|placeholder|required (one per line)
+ * Example: "text|Name|Enter your name|true"
+ * Simplified: just "label" will create a required text field
+ */
+function parseFieldDefinitions(lines) {
+  return lines
+    .filter((line) => line.trim())
+    .map((line) => {
+      const parts = line.split('|').map((p) => p.trim());
+      if (parts.length === 1) {
+        // Simple format: just the label
+        return { type: 'text', label: parts[0], placeholder: '', required: true, options: [] };
+      }
+      // Full format: type|label|placeholder|required
+      return {
+        type: FIELD_TYPES.find((t) => t.value === parts[0])?.value || 'text',
+        label: parts[1] || parts[0],
+        placeholder: parts[2] || '',
+        required: parts[3] === 'true' || parts[3] === '1',
+        options: [],
+      };
+    });
+}
+
 function AdminForms() {
   const { communityId } = useParams();
   const [forms, setForms] = useState([]);
@@ -29,15 +95,6 @@ function AdminForms() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedForm, setSelectedForm] = useState(null);
   const [submissions, setSubmissions] = useState([]);
-  const [newForm, setNewForm] = useState({
-    title: '',
-    description: '',
-    fields: [{ type: 'text', label: '', placeholder: '', required: false, options: [] }],
-    view_visibility: 'community',
-    submit_visibility: 'community',
-    allow_anonymous: false,
-    submit_once_per_user: true,
-  });
 
   useEffect(() => {
     loadForms();
@@ -55,31 +112,32 @@ function AdminForms() {
     }
   };
 
-  const createForm = async () => {
+  const createForm = async (data) => {
+    // Parse field definitions from multiline input
+    const fieldLines = data.field_definitions || [];
+    const parsedFields = parseFieldDefinitions(fieldLines);
+
+    if (parsedFields.length === 0) {
+      setError('At least 1 field required');
+      throw new Error('At least 1 field required');
+    }
+
     try {
-      const validFields = newForm.fields.filter(f => f.label.trim());
-      if (validFields.length === 0) {
-        setError('At least 1 field required');
-        return;
-      }
       await adminApi.createForm(communityId, {
-        ...newForm,
-        fields: validFields,
+        title: data.title?.trim(),
+        description: data.description?.trim() || '',
+        fields: parsedFields,
+        view_visibility: data.view_visibility,
+        submit_visibility: data.submit_visibility,
+        allow_anonymous: data.allow_anonymous || false,
+        submit_once_per_user: data.submit_once_per_user !== false,
       });
       setMessage({ type: 'success', text: 'Form created' });
       setShowCreateModal(false);
-      setNewForm({
-        title: '',
-        description: '',
-        fields: [{ type: 'text', label: '', placeholder: '', required: false, options: [] }],
-        view_visibility: 'community',
-        submit_visibility: 'community',
-        allow_anonymous: false,
-        submit_once_per_user: true,
-      });
       loadForms();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to create form');
+      throw err;
     }
   };
 
@@ -108,27 +166,6 @@ function AdminForms() {
     }
   };
 
-  const addField = () => {
-    setNewForm({
-      ...newForm,
-      fields: [...newForm.fields, { type: 'text', label: '', placeholder: '', required: false, options: [] }],
-    });
-  };
-
-  const removeField = (index) => {
-    if (newForm.fields.length <= 1) return;
-    setNewForm({
-      ...newForm,
-      fields: newForm.fields.filter((_, i) => i !== index),
-    });
-  };
-
-  const updateField = (index, updates) => {
-    const fields = [...newForm.fields];
-    fields[index] = { ...fields[index], ...updates };
-    setNewForm({ ...newForm, fields });
-  };
-
   const exportSubmissions = () => {
     if (!selectedForm || submissions.length === 0) return;
     const headers = ['Submitted At', 'User ID', ...selectedForm.fields.map(f => f.label)];
@@ -145,6 +182,59 @@ function AdminForms() {
     a.download = `${selectedForm.title}-submissions.csv`;
     a.click();
   };
+
+  // Build fields for FormModalBuilder
+  const formFields = useMemo(() => [
+    {
+      name: 'title',
+      type: 'text',
+      label: 'Title',
+      required: true,
+      placeholder: 'Feedback Form',
+    },
+    {
+      name: 'description',
+      type: 'textarea',
+      label: 'Description (optional)',
+      placeholder: 'Tell us what you think...',
+      rows: 3,
+    },
+    {
+      name: 'field_definitions',
+      type: 'multiline',
+      label: 'Form Fields',
+      required: true,
+      placeholder: 'Enter one field per line.\nSimple: just the label (creates text field)\nAdvanced: type|label|placeholder|required\nExample: text|Name|Enter your name|true',
+      rows: 6,
+      helpText: 'One field per line. Simple format: "Field Label" (text, required). Advanced: "type|label|placeholder|required". Types: text, textarea, email, number, select, radio, checkbox, date.',
+    },
+    {
+      name: 'view_visibility',
+      type: 'select',
+      label: 'Who can view',
+      defaultValue: 'community',
+      options: VISIBILITY_OPTIONS,
+    },
+    {
+      name: 'submit_visibility',
+      type: 'select',
+      label: 'Who can submit',
+      defaultValue: 'community',
+      options: VISIBILITY_OPTIONS,
+    },
+    {
+      name: 'allow_anonymous',
+      type: 'checkbox',
+      label: 'Allow anonymous submissions',
+      defaultValue: false,
+    },
+    {
+      name: 'submit_once_per_user',
+      type: 'checkbox',
+      label: 'One submission per user',
+      defaultValue: true,
+    },
+  ], []);
 
   if (loading) {
     return (
@@ -268,141 +358,17 @@ function AdminForms() {
       </div>
 
       {/* Create Form Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-y-auto py-8">
-          <div className="card p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold text-white mb-4">Create Form</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Title</label>
-                <input
-                  type="text"
-                  value={newForm.title}
-                  onChange={(e) => setNewForm({ ...newForm, title: e.target.value })}
-                  placeholder="Feedback Form"
-                  className="input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Description (optional)</label>
-                <textarea
-                  value={newForm.description}
-                  onChange={(e) => setNewForm({ ...newForm, description: e.target.value })}
-                  placeholder="Tell us what you think..."
-                  className="input w-full h-20"
-                />
-              </div>
-
-              {/* Fields Builder */}
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Fields</label>
-                {newForm.fields.map((field, i) => (
-                  <div key={i} className="p-3 bg-gray-800 rounded mb-2">
-                    <div className="grid grid-cols-2 gap-2 mb-2">
-                      <select
-                        value={field.type}
-                        onChange={(e) => updateField(i, { type: e.target.value })}
-                        className="input"
-                      >
-                        {FIELD_TYPES.map(t => (
-                          <option key={t.value} value={t.value}>{t.label}</option>
-                        ))}
-                      </select>
-                      <input
-                        type="text"
-                        value={field.label}
-                        onChange={(e) => updateField(i, { label: e.target.value })}
-                        placeholder="Field label"
-                        className="input"
-                      />
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <input
-                        type="text"
-                        value={field.placeholder || ''}
-                        onChange={(e) => updateField(i, { placeholder: e.target.value })}
-                        placeholder="Placeholder"
-                        className="input flex-1"
-                      />
-                      <label className="flex items-center gap-1 text-sm text-gray-300">
-                        <input
-                          type="checkbox"
-                          checked={field.required}
-                          onChange={(e) => updateField(i, { required: e.target.checked })}
-                          className="rounded"
-                        />
-                        Required
-                      </label>
-                      {newForm.fields.length > 1 && (
-                        <button onClick={() => removeField(i)} className="btn btn-sm btn-danger">
-                          <TrashIcon className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                <button onClick={addField} className="btn btn-sm btn-secondary">
-                  <PlusIcon className="h-4 w-4 mr-1" />
-                  Add Field
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Who can view</label>
-                  <select
-                    value={newForm.view_visibility}
-                    onChange={(e) => setNewForm({ ...newForm, view_visibility: e.target.value })}
-                    className="input w-full"
-                  >
-                    <option value="public">Public</option>
-                    <option value="registered">Registered Users</option>
-                    <option value="community">Community Members</option>
-                    <option value="admins">Admins Only</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Who can submit</label>
-                  <select
-                    value={newForm.submit_visibility}
-                    onChange={(e) => setNewForm({ ...newForm, submit_visibility: e.target.value })}
-                    className="input w-full"
-                  >
-                    <option value="public">Public</option>
-                    <option value="registered">Registered Users</option>
-                    <option value="community">Community Members</option>
-                    <option value="admins">Admins Only</option>
-                  </select>
-                </div>
-              </div>
-              <div className="flex items-center gap-6">
-                <label className="flex items-center gap-2 text-sm text-gray-300">
-                  <input
-                    type="checkbox"
-                    checked={newForm.allow_anonymous}
-                    onChange={(e) => setNewForm({ ...newForm, allow_anonymous: e.target.checked })}
-                    className="rounded"
-                  />
-                  Allow anonymous submissions
-                </label>
-                <label className="flex items-center gap-2 text-sm text-gray-300">
-                  <input
-                    type="checkbox"
-                    checked={newForm.submit_once_per_user}
-                    onChange={(e) => setNewForm({ ...newForm, submit_once_per_user: e.target.checked })}
-                    className="rounded"
-                  />
-                  One submission per user
-                </label>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 mt-6">
-              <button onClick={() => setShowCreateModal(false)} className="btn btn-secondary">Cancel</button>
-              <button onClick={createForm} className="btn btn-primary">Create Form</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <FormModalBuilder
+        title="Create Form"
+        fields={formFields}
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onSubmit={createForm}
+        submitButtonText="Create Form"
+        cancelButtonText="Cancel"
+        width="lg"
+        colors={waddlebotColors}
+      />
     </div>
   );
 }
