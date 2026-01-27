@@ -111,7 +111,7 @@ function CommunityDashboard() {
             {community.logoUrl ? (
               <img src={community.logoUrl} alt={community.displayName} className="w-full h-full object-cover" />
             ) : (
-              <span className="text-3xl">🐧</span>
+              <img src="/waddlebot-logo.png" alt="Community Logo" className="w-12 h-12" />
             )}
           </div>
           <div>

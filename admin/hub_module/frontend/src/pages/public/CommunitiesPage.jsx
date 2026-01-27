@@ -113,7 +113,7 @@ function CommunitiesPage() {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <span className="text-4xl">🐧</span>
+                    <img src="/waddlebot-logo.png" alt="Community Logo" className="w-16 h-16" />
                   )}
                 </div>
                 <div className="p-4">

@@ -64,7 +64,9 @@ function DashboardHome() {
         </div>
       ) : communities.length === 0 ? (
         <div className="card p-12 text-center">
-          <div className="text-6xl mb-4">🐧</div>
+          <div className="mb-4 flex justify-center">
+            <img src="/waddlebot-logo.png" alt="Community Logo" className="w-24 h-24" />
+          </div>
           <h2 className="text-xl font-semibold mb-2 text-sky-100">No Communities Yet</h2>
           <p className="text-navy-400 mb-6">
             You haven't joined any communities yet. Browse available communities to get started.
@@ -89,7 +91,7 @@ function DashboardHome() {
                     className="w-full h-full object-cover"
                   />
                 ) : (
-                  <span className="text-5xl">🐧</span>
+                  <img src="/waddlebot-logo.png" alt="Community Logo" className="w-16 h-16" />
                 )}
               </div>
               <div className="p-4">

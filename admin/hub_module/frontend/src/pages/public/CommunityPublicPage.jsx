@@ -98,7 +98,9 @@ function CommunityPublicPage() {
   if (error) {
     return (
       <div className="max-w-xl mx-auto px-4 py-20 text-center">
-        <div className="text-6xl mb-4">🐧</div>
+        <div className="mb-4 flex justify-center">
+          <img src="/waddlebot-logo.png" alt="Community Logo" className="w-24 h-24" />
+        </div>
         <h1 className="text-2xl font-bold mb-2 text-sky-100">Community Not Found</h1>
         <p className="text-navy-400 mb-6">{error}</p>
         <Link to="/communities" className="btn btn-primary">
@@ -116,7 +118,7 @@ function CommunityPublicPage() {
           {community.logoUrl ? (
             <img src={community.logoUrl} alt="" className="w-full h-full rounded-xl object-cover" />
           ) : (
-            <span className="text-4xl">🐧</span>
+            <img src="/waddlebot-logo.png" alt="Community Logo" className="w-16 h-16" />
           )}
         </div>
         <h1 className="text-2xl font-bold mb-2 text-sky-100">{community.displayName || community.name}</h1>
@@ -154,7 +156,7 @@ function CommunityPublicPage() {
             {community.logoUrl ? (
               <img src={community.logoUrl} alt={community.displayName} className="w-full h-full object-cover" />
             ) : (
-              <span className="text-5xl">🐧</span>
+              <img src="/waddlebot-logo.png" alt="Community Logo" className="w-24 h-24" />
             )}
           </div>
           <div className="mt-4 md:mt-0 flex-1">
