@@ -24,6 +24,7 @@ export { z } from 'zod';
  * Selection:
  * - `select` - Dropdown select
  * - `checkbox` - Boolean checkbox
+ * - `checkbox_multi` - Multiple checkbox selection (returns array of selected values)
  * - `radio` - Radio button group
  *
  * Date/Time:
@@ -40,7 +41,7 @@ export { z } from 'zod';
  */
 export interface FormField {
   name: string;
-  type: 'text' | 'email' | 'password' | 'password_generate' | 'number' | 'tel' | 'url' | 'textarea' | 'multiline' | 'select' | 'checkbox' | 'radio' | 'date' | 'time' | 'datetime-local' | 'file' | 'file_multiple';
+  type: 'text' | 'email' | 'password' | 'password_generate' | 'number' | 'tel' | 'url' | 'textarea' | 'multiline' | 'select' | 'checkbox' | 'checkbox_multi' | 'radio' | 'date' | 'time' | 'datetime-local' | 'file' | 'file_multiple';
   label: string;
   description?: string;
   /** Additional help text shown below the field */
@@ -139,6 +140,16 @@ function buildFieldSchema(field: FormField): ZodType {
       schema = z.boolean();
       break;
 
+    case 'checkbox_multi':
+      // Multi-select checkboxes return an array of selected values
+      if (field.options && field.options.length > 0) {
+        const values = field.options.map((o) => String(o.value)) as [string, ...string[]];
+        schema = z.array(z.enum(values));
+      } else {
+        schema = z.array(z.string());
+      }
+      break;
+
     case 'select':
     case 'radio':
       if (field.options && field.options.length > 0) {
@@ -197,6 +208,12 @@ function buildFieldSchema(field: FormField): ZodType {
     if (field.type === 'checkbox') {
       // For required checkboxes, must be true
       return z.literal(true, `${field.label} must be checked`);
+    }
+    if (field.type === 'checkbox_multi') {
+      // For required multi-select, must have at least one selection
+      return schema.refine((val: unknown) => Array.isArray(val) && val.length > 0, {
+        message: `${field.label} requires at least one selection`,
+      });
     }
     // For strings, add non-empty check
     if (field.type === 'text' || field.type === 'textarea' || field.type === 'multiline' ||
@@ -361,7 +378,15 @@ export const FormModalBuilder: React.FC<FormModalBuilderProps> = ({
   const [formData, setFormData] = useState<Record<string, any>>(() => {
     const initial: Record<string, any> = {};
     fields.forEach((field) => {
-      initial[field.name] = field.defaultValue ?? (field.type === 'checkbox' ? false : '');
+      if (field.defaultValue !== undefined) {
+        initial[field.name] = field.defaultValue;
+      } else if (field.type === 'checkbox') {
+        initial[field.name] = false;
+      } else if (field.type === 'checkbox_multi') {
+        initial[field.name] = [];
+      } else {
+        initial[field.name] = '';
+      }
     });
     return initial;
   });
@@ -767,6 +792,41 @@ export const FormModalBuilder: React.FC<FormModalBuilderProps> = ({
             ))}
           </div>
         );
+
+      case 'checkbox_multi': {
+        const selectedValues = (formData[field.name] as any[]) || [];
+        return withHelpText(
+          <div className={`space-y-2 max-h-48 overflow-y-auto border ${theme.fieldBorder} rounded-lg p-3 ${theme.fieldBackground}`}>
+            {field.options && field.options.length > 0 ? (
+              field.options.map((option) => (
+                <div key={option.value} className="flex items-center">
+                  <input
+                    id={`${field.name}-${option.value}`}
+                    name={field.name}
+                    type="checkbox"
+                    value={option.value}
+                    checked={selectedValues.includes(String(option.value))}
+                    onChange={(e) => {
+                      const value = String(option.value);
+                      const newValues = e.target.checked
+                        ? [...selectedValues, value]
+                        : selectedValues.filter((v) => v !== value);
+                      handleChange(field.name, newValues);
+                    }}
+                    disabled={field.disabled}
+                    className={`h-4 w-4 rounded ${theme.fieldBorder} ${theme.focusRing} text-amber-500 ${field.disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  />
+                  <label htmlFor={`${field.name}-${option.value}`} className={`ml-2 block text-sm ${theme.labelText} ${field.disabled ? 'opacity-50' : ''}`}>
+                    {option.label}
+                  </label>
+                </div>
+              ))
+            ) : (
+              <p className={`text-sm ${theme.descriptionText}`}>No options available</p>
+            )}
+          </div>
+        );
+      }
 
       case 'file':
       case 'file_multiple': {
