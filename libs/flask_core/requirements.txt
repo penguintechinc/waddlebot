@@ -23,6 +23,7 @@ hiredis>=2.3.2  # Optional C parser for better performance
 # HTTP Client (async)
 httpx>=0.27.0,<0.28.0  # For async HTTP requests
 requests>=2.31.0  # Required by authlib for OAuth1 support
+urllib3>=2.6.3  # Security fix for decompression-bomb bypass
 
 # Data Validation & Sanitization
 pydantic>=2.5.0
