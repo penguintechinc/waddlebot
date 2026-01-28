@@ -23,9 +23,10 @@ global:
   storageClass: "standard"
 
   # Security secrets (set via kubectl create secret or values override)
-  jwtSecret: "change-me-in-production"
-  moduleSecretKey: "change-me-in-production"
-  serviceApiKey: "change-me-in-production"
+  # Defaults match docker-compose.yml for local development consistency
+  jwtSecret: "changeme_jwt_secret"
+  moduleSecretKey: "changeme_module_secret"
+  serviceApiKey: "changeme_service_key"
 
   # Logging
   logLevel: "INFO"
@@ -98,9 +99,24 @@ infrastructure:
   # Redis Cache & Sessions
   redis:
     enabled: true
-    image: redis:7-alpine
+    image: redis:7-bookworm  # Use Debian instead of Alpine for compatibility
     port: 6379
     password: "changeme"  # Only used for secrets, actual Redis already running
+    # Module-specific Redis passwords (matches docker-compose.yml ACL setup)
+    modulePasswords:
+      admin: "changeme"
+      router: "changeme"
+      hub: "changeme"
+      workflow: "changeme"
+      ai: "changeme"
+      analytics: "changeme"
+      security: "changeme"
+      loyalty: "changeme"
+      spotify: "changeme"
+      ytmusic: "changeme"
+      twitch: "changeme"
+      discord: "changeme"
+      slack: "changeme"
     maxMemory: "256mb"
     maxMemoryPolicy: "allkeys-lru"
     service:
@@ -129,6 +145,9 @@ infrastructure:
     apiPort: 9000
     consolePort: 9001
     bucketName: "waddlebot"
+    # Default credentials (matches docker-compose.yml)
+    rootUser: "minioadmin"
+    rootPassword: "minioadmin"
     service:
       name: "infra-minio"
       apiPort: 9000
@@ -139,7 +158,6 @@ infrastructure:
       enabled: true
       size: 50Gi
     env:
-      # MINIO_ROOT_USER and MINIO_ROOT_PASSWORD should be set via secrets
       MINIO_BROWSER: "on"
 
   # Ollama AI Backend
@@ -186,6 +204,7 @@ infrastructure:
 # Processing Module
 modules:
   # Processing Module - Router
+  # NOTE: Router uses component-based DB config, not DATABASE_URL
   router:
     enabled: true
     name: router
@@ -209,6 +228,19 @@ modules:
       LOG_LEVEL: "INFO"
       WORKERS: "4"
       THREADS_PER_WORKER: "10"
+      # Router uses component-based database config (not DATABASE_URL)
+      DATABASE_HOST: "infra-postgres"
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: "waddlebot"
+      DATABASE_USER: "waddlebot"
+      # DATABASE_PASSWORD set via secretKeyRef
+      READ_REPLICA_HOST: "infra-postgres-replica"
+      READ_REPLICA_PORT: "5432"
+      # Redis component config
+      REDIS_HOST: "infra-redis"
+      REDIS_PORT: "6379"
+      # REDIS_PASSWORD set via secretKeyRef
+      REDIS_KEY_PREFIX: "router:"
 
   # Admin Modules
   hub:

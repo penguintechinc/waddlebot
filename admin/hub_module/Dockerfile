@@ -1,8 +1,15 @@
 # Multi-stage Dockerfile for WaddleBot Hub Module
 # Stage 1: Build frontend
-FROM node:20-alpine AS frontend-build
+FROM node:20-bookworm-slim AS frontend-build
 
-WORKDIR /app/frontend
+WORKDIR /build
+
+# Copy shared react_libs first (required by frontend)
+# Path matches package.json: file:../../../shared/react_libs
+COPY shared/react_libs ./shared/react_libs
+
+# Create frontend directory matching expected path structure
+WORKDIR /build/admin/hub_module/frontend
 
 # Copy frontend package files
 COPY admin/hub_module/frontend/package*.json ./
@@ -17,20 +24,19 @@ COPY admin/hub_module/frontend/ ./
 RUN npm run build
 
 # Stage 2: Production image
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-# Install dumb-init and build tools for native modules (bcrypt)
-RUN apk add --no-cache dumb-init python3 make g++
+# Install dumb-init, curl for healthcheck, and build tools for native modules (bcrypt)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    dumb-init curl make g++ \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy standard healthcheck script
-COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
-RUN chmod 755 /usr/local/bin/healthcheck.py
 
 # Create non-root user
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
+RUN groupadd -g 1001 nodejs && \
+    useradd -u 1001 -g nodejs -s /bin/bash nodejs
 
 # Copy backend package files
 COPY admin/hub_module/backend/package*.json ./
@@ -38,14 +44,14 @@ COPY admin/hub_module/backend/package*.json ./
 # Install production dependencies only
 RUN npm install --only=production
 
-# Remove build tools to reduce image size
-RUN apk del python3 make g++
+# Remove build tools to reduce image size (keep curl for healthcheck)
+RUN apt-get purge -y make g++ && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 # Copy backend source
 COPY --chown=nodejs:nodejs admin/hub_module/backend/src ./src
 
 # Copy built frontend from build stage
-COPY --chown=nodejs:nodejs --from=frontend-build /app/frontend/dist ./public
+COPY --chown=nodejs:nodejs --from=frontend-build /build/admin/hub_module/frontend/dist ./public
 
 # Create log directory and fix ownership
 RUN mkdir -p /var/log/waddlebotlog && chown -R nodejs:nodejs /var/log/waddlebotlog /app
@@ -62,7 +68,7 @@ EXPOSE 8060
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python3 /usr/local/bin/healthcheck.py http://localhost:8060/healthz
+    CMD curl -f http://localhost:8060/health || exit 1
 
 # Start with dumb-init
 ENTRYPOINT ["dumb-init", "--"]

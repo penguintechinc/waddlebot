@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { publicApi, communityApi } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
-import { FormModalBuilder } from '@anthropic/react_libs';
+import { FormModalBuilder } from '@penguin/react_libs';
 import {
   GlobeAltIcon,
   LockClosedIcon,
@@ -10,15 +10,33 @@ import {
 
 // WaddleBot theme colors for FormModalBuilder
 const waddlebotColors = {
-  primary: '#0ea5e9',      // sky-500
-  secondary: '#1e3a5f',    // navy-700
-  background: '#0d1f33',   // navy-900
-  surface: '#152a43',      // navy-800
-  border: '#1e3a5f',       // navy-700
-  text: '#e0f2fe',         // sky-100
-  textSecondary: '#64748b', // navy-400
-  error: '#ef4444',        // red-500
-  gold: '#fbbf24',         // gold-400
+  modalBackground: 'bg-navy-800',
+  headerBackground: 'bg-navy-800',
+  footerBackground: 'bg-navy-900',
+  overlayBackground: 'bg-gray-900 bg-opacity-75',
+  titleText: 'text-sky-100',
+  labelText: 'text-navy-300',
+  descriptionText: 'text-navy-400',
+  errorText: 'text-red-400',
+  buttonText: 'text-navy-900',
+  fieldBackground: 'bg-navy-700',
+  fieldBorder: 'border-navy-600',
+  fieldText: 'text-sky-100',
+  fieldPlaceholder: 'placeholder-navy-500',
+  focusRing: 'focus:ring-sky-500',
+  focusBorder: 'focus:border-sky-500',
+  primaryButton: 'bg-sky-500',
+  primaryButtonHover: 'hover:bg-sky-600',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-600',
+  activeTab: 'text-sky-400',
+  activeTabBorder: 'border-sky-500',
+  inactiveTab: 'text-navy-400',
+  inactiveTabHover: 'hover:text-navy-300 hover:border-navy-500',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
 };
 
 // Field definitions for Join Request modal
@@ -282,11 +300,9 @@ function CommunityPublicPage() {
         onClose={() => setShowJoinModal(false)}
         onSubmit={handleJoin}
         title="Request to Join"
-        description="This community requires approval to join. You can include a message with your request."
         fields={joinRequestFields}
-        submitLabel={joining ? 'Submitting...' : 'Submit Request'}
-        cancelLabel="Cancel"
-        isSubmitting={joining}
+        submitButtonText="Submit Request"
+        cancelButtonText="Cancel"
         colors={waddlebotColors}
       />
     </div>

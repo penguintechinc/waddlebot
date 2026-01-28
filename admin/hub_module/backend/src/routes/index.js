@@ -21,7 +21,7 @@ import formsRoutes from './forms.js';
 const router = Router();
 
 // Public routes (no auth required)
-router.use('/', publicRoutes);
+router.use('/public', publicRoutes);
 
 // Cookie consent routes
 router.use('/cookie', cookieConsentRoutes);
