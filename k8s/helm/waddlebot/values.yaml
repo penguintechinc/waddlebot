@@ -153,7 +153,13 @@ infrastructure:
       apiPort: 9000
       consolePort: 9001
     replicas: 1
-    resourcePreset: medium
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "256Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1Gi"
     persistence:
       enabled: true
       size: 50Gi
@@ -168,10 +174,16 @@ infrastructure:
     defaultProvider: "ollama"
     defaultModel: "tinyllama"
     service:
-      name: "ollama-service"
+      name: "ai-ollama"
       port: 11434
     replicas: 1
-    resourcePreset: large
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "512Mi"
+      limits:
+        cpu: "2000m"
+        memory: "2Gi"
     persistence:
       enabled: true
       size: 30Gi
@@ -189,7 +201,13 @@ infrastructure:
       name: "infra-qdrant"
       port: 6333
     replicas: 1
-    resourcePreset: medium
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "256Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1Gi"
     persistence:
       enabled: true
       size: 10Gi

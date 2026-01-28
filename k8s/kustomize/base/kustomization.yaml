@@ -16,3 +16,16 @@ labels:
       app.kubernetes.io/part-of: waddlebot
       app.kubernetes.io/managed-by: kustomize
     includeSelectors: true
+
+# Image registry configuration
+# Override for beta deployment (matches docker-compose registry)
+images:
+  - name: core-engagement
+    newName: registry-dal2.penguintech.io/waddlebot/core-engagement
+    newTag: latest
+  - name: core-video-proxy
+    newName: registry-dal2.penguintech.io/waddlebot/core-video-proxy
+    newTag: latest
+  - name: core-module-rtc
+    newName: registry-dal2.penguintech.io/waddlebot/core-module-rtc
+    newTag: latest
