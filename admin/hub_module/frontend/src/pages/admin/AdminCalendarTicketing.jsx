@@ -2,9 +2,10 @@
  * Admin Calendar Ticketing Page
  * Manage tickets for a specific event - view, create, cancel, transfer
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { adminApi } from '../../services/api';
+import { FormModalBuilder } from '@penguin/react_libs';
 import {
   TicketIcon,
   PlusIcon,
@@ -16,8 +17,38 @@ import {
   QrCodeIcon,
   UserGroupIcon,
   CheckCircleIcon,
-  ExclamationCircleIcon,
 } from '@heroicons/react/24/outline';
+
+// WaddleBot theme colors matching the existing UI
+const waddlebotColors = {
+  modalBackground: 'bg-navy-800',
+  headerBackground: 'bg-navy-800',
+  footerBackground: 'bg-navy-850',
+  overlayBackground: 'bg-black bg-opacity-50',
+  titleText: 'text-sky-100',
+  labelText: 'text-sky-100',
+  descriptionText: 'text-navy-400',
+  errorText: 'text-red-400',
+  buttonText: 'text-white',
+  fieldBackground: 'bg-navy-700',
+  fieldBorder: 'border-navy-600',
+  fieldText: 'text-sky-100',
+  fieldPlaceholder: 'placeholder-navy-400',
+  focusRing: 'focus:ring-gold-500',
+  focusBorder: 'focus:border-gold-500',
+  primaryButton: 'bg-sky-600',
+  primaryButtonHover: 'hover:bg-sky-700',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-600',
+  activeTab: 'text-gold-400',
+  activeTabBorder: 'border-gold-500',
+  inactiveTab: 'text-navy-400',
+  inactiveTabHover: 'hover:text-navy-300 hover:border-navy-500',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
+};
 
 export default function AdminCalendarTicketing() {
   const { communityId, eventId } = useParams();
@@ -55,6 +86,116 @@ export default function AdminCalendarTicketing() {
     refunded: { bg: 'bg-yellow-500/20', text: 'text-yellow-400', label: 'Refunded' },
     transferred: { bg: 'bg-purple-500/20', text: 'text-purple-400', label: 'Transferred' },
   };
+
+  // Platform options for select fields
+  const platformOptions = [
+    { value: 'hub', label: 'Hub' },
+    { value: 'discord', label: 'Discord' },
+    { value: 'twitch', label: 'Twitch' },
+    { value: 'slack', label: 'Slack' },
+  ];
+
+  // Fields for Create Ticket Modal
+  const createTicketFields = useMemo(() => [
+    {
+      name: 'username',
+      type: 'text',
+      label: 'Username',
+      required: true,
+      placeholder: 'Enter username',
+    },
+    {
+      name: 'platform',
+      type: 'select',
+      label: 'Platform',
+      defaultValue: 'hub',
+      options: platformOptions,
+    },
+    {
+      name: 'platform_user_id',
+      type: 'text',
+      label: 'Platform User ID',
+      required: true,
+      placeholder: 'Enter platform user ID',
+    },
+    ...(ticketTypes.length > 0 ? [{
+      name: 'ticket_type_id',
+      type: 'select',
+      label: 'Ticket Type',
+      defaultValue: ticketTypes[0]?.id?.toString() || '',
+      options: ticketTypes.map((type) => ({
+        value: type.id.toString(),
+        label: type.name,
+      })),
+    }] : []),
+    {
+      name: 'holder_name',
+      type: 'text',
+      label: 'Holder Name (optional)',
+      placeholder: 'Enter holder name',
+    },
+    {
+      name: 'holder_email',
+      type: 'email',
+      label: 'Holder Email (optional)',
+      placeholder: 'Enter holder email',
+    },
+  ], [ticketTypes]);
+
+  // Fields for Transfer Ticket Modal
+  const transferTicketFields = useMemo(() => [
+    {
+      name: 'username',
+      type: 'text',
+      label: 'New Holder Username',
+      required: true,
+      placeholder: 'Enter username',
+    },
+    {
+      name: 'platform',
+      type: 'select',
+      label: 'Platform',
+      defaultValue: 'hub',
+      options: platformOptions,
+    },
+    {
+      name: 'platform_user_id',
+      type: 'text',
+      label: 'Platform User ID',
+      required: true,
+      placeholder: 'Enter platform user ID',
+    },
+    {
+      name: 'holder_name',
+      type: 'text',
+      label: 'Holder Name (optional)',
+      placeholder: 'Enter holder name',
+    },
+    {
+      name: 'holder_email',
+      type: 'email',
+      label: 'Holder Email (optional)',
+      placeholder: 'Enter holder email',
+    },
+    {
+      name: 'notes',
+      type: 'textarea',
+      label: 'Transfer Notes (optional)',
+      placeholder: 'Enter transfer notes',
+      rows: 2,
+    },
+  ], []);
+
+  // Fields for Cancel Ticket Modal
+  const cancelTicketFields = useMemo(() => [
+    {
+      name: 'reason',
+      type: 'textarea',
+      label: 'Reason (optional)',
+      placeholder: 'Enter cancellation reason...',
+      rows: 3,
+    },
+  ], []);
 
   // Fetch data
   useEffect(() => {
@@ -103,44 +244,51 @@ export default function AdminCalendarTicketing() {
     });
   };
 
-  const handleCancelTicket = async (reason) => {
+  const handleCancelTicket = async (data) => {
     if (!selectedTicket) return;
     try {
       setActionLoading(true);
-      await adminApi.cancelTicket(communityId, eventId, selectedTicket.id, { reason });
+      await adminApi.cancelTicket(communityId, eventId, selectedTicket.id, { reason: data.reason || '' });
       setShowCancelModal(false);
       setSelectedTicket(null);
       fetchData();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to cancel ticket');
+      throw err;
     } finally {
       setActionLoading(false);
     }
   };
 
-  const handleTransferTicket = async (transferData) => {
+  const handleTransferTicket = async (data) => {
     if (!selectedTicket) return;
     try {
       setActionLoading(true);
-      await adminApi.transferTicket(communityId, eventId, selectedTicket.id, transferData);
+      await adminApi.transferTicket(communityId, eventId, selectedTicket.id, data);
       setShowTransferModal(false);
       setSelectedTicket(null);
       fetchData();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to transfer ticket');
+      throw err;
     } finally {
       setActionLoading(false);
     }
   };
 
-  const handleCreateTicket = async (ticketData) => {
+  const handleCreateTicket = async (data) => {
     try {
       setActionLoading(true);
+      const ticketData = {
+        ...data,
+        ticket_type_id: data.ticket_type_id ? parseInt(data.ticket_type_id) : null,
+      };
       await adminApi.createTicket(communityId, eventId, ticketData);
       setShowCreateModal(false);
       fetchData();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to create ticket');
+      throw err;
     } finally {
       setActionLoading(false);
     }
@@ -398,291 +546,60 @@ export default function AdminCalendarTicketing() {
       </div>
 
       {/* Create Ticket Modal */}
-      {showCreateModal && (
-        <CreateTicketModal
-          ticketTypes={ticketTypes}
-          onClose={() => setShowCreateModal(false)}
-          onSubmit={handleCreateTicket}
-          loading={actionLoading}
-        />
-      )}
+      <FormModalBuilder
+        title="Create Ticket"
+        fields={createTicketFields}
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onSubmit={handleCreateTicket}
+        submitButtonText={actionLoading ? 'Creating...' : 'Create Ticket'}
+        cancelButtonText="Cancel"
+        width="md"
+        colors={waddlebotColors}
+      />
 
       {/* Transfer Modal */}
-      {showTransferModal && selectedTicket && (
-        <TransferModal
-          ticket={selectedTicket}
-          onClose={() => {
-            setShowTransferModal(false);
-            setSelectedTicket(null);
-          }}
-          onSubmit={handleTransferTicket}
-          loading={actionLoading}
-        />
-      )}
+      <FormModalBuilder
+        title="Transfer Ticket"
+        description={selectedTicket ? `Transfer ticket #${String(selectedTicket.ticket_number).padStart(3, '0')} from ${selectedTicket.holder_name || selectedTicket.username}` : ''}
+        fields={transferTicketFields}
+        isOpen={showTransferModal && !!selectedTicket}
+        onClose={() => {
+          setShowTransferModal(false);
+          setSelectedTicket(null);
+        }}
+        onSubmit={handleTransferTicket}
+        submitButtonText={actionLoading ? 'Transferring...' : 'Transfer'}
+        cancelButtonText="Cancel"
+        width="md"
+        colors={{
+          ...waddlebotColors,
+          primaryButton: 'bg-purple-600',
+          primaryButtonHover: 'hover:bg-purple-700',
+        }}
+      />
 
       {/* Cancel Modal */}
-      {showCancelModal && selectedTicket && (
-        <CancelModal
-          ticket={selectedTicket}
-          onClose={() => {
-            setShowCancelModal(false);
-            setSelectedTicket(null);
-          }}
-          onSubmit={handleCancelTicket}
-          loading={actionLoading}
-        />
-      )}
+      <FormModalBuilder
+        title="Cancel Ticket"
+        description={selectedTicket ? `Are you sure you want to cancel ticket #${String(selectedTicket.ticket_number).padStart(3, '0')} for ${selectedTicket.holder_name || selectedTicket.username}? This action cannot be undone.` : ''}
+        fields={cancelTicketFields}
+        isOpen={showCancelModal && !!selectedTicket}
+        onClose={() => {
+          setShowCancelModal(false);
+          setSelectedTicket(null);
+        }}
+        onSubmit={handleCancelTicket}
+        submitButtonText={actionLoading ? 'Cancelling...' : 'Cancel Ticket'}
+        cancelButtonText="Keep Ticket"
+        width="md"
+        colors={{
+          ...waddlebotColors,
+          primaryButton: 'bg-red-600',
+          primaryButtonHover: 'hover:bg-red-700',
+        }}
+      />
     </div>
   );
 }
 
-// Create Ticket Modal Component
-function CreateTicketModal({ ticketTypes, onClose, onSubmit, loading }) {
-  const [formData, setFormData] = useState({
-    username: '',
-    platform: 'hub',
-    platform_user_id: '',
-    ticket_type_id: ticketTypes[0]?.id || null,
-    holder_name: '',
-    holder_email: '',
-  });
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(formData);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-navy-800 rounded-lg p-6 w-full max-w-md border border-navy-700">
-        <h3 className="text-lg font-semibold text-white mb-4">Create Ticket</h3>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Username</label>
-            <input
-              type="text"
-              value={formData.username}
-              onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-              required
-              className="w-full px-3 py-2 bg-navy-900 border border-navy-700 rounded-lg text-white"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Platform</label>
-            <select
-              value={formData.platform}
-              onChange={(e) => setFormData({ ...formData, platform: e.target.value })}
-              className="w-full px-3 py-2 bg-navy-900 border border-navy-700 rounded-lg text-white"
-            >
-              <option value="hub">Hub</option>
-              <option value="discord">Discord</option>
-              <option value="twitch">Twitch</option>
-              <option value="slack">Slack</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Platform User ID</label>
-            <input
-              type="text"
-              value={formData.platform_user_id}
-              onChange={(e) => setFormData({ ...formData, platform_user_id: e.target.value })}
-              required
-              className="w-full px-3 py-2 bg-navy-900 border border-navy-700 rounded-lg text-white"
-            />
-          </div>
-          {ticketTypes.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Ticket Type</label>
-              <select
-                value={formData.ticket_type_id || ''}
-                onChange={(e) => setFormData({ ...formData, ticket_type_id: parseInt(e.target.value) || null })}
-                className="w-full px-3 py-2 bg-navy-900 border border-navy-700 rounded-lg text-white"
-              >
-                {ticketTypes.map((type) => (
-                  <option key={type.id} value={type.id}>
-                    {type.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Holder Name (optional)</label>
-            <input
-              type="text"
-              value={formData.holder_name}
-              onChange={(e) => setFormData({ ...formData, holder_name: e.target.value })}
-              className="w-full px-3 py-2 bg-navy-900 border border-navy-700 rounded-lg text-white"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Holder Email (optional)</label>
-            <input
-              type="email"
-              value={formData.holder_email}
-              onChange={(e) => setFormData({ ...formData, holder_email: e.target.value })}
-              className="w-full px-3 py-2 bg-navy-900 border border-navy-700 rounded-lg text-white"
-            />
-          </div>
-          <div className="flex justify-end gap-3 pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-lg transition-colors disabled:opacity-50"
-            >
-              {loading ? 'Creating...' : 'Create Ticket'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-// Transfer Modal Component
-function TransferModal({ ticket, onClose, onSubmit, loading }) {
-  const [formData, setFormData] = useState({
-    username: '',
-    platform: 'hub',
-    platform_user_id: '',
-    holder_name: '',
-    holder_email: '',
-    notes: '',
-  });
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(formData);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-navy-800 rounded-lg p-6 w-full max-w-md border border-navy-700">
-        <h3 className="text-lg font-semibold text-white mb-4">Transfer Ticket</h3>
-        <p className="text-sm text-gray-400 mb-4">
-          Transfer ticket #{String(ticket.ticket_number).padStart(3, '0')} from {ticket.holder_name || ticket.username}
-        </p>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">New Holder Username</label>
-            <input
-              type="text"
-              value={formData.username}
-              onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-              required
-              className="w-full px-3 py-2 bg-navy-900 border border-navy-700 rounded-lg text-white"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Platform</label>
-            <select
-              value={formData.platform}
-              onChange={(e) => setFormData({ ...formData, platform: e.target.value })}
-              className="w-full px-3 py-2 bg-navy-900 border border-navy-700 rounded-lg text-white"
-            >
-              <option value="hub">Hub</option>
-              <option value="discord">Discord</option>
-              <option value="twitch">Twitch</option>
-              <option value="slack">Slack</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Platform User ID</label>
-            <input
-              type="text"
-              value={formData.platform_user_id}
-              onChange={(e) => setFormData({ ...formData, platform_user_id: e.target.value })}
-              required
-              className="w-full px-3 py-2 bg-navy-900 border border-navy-700 rounded-lg text-white"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Transfer Notes (optional)</label>
-            <textarea
-              value={formData.notes}
-              onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-              rows={2}
-              className="w-full px-3 py-2 bg-navy-900 border border-navy-700 rounded-lg text-white"
-            />
-          </div>
-          <div className="flex justify-end gap-3 pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors disabled:opacity-50"
-            >
-              {loading ? 'Transferring...' : 'Transfer'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-// Cancel Modal Component
-function CancelModal({ ticket, onClose, onSubmit, loading }) {
-  const [reason, setReason] = useState('');
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(reason);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-navy-800 rounded-lg p-6 w-full max-w-md border border-navy-700">
-        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-          <ExclamationCircleIcon className="h-6 w-6 text-red-400" />
-          Cancel Ticket
-        </h3>
-        <p className="text-sm text-gray-400 mb-4">
-          Are you sure you want to cancel ticket #{String(ticket.ticket_number).padStart(3, '0')} for{' '}
-          {ticket.holder_name || ticket.username}? This action cannot be undone.
-        </p>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Reason (optional)</label>
-            <textarea
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              rows={3}
-              placeholder="Enter cancellation reason..."
-              className="w-full px-3 py-2 bg-navy-900 border border-navy-700 rounded-lg text-white placeholder-gray-500"
-            />
-          </div>
-          <div className="flex justify-end gap-3 pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
-            >
-              Keep Ticket
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors disabled:opacity-50"
-            >
-              {loading ? 'Cancelling...' : 'Cancel Ticket'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}

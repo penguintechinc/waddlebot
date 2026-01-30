@@ -28,8 +28,8 @@ spec:
       {{- end }}
       containers:
         - name: youtube-live-collector
-          image: "{{ .Values.global.imageRegistry }}/youtube-live-collector:{{ .Values.modules.collectors.youtubeLive.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.modules.collectors.youtubeLive.image.pullPolicy }}
+          image: "{{ .Values.global.imageRegistry }}/{{ .Values.modules.collectors.youtubeLive.image }}:{{ .Values.modules.collectors.youtubeLive.tag | default "latest" }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
               containerPort: 8006

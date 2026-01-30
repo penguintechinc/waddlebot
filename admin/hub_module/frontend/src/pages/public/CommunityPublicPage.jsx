@@ -2,10 +2,54 @@ import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { publicApi, communityApi } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { FormModalBuilder } from '@penguin/react_libs';
 import {
   GlobeAltIcon,
   LockClosedIcon,
 } from '@heroicons/react/24/outline';
+
+// WaddleBot theme colors for FormModalBuilder
+const waddlebotColors = {
+  modalBackground: 'bg-navy-800',
+  headerBackground: 'bg-navy-800',
+  footerBackground: 'bg-navy-900',
+  overlayBackground: 'bg-gray-900 bg-opacity-75',
+  titleText: 'text-sky-100',
+  labelText: 'text-navy-300',
+  descriptionText: 'text-navy-400',
+  errorText: 'text-red-400',
+  buttonText: 'text-navy-900',
+  fieldBackground: 'bg-navy-700',
+  fieldBorder: 'border-navy-600',
+  fieldText: 'text-sky-100',
+  fieldPlaceholder: 'placeholder-navy-500',
+  focusRing: 'focus:ring-sky-500',
+  focusBorder: 'focus:border-sky-500',
+  primaryButton: 'bg-sky-500',
+  primaryButtonHover: 'hover:bg-sky-600',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-600',
+  activeTab: 'text-sky-400',
+  activeTabBorder: 'border-sky-500',
+  inactiveTab: 'text-navy-400',
+  inactiveTabHover: 'hover:text-navy-300 hover:border-navy-500',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
+};
+
+// Field definitions for Join Request modal
+const joinRequestFields = [
+  {
+    name: 'message',
+    type: 'textarea',
+    label: 'Message (optional)',
+    placeholder: 'Tell the admins why you want to join...',
+    rows: 3,
+    required: false,
+  },
+];
 
 const SOCIAL_ICONS = {
   twitter: { name: 'Twitter/X', color: '#1DA1F2' },
@@ -22,7 +66,6 @@ function CommunityPublicPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [joining, setJoining] = useState(false);
-  const [joinMessage, setJoinMessage] = useState('');
   const [joinResult, setJoinResult] = useState(null);
   const [showJoinModal, setShowJoinModal] = useState(false);
 
@@ -44,7 +87,7 @@ function CommunityPublicPage() {
     fetchCommunity();
   }, [id]);
 
-  const handleJoin = async () => {
+  const handleJoin = async (data = {}) => {
     if (!isAuthenticated) {
       navigate('/login', { state: { returnTo: `/communities/${id}` } });
       return;
@@ -54,7 +97,7 @@ function CommunityPublicPage() {
     setJoinResult(null);
 
     try {
-      const response = await communityApi.join(id, joinMessage);
+      const response = await communityApi.join(id, data.message || '');
       setJoinResult(response.data);
       setShowJoinModal(false);
 
@@ -98,7 +141,9 @@ function CommunityPublicPage() {
   if (error) {
     return (
       <div className="max-w-xl mx-auto px-4 py-20 text-center">
-        <div className="text-6xl mb-4">🐧</div>
+        <div className="mb-4 flex justify-center">
+          <img src="/waddlebot-logo.png" alt="Community Logo" className="w-24 h-24" />
+        </div>
         <h1 className="text-2xl font-bold mb-2 text-sky-100">Community Not Found</h1>
         <p className="text-navy-400 mb-6">{error}</p>
         <Link to="/communities" className="btn btn-primary">
@@ -116,7 +161,7 @@ function CommunityPublicPage() {
           {community.logoUrl ? (
             <img src={community.logoUrl} alt="" className="w-full h-full rounded-xl object-cover" />
           ) : (
-            <span className="text-4xl">🐧</span>
+            <img src="/waddlebot-logo.png" alt="Community Logo" className="w-16 h-16" />
           )}
         </div>
         <h1 className="text-2xl font-bold mb-2 text-sky-100">{community.displayName || community.name}</h1>
@@ -154,7 +199,7 @@ function CommunityPublicPage() {
             {community.logoUrl ? (
               <img src={community.logoUrl} alt={community.displayName} className="w-full h-full object-cover" />
             ) : (
-              <span className="text-5xl">🐧</span>
+              <img src="/waddlebot-logo.png" alt="Community Logo" className="w-24 h-24" />
             )}
           </div>
           <div className="mt-4 md:mt-0 flex-1">
@@ -250,38 +295,16 @@ function CommunityPublicPage() {
       </div>
 
       {/* Join Request Modal */}
-      {showJoinModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="card max-w-md w-full p-6">
-            <h3 className="text-xl font-semibold mb-4 text-sky-100">Request to Join</h3>
-            <p className="text-navy-400 mb-4">
-              This community requires approval to join. You can include a message with your request.
-            </p>
-            <textarea
-              value={joinMessage}
-              onChange={(e) => setJoinMessage(e.target.value)}
-              placeholder="Tell the admins why you want to join... (optional)"
-              className="w-full p-3 bg-navy-800 border border-navy-600 rounded-lg text-sky-100 placeholder-navy-500 focus:border-sky-500 focus:outline-none mb-4"
-              rows={3}
-            />
-            <div className="flex justify-end space-x-3">
-              <button
-                onClick={() => setShowJoinModal(false)}
-                className="btn btn-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleJoin}
-                disabled={joining}
-                className="btn btn-primary disabled:opacity-50"
-              >
-                {joining ? 'Submitting...' : 'Submit Request'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <FormModalBuilder
+        isOpen={showJoinModal}
+        onClose={() => setShowJoinModal(false)}
+        onSubmit={handleJoin}
+        title="Request to Join"
+        fields={joinRequestFields}
+        submitButtonText="Submit Request"
+        cancelButtonText="Cancel"
+        colors={waddlebotColors}
+      />
     </div>
   );
 }

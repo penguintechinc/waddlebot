@@ -1,9 +1,9 @@
-{{- if .Values.ollama.enabled }}
+{{- if .Values.infrastructure.ollama.enabled }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ .Values.ollama.persistence.name }}
+  name: {{ .Values.infrastructure.ollama.persistence.name }}
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: ollama
@@ -12,13 +12,13 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
   accessModes:
-    - {{ .Values.ollama.persistence.accessMode }}
-  {{- if .Values.ollama.persistence.storageClass }}
-  storageClassName: {{ .Values.ollama.persistence.storageClass }}
+    - {{ .Values.infrastructure.ollama.persistence.accessMode }}
+  {{- if .Values.infrastructure.ollama.persistence.storageClass }}
+  storageClassName: {{ .Values.infrastructure.ollama.persistence.storageClass }}
   {{- end }}
   resources:
     requests:
-      storage: {{ .Values.ollama.persistence.size }}
+      storage: {{ .Values.infrastructure.ollama.persistence.size }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -47,8 +47,8 @@ spec:
     spec:
       containers:
       - name: ollama
-        image: {{ .Values.ollama.image.repository }}:{{ .Values.ollama.image.tag }}
-        imagePullPolicy: {{ .Values.ollama.image.pullPolicy }}
+        image: {{ .Values.infrastructure.ollama.image }}
+        imagePullPolicy: IfNotPresent
         ports:
         - name: http
           containerPort: 11434
@@ -56,8 +56,8 @@ spec:
         env:
         - name: OLLAMA_HOST
           value: "0.0.0.0"
-        {{- if .Values.ollama.extraEnv }}
-        {{- range $key, $value := .Values.ollama.extraEnv }}
+        {{- if .Values.infrastructure.ollama.extraEnv }}
+        {{- range $key, $value := .Values.infrastructure.ollama.extraEnv }}
         - name: {{ $key }}
           value: {{ $value | quote }}
         {{- end }}
@@ -67,16 +67,16 @@ spec:
           mountPath: /root/.ollama
         resources:
           requests:
-            memory: {{ .Values.ollama.resources.requests.memory }}
-            cpu: {{ .Values.ollama.resources.requests.cpu }}
-            {{- if .Values.ollama.gpu.enabled }}
-            nvidia.com/gpu: {{ .Values.ollama.gpu.count }}
+            memory: {{ .Values.infrastructure.ollama.resources.requests.memory }}
+            cpu: {{ .Values.infrastructure.ollama.resources.requests.cpu }}
+            {{- if .Values.infrastructure.ollama.gpu.enabled }}
+            nvidia.com/gpu: {{ .Values.infrastructure.ollama.gpu.count }}
             {{- end }}
           limits:
-            memory: {{ .Values.ollama.resources.limits.memory }}
-            cpu: {{ .Values.ollama.resources.limits.cpu }}
-            {{- if .Values.ollama.gpu.enabled }}
-            nvidia.com/gpu: {{ .Values.ollama.gpu.count }}
+            memory: {{ .Values.infrastructure.ollama.resources.limits.memory }}
+            cpu: {{ .Values.infrastructure.ollama.resources.limits.cpu }}
+            {{- if .Values.infrastructure.ollama.gpu.enabled }}
+            nvidia.com/gpu: {{ .Values.infrastructure.ollama.gpu.count }}
             {{- end }}
         livenessProbe:
           httpGet:
@@ -97,8 +97,8 @@ spec:
       volumes:
       - name: ollama-data
         persistentVolumeClaim:
-          claimName: {{ .Values.ollama.persistence.name }}
-      {{- if .Values.ollama.gpu.enabled }}
+          claimName: {{ .Values.infrastructure.ollama.persistence.name }}
+      {{- if .Values.infrastructure.ollama.gpu.enabled }}
       nodeSelector:
         nvidia.com/gpu: "true"
       {{- end }}
@@ -106,7 +106,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Values.ollama.service.name }}
+  name: {{ .Values.infrastructure.ollama.service.name }}
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: ollama
@@ -114,14 +114,14 @@ metadata:
     app.kubernetes.io/component: ai-inference
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
-  type: {{ .Values.ollama.service.type }}
+  type: {{ .Values.infrastructure.ollama.service.type }}
   ports:
-  - port: {{ .Values.ollama.service.port }}
+  - port: {{ .Values.infrastructure.ollama.service.port }}
     targetPort: http
     protocol: TCP
     name: http
-    {{- if and (eq .Values.ollama.service.type "NodePort") .Values.ollama.service.nodePort }}
-    nodePort: {{ .Values.ollama.service.nodePort }}
+    {{- if and (eq .Values.infrastructure.ollama.service.type "NodePort") .Values.infrastructure.ollama.service.nodePort }}
+    nodePort: {{ .Values.infrastructure.ollama.service.nodePort }}
     {{- end }}
   selector:
     app.kubernetes.io/name: ollama

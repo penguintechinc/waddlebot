@@ -325,11 +325,11 @@ export async function deleteCommunity(req, res, next) {
 
     // Check if this is a global community (cannot be deleted)
     const globalCheck = await query(
-      'SELECT is_global FROM communities WHERE id = $1',
+      "SELECT config->>'is_global' as is_global FROM communities WHERE id = $1",
       [communityId]
     );
 
-    if (globalCheck.rows.length > 0 && globalCheck.rows[0].is_global) {
+    if (globalCheck.rows.length > 0 && globalCheck.rows[0].is_global === 'true') {
       return next(errors.forbidden('Global communities cannot be deleted'));
     }
 

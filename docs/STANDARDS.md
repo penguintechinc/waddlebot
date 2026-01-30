@@ -24,6 +24,7 @@ Here's what you'll find in our comprehensive standards library:
 | 🐍 | [Language Selection](standards/LANGUAGE_SELECTION.md) | Python 3.13 or Go 1.24.x? We'll help you decide |
 | 🔐 | [Authentication](standards/AUTHENTICATION.md) | Flask-Security-Too, RBAC, SSO, password magic |
 | ⚛️ | [Frontend](standards/FRONTEND.md) | ReactJS patterns, hooks, components galore |
+| 📦 | [React Libraries](standards/REACT_LIBS.md) | Shared components: LoginPageBuilder, FormModal, Sidebar |
 | 🗄️ | [Database](standards/DATABASE.md) | PyDAL, SQLAlchemy, PostgreSQL + 3 others |
 | 🔌 | [API & Protocols](standards/API_PROTOCOLS.md) | REST, gRPC, versioning, deprecation strategies |
 | ⚡ | [Performance](standards/PERFORMANCE.md) | Dataclasses, asyncio, threading, blazing fast |
@@ -33,6 +34,7 @@ Here's what you'll find in our comprehensive standards library:
 | 🛡️ | [Security](standards/SECURITY.md) | TLS, secrets management, vulnerability scanning |
 | 📚 | [Documentation](standards/DOCUMENTATION.md) | READMEs, release notes, keeping it clean |
 | 🎨 | [UI Design](standards/UI_DESIGN.md) | Components, patterns, responsive design |
+| 📱 | [Mobile](standards/MOBILE.md) | Flutter, native modules, phone + tablet support |
 | 🔗 | [Integrations](standards/INTEGRATIONS.md) | WaddleAI, MarchProxy, License Server |
 
 ## The Core Five (Most Important)
@@ -126,6 +128,7 @@ Dive into the individual standards documents for the full picture:
 - [Language Selection](standards/LANGUAGE_SELECTION.md) - Python vs Go decision matrix
 - [Authentication](standards/AUTHENTICATION.md) - Flask-Security-Too, RBAC, SSO
 - [Frontend Development](standards/FRONTEND.md) - ReactJS patterns and best practices
+- [React Libraries](standards/REACT_LIBS.md) - Shared components (LoginPageBuilder, FormModal, Sidebar)
 - [Database Standards](standards/DATABASE.md) - PyDAL, multi-database support
 - [API and Protocols](standards/API_PROTOCOLS.md) - REST, gRPC, versioning
 - [Performance](standards/PERFORMANCE.md) - Optimization, concurrency, speed
@@ -135,6 +138,7 @@ Dive into the individual standards documents for the full picture:
 - [Security](standards/SECURITY.md) - TLS, secrets, scanning
 - [Documentation](standards/DOCUMENTATION.md) - READMEs, release notes
 - [UI Design](standards/UI_DESIGN.md) - Components, patterns, styling
+- [Mobile](standards/MOBILE.md) - Flutter, native modules, iOS + Android, phone + tablet
 - [Integrations](standards/INTEGRATIONS.md) - WaddleAI, MarchProxy, License Server
 
 ---

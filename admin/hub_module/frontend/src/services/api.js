@@ -58,7 +58,7 @@ export const publicApi = {
   getCommunityProfile: (id) => api.get(`/api/v1/public/communities/${id}/profile`),
   getLiveStreams: (params) => api.get('/api/v1/public/live', { params }),
   getStreamDetails: (entityId) => api.get(`/api/v1/public/streams/${entityId}`),
-  getSignupSettings: () => api.get('/api/v1/public/signup-settings'),
+  getSignupSettings: () => api.get('/api/v1/signup-settings'),
 };
 
 export const communityApi = {
@@ -420,6 +420,70 @@ export const adminApi = {
     api.post(`/api/v1/admin/${communityId}/calendar/events/${eventId}/ticketing/enable`, data),
   disableTicketing: (communityId, eventId) =>
     api.post(`/api/v1/admin/${communityId}/calendar/events/${eventId}/ticketing/disable`),
+
+  // ===== Live Streaming =====
+  getStreamConfig: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/streams`),
+  createStreamConfig: (communityId) =>
+    api.post(`/api/v1/admin/${communityId}/streams`),
+  regenerateStreamKey: (communityId) =>
+    api.post(`/api/v1/admin/${communityId}/streams/key/regenerate`),
+  getStreamDestinations: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/streams/destinations`),
+  addStreamDestination: (communityId, data) =>
+    api.post(`/api/v1/admin/${communityId}/streams/destinations`, data),
+  removeStreamDestination: (communityId, destId) =>
+    api.delete(`/api/v1/admin/${communityId}/streams/destinations/${destId}`),
+  toggleStreamForceCut: (communityId, destId) =>
+    api.put(`/api/v1/admin/${communityId}/streams/destinations/${destId}/force-cut`),
+  getStreamStatus: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/streams/status`),
+
+  // ===== Community Calls (WebRTC) =====
+  getCallRooms: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/calls/rooms`),
+  getCallRoom: (communityId, roomName) =>
+    api.get(`/api/v1/admin/${communityId}/calls/rooms/${encodeURIComponent(roomName)}`),
+  createCallRoom: (communityId, data) =>
+    api.post(`/api/v1/admin/${communityId}/calls/rooms`, data),
+  deleteCallRoom: (communityId, roomName) =>
+    api.delete(`/api/v1/admin/${communityId}/calls/rooms/${encodeURIComponent(roomName)}`),
+  lockCallRoom: (communityId, roomName) =>
+    api.post(`/api/v1/admin/${communityId}/calls/rooms/${encodeURIComponent(roomName)}/lock`),
+  unlockCallRoom: (communityId, roomName) =>
+    api.post(`/api/v1/admin/${communityId}/calls/rooms/${encodeURIComponent(roomName)}/unlock`),
+  getCallParticipants: (communityId, roomName) =>
+    api.get(`/api/v1/admin/${communityId}/calls/rooms/${encodeURIComponent(roomName)}/participants`),
+  kickCallParticipant: (communityId, roomName, identity) =>
+    api.post(`/api/v1/admin/${communityId}/calls/rooms/${encodeURIComponent(roomName)}/kick`, { identity }),
+  muteAllCallParticipants: (communityId, roomName) =>
+    api.post(`/api/v1/admin/${communityId}/calls/rooms/${encodeURIComponent(roomName)}/mute-all`),
+  getRaisedHands: (communityId, roomName) =>
+    api.get(`/api/v1/admin/${communityId}/calls/rooms/${encodeURIComponent(roomName)}/raised-hands`),
+  acknowledgeHand: (communityId, roomName, userId) =>
+    api.post(`/api/v1/admin/${communityId}/calls/rooms/${encodeURIComponent(roomName)}/acknowledge-hand`, { user_id: userId }),
+
+  // ===== Polls =====
+  getPolls: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/polls`),
+  getPoll: (communityId, pollId) =>
+    api.get(`/api/v1/admin/${communityId}/polls/${pollId}`),
+  createPoll: (communityId, data) =>
+    api.post(`/api/v1/admin/${communityId}/polls`, data),
+  deletePoll: (communityId, pollId) =>
+    api.delete(`/api/v1/admin/${communityId}/polls/${pollId}`),
+
+  // ===== Forms =====
+  getForms: (communityId) =>
+    api.get(`/api/v1/admin/${communityId}/forms`),
+  getForm: (communityId, formId) =>
+    api.get(`/api/v1/admin/${communityId}/forms/${formId}`),
+  createForm: (communityId, data) =>
+    api.post(`/api/v1/admin/${communityId}/forms`, data),
+  deleteForm: (communityId, formId) =>
+    api.delete(`/api/v1/admin/${communityId}/forms/${formId}`),
+  getFormSubmissions: (communityId, formId) =>
+    api.get(`/api/v1/admin/${communityId}/forms/${formId}/submissions`),
 };
 
 export const platformApi = {

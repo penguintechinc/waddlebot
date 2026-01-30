@@ -1,7 +1,5 @@
 {{- if .Values.ingress.enabled -}}
 {{- $fullName := include "waddlebot.fullname" . -}}
-{{- $hubSvcPort := .Values.hub.service.port -}}
-{{- $browserSourceSvcPort := .Values.browserSource.service.port -}}
 {{- if and .Values.ingress.className (not (semverCompare ">=1.18-0" .Capabilities.KubeVersion.GitVersion)) }}
   {{- if not (hasKey .Values.ingress.annotations "kubernetes.io/ingress.class") }}
   {{- $_ := set .Values.ingress.annotations "kubernetes.io/ingress.class" .Values.ingress.className}}
@@ -50,12 +48,12 @@ spec:
             backend:
               {{- if semverCompare ">=1.19-0" $.Capabilities.KubeVersion.GitVersion }}
               service:
-                name: {{ $fullName }}-{{ .backend.service }}
+                name: {{ $fullName }}-{{ .service }}
                 port:
-                  number: {{ .backend.port }}
+                  number: {{ .port }}
               {{- else }}
-              serviceName: {{ $fullName }}-{{ .backend.service }}
-              servicePort: {{ .backend.port }}
+              serviceName: {{ $fullName }}-{{ .service }}
+              servicePort: {{ .port }}
               {{- end }}
           {{- end }}
     {{- end }}

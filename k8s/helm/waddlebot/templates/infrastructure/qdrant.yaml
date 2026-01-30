@@ -1,9 +1,9 @@
-{{- if .Values.qdrant.enabled }}
+{{- if .Values.infrastructure.qdrant.enabled }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ .Values.qdrant.persistence.name }}
+  name: {{ .Values.infrastructure.qdrant.persistence.name }}
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: qdrant
@@ -12,13 +12,13 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
   accessModes:
-    - {{ .Values.qdrant.persistence.accessMode }}
-  {{- if .Values.qdrant.persistence.storageClass }}
-  storageClassName: {{ .Values.qdrant.persistence.storageClass }}
+    - {{ .Values.infrastructure.qdrant.persistence.accessMode }}
+  {{- if .Values.infrastructure.qdrant.persistence.storageClass }}
+  storageClassName: {{ .Values.infrastructure.qdrant.persistence.storageClass }}
   {{- end }}
   resources:
     requests:
-      storage: {{ .Values.qdrant.persistence.size }}
+      storage: {{ .Values.infrastructure.qdrant.persistence.size }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -47,8 +47,8 @@ spec:
     spec:
       containers:
       - name: qdrant
-        image: {{ .Values.qdrant.image.repository }}:{{ .Values.qdrant.image.tag }}
-        imagePullPolicy: {{ .Values.qdrant.image.pullPolicy }}
+        image: {{ .Values.infrastructure.qdrant.image }}
+        imagePullPolicy: IfNotPresent
         ports:
         - name: http
           containerPort: 6333
@@ -61,11 +61,11 @@ spec:
           mountPath: /qdrant/storage
         resources:
           requests:
-            memory: {{ .Values.qdrant.resources.requests.memory }}
-            cpu: {{ .Values.qdrant.resources.requests.cpu }}
+            memory: {{ .Values.infrastructure.qdrant.resources.requests.memory }}
+            cpu: {{ .Values.infrastructure.qdrant.resources.requests.cpu }}
           limits:
-            memory: {{ .Values.qdrant.resources.limits.memory }}
-            cpu: {{ .Values.qdrant.resources.limits.cpu }}
+            memory: {{ .Values.infrastructure.qdrant.resources.limits.memory }}
+            cpu: {{ .Values.infrastructure.qdrant.resources.limits.cpu }}
         livenessProbe:
           httpGet:
             path: /healthz
@@ -85,12 +85,12 @@ spec:
       volumes:
       - name: qdrant-data
         persistentVolumeClaim:
-          claimName: {{ .Values.qdrant.persistence.name }}
+          claimName: {{ .Values.infrastructure.qdrant.persistence.name }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Values.qdrant.service.name }}
+  name: {{ .Values.infrastructure.qdrant.service.name }}
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: qdrant
@@ -98,14 +98,14 @@ metadata:
     app.kubernetes.io/component: vectordb
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
-  type: {{ .Values.qdrant.service.type }}
+  type: {{ .Values.infrastructure.qdrant.service.type }}
   ports:
-  - port: {{ .Values.qdrant.service.port }}
+  - port: {{ .Values.infrastructure.qdrant.service.port }}
     targetPort: http
     protocol: TCP
     name: http
-    {{- if and (eq .Values.qdrant.service.type "NodePort") .Values.qdrant.service.nodePort }}
-    nodePort: {{ .Values.qdrant.service.nodePort }}
+    {{- if and (eq .Values.infrastructure.qdrant.service.type "NodePort") .Values.infrastructure.qdrant.service.nodePort }}
+    nodePort: {{ .Values.infrastructure.qdrant.service.nodePort }}
     {{- end }}
   - port: 6334
     targetPort: grpc

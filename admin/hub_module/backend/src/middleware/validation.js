@@ -112,9 +112,27 @@ export const validators = {
   ],
 
   // Text content validation (for announcements, descriptions, etc.)
-  text: (fieldName, { min = 1, max = 10000 } = {}) => body(fieldName)
-    .isLength({ min, max })
-    .withMessage(`${fieldName} must be between ${min} and ${max} characters`),
+  text: (fieldName, { min = 0, max = 10000, optional = false, pattern = null } = {}) => {
+    let validator = body(fieldName);
+    if (optional) validator = validator.optional();
+    if (pattern) {
+      return validator
+        .matches(pattern)
+        .withMessage(`${fieldName} has invalid format`);
+    }
+    return validator
+      .isLength({ min, max })
+      .withMessage(`${fieldName} must be between ${min} and ${max} characters`);
+  },
+
+  // Array validation with min/max length
+  array: (fieldName, { min = 0, max = 100, optional = false } = {}) => {
+    let validator = body(fieldName);
+    if (optional) validator = validator.optional();
+    return validator
+      .isArray({ min, max })
+      .withMessage(`${fieldName} must be an array with ${min}-${max} items`);
+  },
 
   // URL validation
   url: (fieldName) => body(fieldName)
@@ -123,14 +141,19 @@ export const validators = {
     .withMessage(`${fieldName} must be a valid URL`),
 
   // Boolean validation
-  boolean: (fieldName) => body(fieldName)
-    .optional()
-    .isBoolean()
-    .withMessage(`${fieldName} must be a boolean`),
+  boolean: (fieldName, { optional = false } = {}) => {
+    let validator = body(fieldName);
+    if (optional) validator = validator.optional();
+    return validator
+      .isBoolean()
+      .withMessage(`${fieldName} must be a boolean`);
+  },
 
   // Integer validation
-  integer: (fieldName, { min, max } = {}) => {
-    let validator = body(fieldName).isInt();
+  integer: (fieldName, { min, max, optional = false } = {}) => {
+    let validator = body(fieldName);
+    if (optional) validator = validator.optional();
+    validator = validator.isInt();
     if (min !== undefined) validator = validator.isInt({ min });
     if (max !== undefined) validator = validator.isInt({ max });
     return validator.withMessage(`${fieldName} must be an integer${min !== undefined ? ` >= ${min}` : ''}${max !== undefined ? ` <= ${max}` : ''}`);

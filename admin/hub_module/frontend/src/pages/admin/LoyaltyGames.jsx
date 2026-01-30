@@ -1,6 +1,38 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { adminApi } from '../../services/api';
+import { FormModalBuilder } from '@penguin/react_libs';
+
+// WaddleBot theme colors matching the existing UI
+const waddlebotColors = {
+  modalBackground: 'bg-navy-800',
+  headerBackground: 'bg-navy-800',
+  footerBackground: 'bg-navy-850',
+  overlayBackground: 'bg-black bg-opacity-50',
+  titleText: 'text-sky-100',
+  labelText: 'text-sky-100',
+  descriptionText: 'text-navy-400',
+  errorText: 'text-red-400',
+  buttonText: 'text-white',
+  fieldBackground: 'bg-navy-700',
+  fieldBorder: 'border-navy-600',
+  fieldText: 'text-sky-100',
+  fieldPlaceholder: 'placeholder-navy-400',
+  focusRing: 'focus:ring-gold-500',
+  focusBorder: 'focus:border-gold-500',
+  primaryButton: 'bg-sky-600',
+  primaryButtonHover: 'hover:bg-sky-700',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-600',
+  activeTab: 'text-gold-400',
+  activeTabBorder: 'border-gold-500',
+  inactiveTab: 'text-navy-400',
+  inactiveTabHover: 'hover:text-navy-300 hover:border-navy-500',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
+};
 
 const GAME_TYPES = [
   {
@@ -40,6 +72,117 @@ function LoyaltyGames() {
   useEffect(() => {
     fetchData();
   }, [communityId]);
+
+  // Field definitions for Prediction form
+  const predictionFields = useMemo(() => [
+    {
+      name: 'title',
+      type: 'text',
+      label: 'Title',
+      required: true,
+      placeholder: 'What will happen next?',
+    },
+    {
+      name: 'description',
+      type: 'textarea',
+      label: 'Description',
+      placeholder: 'Provide more context about this prediction...',
+      rows: 3,
+    },
+    {
+      name: 'options',
+      type: 'multiline',
+      label: 'Outcomes',
+      required: true,
+      placeholder: 'Enter one outcome per line (minimum 2)',
+      rows: 4,
+      helpText: 'Enter one possible outcome per line. At least 2 outcomes required.',
+    },
+    {
+      name: 'end_time',
+      type: 'datetime-local',
+      label: 'End Time',
+      required: true,
+      helpText: 'When voting will close for this prediction.',
+    },
+  ], []);
+
+  // Field definitions for Raffle form
+  const raffleFields = useMemo(() => [
+    {
+      name: 'title',
+      type: 'text',
+      label: 'Title',
+      required: true,
+      placeholder: 'Weekly Points Giveaway',
+    },
+    {
+      name: 'description',
+      type: 'textarea',
+      label: 'Description',
+      placeholder: 'Describe the raffle and rules...',
+      rows: 3,
+    },
+    {
+      name: 'prize',
+      type: 'text',
+      label: 'Prize',
+      required: true,
+      placeholder: '10,000 loyalty points',
+    },
+    {
+      name: 'ticket_cost',
+      type: 'number',
+      label: 'Ticket Cost',
+      required: true,
+      placeholder: '100',
+      helpText: 'Points required to purchase one raffle ticket.',
+    },
+    {
+      name: 'max_entries',
+      type: 'number',
+      label: 'Max Entries per User',
+      placeholder: '10',
+      helpText: 'Maximum tickets a user can purchase (leave empty for unlimited).',
+    },
+    {
+      name: 'end_time',
+      type: 'datetime-local',
+      label: 'End Time',
+      required: true,
+      helpText: 'When the raffle will close and a winner will be drawn.',
+    },
+  ], []);
+
+  // Placeholder handler for creating a prediction (closes modal for now)
+  const handleCreatePrediction = async (data) => {
+    // TODO: Implement API call to create prediction
+    // await adminApi.createPrediction(communityId, {
+    //   title: data.title,
+    //   description: data.description,
+    //   options: data.options, // multiline returns array of strings
+    //   end_time: data.end_time,
+    // });
+    console.log('Create prediction:', data);
+    setMessage({ type: 'success', text: 'Prediction creation not yet implemented' });
+    setShowPredictionModal(false);
+  };
+
+  // Placeholder handler for creating a raffle (closes modal for now)
+  const handleCreateRaffle = async (data) => {
+    // TODO: Implement API call to create raffle
+    // await adminApi.createRaffle(communityId, {
+    //   title: data.title,
+    //   description: data.description,
+    //   prize: data.prize,
+    //   ticket_cost: parseInt(data.ticket_cost, 10),
+    //   max_entries: data.max_entries ? parseInt(data.max_entries, 10) : null,
+    //   end_time: data.end_time,
+    // });
+    console.log('Create raffle:', data);
+    setMessage({ type: 'success', text: 'Raffle creation not yet implemented' });
+    setShowRaffleModal(false);
+  };
 
   async function fetchData() {
     setLoading(true);
@@ -544,59 +687,31 @@ function LoyaltyGames() {
         </div>
       </div>
 
-      {/* Prediction Modal Placeholder */}
-      {showPredictionModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-navy-900 rounded-xl p-6 max-w-lg w-full mx-4">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-bold text-sky-100">Create Prediction</h3>
-              <button
-                onClick={() => setShowPredictionModal(false)}
-                className="text-navy-400 hover:text-sky-100"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
-            <div className="text-center py-8 text-navy-400">
-              Prediction creation form coming soon
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Create Prediction Modal */}
+      <FormModalBuilder
+        title="Create Prediction"
+        fields={predictionFields}
+        isOpen={showPredictionModal}
+        onClose={() => setShowPredictionModal(false)}
+        onSubmit={handleCreatePrediction}
+        submitButtonText="Create Prediction"
+        cancelButtonText="Cancel"
+        width="lg"
+        colors={waddlebotColors}
+      />
 
-      {/* Raffle Modal Placeholder */}
-      {showRaffleModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-navy-900 rounded-xl p-6 max-w-lg w-full mx-4">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-bold text-sky-100">Create Raffle</h3>
-              <button
-                onClick={() => setShowRaffleModal(false)}
-                className="text-navy-400 hover:text-sky-100"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
-            <div className="text-center py-8 text-navy-400">
-              Raffle creation form coming soon
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Create Raffle Modal */}
+      <FormModalBuilder
+        title="Create Raffle"
+        fields={raffleFields}
+        isOpen={showRaffleModal}
+        onClose={() => setShowRaffleModal(false)}
+        onSubmit={handleCreateRaffle}
+        submitButtonText="Create Raffle"
+        cancelButtonText="Cancel"
+        width="lg"
+        colors={waddlebotColors}
+      />
     </div>
   );
 }

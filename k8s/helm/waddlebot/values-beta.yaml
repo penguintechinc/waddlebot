@@ -1,0 +1,183 @@
+# WaddleBot Helm Chart - Beta Cluster Values
+# This file overrides default values for beta cluster deployment
+# Usage: helm upgrade --install waddlebot . -f values.yaml -f values-beta.yaml
+
+# Global settings for beta cluster
+global:
+  imageRegistry: "registry-dal2.penguintech.io/waddlebot"
+  imageTag: "latest"
+  imagePullPolicy: Always
+
+# Infrastructure - Enable core services in beta
+infrastructure:
+  postgresql:
+    enabled: true
+    image: postgres:16-alpine
+    persistence:
+      size: 10Gi
+      storageClass: "longhorn"
+  redis:
+    enabled: true
+    image: redis:7-alpine
+    persistence:
+      size: 2Gi
+      storageClass: "longhorn"
+  minio:
+    enabled: false
+  ollama:
+    enabled: false
+  qdrant:
+    enabled: false
+
+# Module image overrides - use registry image names
+modules:
+  # Router
+  router:
+    image: router
+
+  # Hub
+  hub:
+    image: hub-api
+
+  hubWebui:
+    image: hub-webui
+
+  # Core Modules
+  identityCore:
+    image: core-identity
+
+  labelsCore:
+    image: core-labels
+
+  browserSource:
+    image: core-browser-source
+
+  reputation:
+    image: core-reputation
+
+  community:
+    image: core-community
+
+  aiResearcher:
+    image: ai-researcher
+
+  videoProxy:
+    image: core-video-proxy
+
+  engagement:
+    image: core-engagement
+
+  moduleRtc:
+    image: core-module-rtc
+
+  # Collectors/Triggers
+  collectors:
+    twitch:
+      image: trigger-twitch
+    discord:
+      image: trigger-discord
+    slack:
+      image: trigger-slack
+    youtubeLive:
+      image: trigger-youtube
+    kick:
+      image: trigger-kick
+
+  # Interactive Modules
+  interactive:
+    ai:
+      image: interactive-ai
+    alias:
+      image: interactive-alias
+    shoutout:
+      image: interactive-shoutout
+    inventory:
+      image: interactive-inventory
+    calendar:
+      image: interactive-calendar
+    memories:
+      image: interactive-memories
+    youtubeMusic:
+      image: interactive-youtube-music
+    spotify:
+      image: interactive-spotify
+    loyalty:
+      image: interactive-loyalty
+
+  # Platform Action Modules
+  platformActions:
+    discord:
+      image: action-discord
+    slack:
+      image: action-slack
+    twitch:
+      image: action-twitch
+    youtube:
+      image: action-youtube
+
+# Shared Environment
+sharedEnv:
+  DB_HOST: "infra-postgres"
+  REDIS_HOST: "infra-redis"
+  MINIO_ENDPOINT: "infra-minio:9000"
+  QDRANT_HOST: "infra-qdrant"
+  ROUTER_URL: "http://waddlebot-router:8000"
+  HUB_URL: "http://waddlebot-hub:8060"
+
+# Ingress - using Cloudflare wildcard certificate
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/websocket-services: "waddlebot-hub-api"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  hosts:
+    - host: waddlebot.penguintech.io
+      paths:
+        - path: /socket.io
+          pathType: Prefix
+          service: hub-api
+          port: 8060
+        - path: /api
+          pathType: Prefix
+          service: hub-api
+          port: 8060
+        - path: /
+          pathType: Prefix
+          service: hub-webui
+          port: 80
+        - path: /api/router
+          pathType: Prefix
+          service: router
+          port: 8000
+        - path: /api/video-proxy
+          pathType: Prefix
+          service: video-proxy
+          port: 8092
+        - path: /api/engagement
+          pathType: Prefix
+          service: engagement
+          port: 8091
+        - path: /api/rtc
+          pathType: Prefix
+          service: module-rtc
+          port: 8093
+        - path: /webhooks/twitch
+          pathType: Prefix
+          service: twitch-collector
+          port: 8002
+        - path: /webhooks/discord
+          pathType: Prefix
+          service: discord-collector
+          port: 8003
+        - path: /webhooks/slack
+          pathType: Prefix
+          service: slack-collector
+          port: 8004
+  tls:
+    - secretName: penguintech-wildcard-tls
+      hosts:
+        - waddlebot.penguintech.io

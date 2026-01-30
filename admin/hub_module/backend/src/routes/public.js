@@ -36,4 +36,13 @@ router.get('/signup-settings', publicController.getSignupSettings);
 // User profiles (optional auth to check visibility permissions)
 router.get('/users/:userId/profile', optionalAuth, profileController.getPublicProfile);
 
+// Public marketplace (browse modules without auth)
+router.get('/marketplace/modules',
+  validators.pagination(),
+  validateRequest,
+  publicController.getMarketplaceModules
+);
+router.get('/marketplace/modules/:id', publicController.getMarketplaceModule);
+router.get('/marketplace/categories', publicController.getMarketplaceCategories);
+
 export default router;

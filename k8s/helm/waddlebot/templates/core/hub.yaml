@@ -3,7 +3,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "waddlebot.fullname" . }}-hub
+  name: {{ include "waddlebot.fullname" . }}-hub-api
   labels:
     {{- include "waddlebot.labels" . | nindent 4 }}
     app.kubernetes.io/component: hub
@@ -24,7 +24,7 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
       - name: hub
-        image: "{{ .Values.global.imageRegistry }}/hub:{{ .Values.modules.hub.imageTag | default .Chart.AppVersion }}"
+        image: "{{ .Values.global.imageRegistry }}/hub-api:{{ .Values.modules.hub.imageTag | default .Values.global.imageTag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         securityContext:
           {{- toYaml .Values.securityContext | nindent 10 }}
@@ -34,14 +34,14 @@ spec:
           protocol: TCP
         envFrom:
         - configMapRef:
-            name: {{ include "waddlebot.fullname" . }}-common-config
+            name: {{ include "waddlebot.fullname" . }}-config
         - configMapRef:
-            name: {{ include "waddlebot.fullname" . }}-hub-config
+            name: {{ include "waddlebot.fullname" . }}-hub-api-config
             optional: true
         - secretRef:
-            name: {{ include "waddlebot.fullname" . }}-common-secret
+            name: {{ include "waddlebot.fullname" . }}-secrets
         - secretRef:
-            name: {{ include "waddlebot.fullname" . }}-hub-secret
+            name: {{ include "waddlebot.fullname" . }}-hub-api-secret
             optional: true
         env:
         - name: MODULE_NAME
@@ -76,7 +76,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "waddlebot.fullname" . }}-hub
+  name: {{ include "waddlebot.fullname" . }}-hub-api
   labels:
     {{- include "waddlebot.labels" . | nindent 4 }}
     app.kubernetes.io/component: hub

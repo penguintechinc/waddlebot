@@ -1,0 +1,15 @@
+{
+  "name": "waddlebot-smoke-tests",
+  "version": "1.0.0",
+  "description": "Smoke tests for WaddleBot pages and APIs",
+  "scripts": {
+    "test:pages": "node smoke-pages.js",
+    "test:pages:beta": "BASE_URL=https://waddlebot.penguintech.io node smoke-pages.js",
+    "test:api": "./smoke-api-comprehensive.sh",
+    "test:api:beta": "./smoke-api-comprehensive.sh https://waddlebot.penguintech.io",
+    "test:all": "npm run test:api && npm run test:pages"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}

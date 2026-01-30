@@ -28,8 +28,8 @@ spec:
       {{- end }}
       containers:
         - name: discord-collector
-          image: "{{ .Values.global.imageRegistry }}/discord-collector:{{ .Values.modules.collectors.discord.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.modules.collectors.discord.image.pullPolicy }}
+          image: "{{ .Values.global.imageRegistry }}/{{ .Values.modules.collectors.discord.image }}:{{ .Values.modules.collectors.discord.tag | default "latest" }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
               containerPort: 8003

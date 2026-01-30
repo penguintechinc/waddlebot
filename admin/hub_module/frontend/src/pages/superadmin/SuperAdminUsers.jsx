@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   MagnifyingGlassIcon,
   PlusIcon,
@@ -8,6 +8,7 @@ import {
   ShoppingCartIcon,
 } from '@heroicons/react/24/outline';
 import { superAdminApi } from '../../services/api';
+import { FormModalBuilder } from '@penguin/react_libs';
 
 function SuperAdminUsers() {
   const [users, setUsers] = useState([]);
@@ -29,17 +30,15 @@ function SuperAdminUsers() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [roleName, setRoleName] = useState('');
 
-  // Form states
-  const [createFormData, setCreateFormData] = useState({
-    email: '',
-    password: '',
-  });
-  const [editFormData, setEditFormData] = useState({
-    email: '',
-    isActive: true,
-  });
+  // Form states (kept for role modal only)
   const [roleFormData, setRoleFormData] = useState({
     grant: true,
+  });
+
+  // Edit modal initial values (for FormModalBuilder)
+  const [editInitialValues, setEditInitialValues] = useState({
+    email: '',
+    isActive: true,
   });
 
   // Fetch users
@@ -69,17 +68,9 @@ function SuperAdminUsers() {
     }
   };
 
-  const handleCreateUser = async (e) => {
-    e.preventDefault();
-    if (!createFormData.email || !createFormData.password) {
-      setError('Email and password required');
-      return;
-    }
-
+  const handleCreateUser = async (formData) => {
     try {
-      await superAdminApi.createUser(createFormData);
-      setShowCreateModal(false);
-      setCreateFormData({ email: '', password: '' });
+      await superAdminApi.createUser(formData);
       await loadUsers();
     } catch (err) {
       const errorMsg = err.response?.data?.error?.message ||
@@ -87,16 +78,15 @@ function SuperAdminUsers() {
                       err.message ||
                       'Unknown error';
       setError('Failed to create user: ' + errorMsg);
+      throw err; // Re-throw to prevent modal from closing
     }
   };
 
-  const handleEditUser = async (e) => {
-    e.preventDefault();
+  const handleEditUser = async (formData) => {
     if (!selectedUser) return;
 
     try {
-      await superAdminApi.updateUser(selectedUser.id, editFormData);
-      setShowEditModal(false);
+      await superAdminApi.updateUser(selectedUser.id, formData);
       await loadUsers();
     } catch (err) {
       const errorMsg = err.response?.data?.error?.message ||
@@ -104,6 +94,7 @@ function SuperAdminUsers() {
                       err.message ||
                       'Unknown error';
       setError('Failed to update user: ' + errorMsg);
+      throw err; // Re-throw to prevent modal from closing
     }
   };
 
@@ -146,7 +137,7 @@ function SuperAdminUsers() {
 
   const openEditModal = (user) => {
     setSelectedUser(user);
-    setEditFormData({
+    setEditInitialValues({
       email: user.email,
       isActive: user.isActive,
     });
@@ -167,16 +158,79 @@ function SuperAdminUsers() {
     setShowDeleteModal(true);
   };
 
+  // FormModalBuilder field definitions
+  const createUserFields = useMemo(() => [
+    {
+      name: 'email',
+      type: 'email',
+      label: 'Email',
+      placeholder: 'user@example.com',
+      required: true,
+    },
+    {
+      name: 'password',
+      type: 'password',
+      label: 'Password',
+      placeholder: 'Enter password',
+      required: true,
+    },
+  ], []);
+
+  const editUserFields = useMemo(() => [
+    {
+      name: 'email',
+      type: 'email',
+      label: 'Email',
+      placeholder: 'user@example.com',
+      required: true,
+      defaultValue: editInitialValues.email,
+    },
+    {
+      name: 'isActive',
+      type: 'checkbox',
+      label: 'Active',
+      defaultValue: editInitialValues.isActive,
+    },
+  ], [editInitialValues]);
+
+  // Custom color config to match the navy/gold theme
+  const modalColors = useMemo(() => ({
+    modalBackground: 'bg-navy-900',
+    headerBackground: 'bg-navy-900',
+    footerBackground: 'bg-navy-900',
+    overlayBackground: 'bg-black bg-opacity-50',
+    titleText: 'text-gold-400',
+    labelText: 'text-navy-300',
+    descriptionText: 'text-navy-400',
+    errorText: 'text-red-400',
+    buttonText: 'text-navy-950',
+    fieldBackground: 'bg-navy-800',
+    fieldBorder: 'border-navy-700',
+    fieldText: 'text-sky-100',
+    fieldPlaceholder: 'placeholder-navy-400',
+    focusRing: 'focus:ring-gold-500',
+    focusBorder: 'focus:border-gold-500',
+    primaryButton: 'bg-gold-500',
+    primaryButtonHover: 'hover:bg-gold-600',
+    secondaryButton: 'bg-navy-700',
+    secondaryButtonHover: 'hover:bg-navy-600',
+    secondaryButtonBorder: 'border-navy-700',
+    activeTab: 'text-gold-400',
+    activeTabBorder: 'border-gold-500',
+    inactiveTab: 'text-navy-400',
+    inactiveTabHover: 'hover:text-navy-300',
+    tabBorder: 'border-navy-700',
+    errorTabText: 'text-red-400',
+    errorTabBorder: 'border-red-500',
+  }), []);
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-gold-400">User Management</h1>
         <button
-          onClick={() => {
-            setCreateFormData({ email: '', password: '' });
-            setShowCreateModal(true);
-          }}
+          onClick={() => setShowCreateModal(true)}
           className="flex items-center space-x-2 px-4 py-2 bg-gold-500 text-navy-950 rounded-lg hover:bg-gold-600 transition-colors font-medium"
         >
           <PlusIcon className="w-5 h-5" />
@@ -373,105 +427,28 @@ function SuperAdminUsers() {
       )}
 
       {/* Create User Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-navy-900 border border-navy-700 rounded-lg p-6 w-full max-w-md">
-            <h2 className="text-xl font-bold text-gold-400 mb-4">Create New User</h2>
-            <form onSubmit={handleCreateUser} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-navy-300 mb-1">Email</label>
-                <input
-                  type="email"
-                  value={createFormData.email}
-                  onChange={(e) =>
-                    setCreateFormData({ ...createFormData, email: e.target.value })
-                  }
-                  className="w-full bg-navy-800 border border-navy-700 rounded px-3 py-2 text-sky-100 focus:outline-none focus:border-gold-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-navy-300 mb-1">
-                  Password
-                </label>
-                <input
-                  type="password"
-                  value={createFormData.password}
-                  onChange={(e) =>
-                    setCreateFormData({ ...createFormData, password: e.target.value })
-                  }
-                  className="w-full bg-navy-800 border border-navy-700 rounded px-3 py-2 text-sky-100 focus:outline-none focus:border-gold-500"
-                />
-              </div>
-              <div className="flex space-x-3">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="flex-1 px-4 py-2 bg-navy-700 text-sky-100 rounded hover:bg-navy-600 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2 bg-gold-500 text-navy-950 rounded hover:bg-gold-600 transition-colors font-medium"
-                >
-                  Create
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <FormModalBuilder
+        title="Create New User"
+        fields={createUserFields}
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onSubmit={handleCreateUser}
+        submitButtonText="Create"
+        cancelButtonText="Cancel"
+        colors={modalColors}
+      />
 
       {/* Edit User Modal */}
-      {showEditModal && selectedUser && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-navy-900 border border-navy-700 rounded-lg p-6 w-full max-w-md">
-            <h2 className="text-xl font-bold text-gold-400 mb-4">Edit User</h2>
-            <form onSubmit={handleEditUser} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-navy-300 mb-1">Email</label>
-                <input
-                  type="email"
-                  value={editFormData.email}
-                  onChange={(e) =>
-                    setEditFormData({ ...editFormData, email: e.target.value })
-                  }
-                  className="w-full bg-navy-800 border border-navy-700 rounded px-3 py-2 text-sky-100 focus:outline-none focus:border-gold-500"
-                />
-              </div>
-              <div className="flex items-center space-x-2">
-                <input
-                  type="checkbox"
-                  id="isActive"
-                  checked={editFormData.isActive}
-                  onChange={(e) =>
-                    setEditFormData({ ...editFormData, isActive: e.target.checked })
-                  }
-                  className="w-4 h-4 bg-navy-700 border border-navy-600 rounded"
-                />
-                <label htmlFor="isActive" className="text-sm font-medium text-navy-300">
-                  Active
-                </label>
-              </div>
-              <div className="flex space-x-3">
-                <button
-                  type="button"
-                  onClick={() => setShowEditModal(false)}
-                  className="flex-1 px-4 py-2 bg-navy-700 text-sky-100 rounded hover:bg-navy-600 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2 bg-gold-500 text-navy-950 rounded hover:bg-gold-600 transition-colors font-medium"
-                >
-                  Update
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <FormModalBuilder
+        title="Edit User"
+        fields={editUserFields}
+        isOpen={showEditModal && selectedUser !== null}
+        onClose={() => setShowEditModal(false)}
+        onSubmit={handleEditUser}
+        submitButtonText="Update"
+        cancelButtonText="Cancel"
+        colors={modalColors}
+      />
 
       {/* Role Assignment Modal */}
       {showRoleModal && selectedUser && (

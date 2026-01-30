@@ -35,11 +35,13 @@ app = Quart(__name__)
 app.config.from_object(Config)
 
 # Initialize database
+# Use fake_migrate=True to check schema without trying to create tables
 db = DAL(
     Config.DATABASE_URL,
     folder='/tmp/pydal',
     pool_size=10,
-    migrate_enabled=True
+    migrate_enabled=False,
+    fake_migrate_all=True
 )
 
 # Initialize Slack service

@@ -122,7 +122,7 @@ export default function CookiePolicy() {
     const fetchPolicy = async () => {
       setLoading(true);
       try {
-        const response = await api.get('/api/v1/cookie-consent/policy');
+        const response = await api.get('/api/v1/cookie/policy');
         if (response.data?.success) {
           setPolicy(response.data.policy);
         }

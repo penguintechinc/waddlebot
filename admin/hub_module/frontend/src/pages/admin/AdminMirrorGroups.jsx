@@ -1,6 +1,38 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { adminApi } from '../../services/api';
+import { FormModalBuilder } from '@penguin/react_libs';
+
+// WaddleBot theme colors matching the existing UI
+const waddlebotColors = {
+  modalBackground: 'bg-navy-800',
+  headerBackground: 'bg-navy-800',
+  footerBackground: 'bg-navy-850',
+  overlayBackground: 'bg-black bg-opacity-50',
+  titleText: 'text-sky-100',
+  labelText: 'text-sky-100',
+  descriptionText: 'text-navy-400',
+  errorText: 'text-red-400',
+  buttonText: 'text-white',
+  fieldBackground: 'bg-navy-700',
+  fieldBorder: 'border-navy-600',
+  fieldText: 'text-sky-100',
+  fieldPlaceholder: 'placeholder-navy-400',
+  focusRing: 'focus:ring-gold-500',
+  focusBorder: 'focus:border-gold-500',
+  primaryButton: 'bg-sky-600',
+  primaryButtonHover: 'hover:bg-sky-700',
+  secondaryButton: 'bg-navy-700',
+  secondaryButtonHover: 'hover:bg-navy-600',
+  secondaryButtonBorder: 'border-navy-600',
+  activeTab: 'text-gold-400',
+  activeTabBorder: 'border-gold-500',
+  inactiveTab: 'text-navy-400',
+  inactiveTabHover: 'hover:text-navy-300 hover:border-navy-500',
+  tabBorder: 'border-navy-700',
+  errorTabText: 'text-red-400',
+  errorTabBorder: 'border-red-500',
+};
 
 const PLATFORM_ICONS = {
   discord: '🎮',
@@ -35,12 +67,6 @@ function AdminMirrorGroups() {
   const [message, setMessage] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
 
-  // Form states
-  const [newGroupName, setNewGroupName] = useState('');
-  const [newGroupDescription, setNewGroupDescription] = useState('');
-  const [newGroupMessageTypes, setNewGroupMessageTypes] = useState(['chat']);
-  const [newMemberServerId, setNewMemberServerId] = useState('');
-  const [newMemberDirection, setNewMemberDirection] = useState('bidirectional');
 
   useEffect(() => {
     fetchData();
@@ -72,23 +98,20 @@ function AdminMirrorGroups() {
     }
   }
 
-  async function handleCreateGroup(e) {
-    e.preventDefault();
+  async function handleCreateGroup(data) {
     setActionLoading(true);
     try {
       await adminApi.createMirrorGroup(communityId, {
-        name: newGroupName,
-        description: newGroupDescription,
-        config: { messageTypes: newGroupMessageTypes },
+        name: data.name,
+        description: data.description,
+        config: { messageTypes: data.messageTypes || ['chat'] },
       });
       setMessage({ type: 'success', text: 'Mirror group created' });
       setShowCreateModal(false);
-      setNewGroupName('');
-      setNewGroupDescription('');
-      setNewGroupMessageTypes(['chat']);
       fetchData();
     } catch (err) {
       setMessage({ type: 'error', text: err.response?.data?.error?.message || 'Failed to create group' });
+      throw err;
     } finally {
       setActionLoading(false);
     }
@@ -125,22 +148,20 @@ function AdminMirrorGroups() {
     }
   }
 
-  async function handleAddMember(e) {
-    e.preventDefault();
+  async function handleAddMember(data) {
     if (!selectedGroup) return;
     setActionLoading(true);
     try {
       await adminApi.addMirrorGroupMember(communityId, selectedGroup.id, {
-        communityServerId: parseInt(newMemberServerId, 10),
-        direction: newMemberDirection,
+        communityServerId: parseInt(data.serverId, 10),
+        direction: data.direction,
       });
       setMessage({ type: 'success', text: 'Server added to mirror group' });
       setShowAddMemberModal(false);
-      setNewMemberServerId('');
-      setNewMemberDirection('bidirectional');
       loadGroupDetails(selectedGroup.id);
     } catch (err) {
       setMessage({ type: 'error', text: err.response?.data?.error?.message || 'Failed to add server' });
+      throw err;
     } finally {
       setActionLoading(false);
     }
@@ -177,6 +198,57 @@ function AdminMirrorGroups() {
   const availableServers = selectedGroup
     ? servers.filter(s => !selectedGroup.members?.some(m => m.server.id === s.id))
     : servers;
+
+  // Field definitions for Create Mirror Group modal
+  const createGroupFields = useMemo(() => [
+    {
+      name: 'name',
+      type: 'text',
+      label: 'Name',
+      required: true,
+      placeholder: 'Enter group name',
+    },
+    {
+      name: 'description',
+      type: 'textarea',
+      label: 'Description',
+      placeholder: 'Optional description',
+      rows: 2,
+    },
+    {
+      name: 'messageTypes',
+      type: 'checkbox_multi',
+      label: 'Message Types',
+      defaultValue: ['chat'],
+      options: MESSAGE_TYPES.map(t => ({ value: t.id, label: t.label })),
+      helpText: 'Select which message types to mirror',
+    },
+  ], []);
+
+  // Field definitions for Add Server modal
+  const addServerFields = useMemo(() => [
+    {
+      name: 'serverId',
+      type: 'select',
+      label: 'Server',
+      required: true,
+      options: availableServers.map(server => ({
+        value: String(server.id),
+        label: `${PLATFORM_ICONS[server.platform] || ''} ${server.platformServerName} (${server.platform})`,
+      })),
+    },
+    {
+      name: 'direction',
+      type: 'select',
+      label: 'Direction',
+      defaultValue: 'bidirectional',
+      options: [
+        { value: 'bidirectional', label: 'Bidirectional (send and receive)' },
+        { value: 'send_only', label: 'Send Only (messages go out)' },
+        { value: 'receive_only', label: 'Receive Only (messages come in)' },
+      ],
+    },
+  ], [availableServers]);
 
   return (
     <div>
@@ -372,112 +444,31 @@ function AdminMirrorGroups() {
         </div>
       )}
 
-      {/* Create Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="card max-w-md w-full p-6">
-            <h3 className="text-xl font-semibold mb-4 text-sky-100">Create Mirror Group</h3>
-            <form onSubmit={handleCreateGroup}>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-navy-400 mb-1">Name</label>
-                <input
-                  type="text"
-                  value={newGroupName}
-                  onChange={(e) => setNewGroupName(e.target.value)}
-                  className="input w-full"
-                  required
-                />
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-navy-400 mb-1">Description</label>
-                <textarea
-                  value={newGroupDescription}
-                  onChange={(e) => setNewGroupDescription(e.target.value)}
-                  className="input w-full"
-                  rows={2}
-                />
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-navy-400 mb-2">Message Types</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {MESSAGE_TYPES.map((type) => (
-                    <label key={type.id} className="flex items-center space-x-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={newGroupMessageTypes.includes(type.id)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setNewGroupMessageTypes([...newGroupMessageTypes, type.id]);
-                          } else {
-                            setNewGroupMessageTypes(newGroupMessageTypes.filter(t => t !== type.id));
-                          }
-                        }}
-                        className="rounded border-navy-600"
-                      />
-                      <span className="text-sm text-sky-100">{type.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div className="flex justify-end space-x-3">
-                <button type="button" onClick={() => setShowCreateModal(false)} className="btn btn-secondary">
-                  Cancel
-                </button>
-                <button type="submit" disabled={actionLoading} className="btn btn-primary disabled:opacity-50">
-                  {actionLoading ? 'Creating...' : 'Create'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Create Mirror Group Modal */}
+      <FormModalBuilder
+        title="Create Mirror Group"
+        fields={createGroupFields}
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onSubmit={handleCreateGroup}
+        submitButtonText="Create"
+        cancelButtonText="Cancel"
+        width="md"
+        colors={waddlebotColors}
+      />
 
-      {/* Add Member Modal */}
-      {showAddMemberModal && selectedGroup && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="card max-w-md w-full p-6">
-            <h3 className="text-xl font-semibold mb-4 text-sky-100">Add Server to Mirror Group</h3>
-            <form onSubmit={handleAddMember}>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-navy-400 mb-1">Server</label>
-                <select
-                  value={newMemberServerId}
-                  onChange={(e) => setNewMemberServerId(e.target.value)}
-                  className="input w-full"
-                  required
-                >
-                  <option value="">Select a server...</option>
-                  {availableServers.map((server) => (
-                    <option key={server.id} value={server.id}>
-                      {PLATFORM_ICONS[server.platform]} {server.platformServerName} ({server.platform})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-navy-400 mb-1">Direction</label>
-                <select
-                  value={newMemberDirection}
-                  onChange={(e) => setNewMemberDirection(e.target.value)}
-                  className="input w-full"
-                >
-                  <option value="bidirectional">↔️ Bidirectional (send and receive)</option>
-                  <option value="send_only">→ Send Only (messages go out)</option>
-                  <option value="receive_only">← Receive Only (messages come in)</option>
-                </select>
-              </div>
-              <div className="flex justify-end space-x-3">
-                <button type="button" onClick={() => setShowAddMemberModal(false)} className="btn btn-secondary">
-                  Cancel
-                </button>
-                <button type="submit" disabled={actionLoading || !newMemberServerId} className="btn btn-primary disabled:opacity-50">
-                  {actionLoading ? 'Adding...' : 'Add Server'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Add Server Modal */}
+      <FormModalBuilder
+        title="Add Server to Mirror Group"
+        fields={addServerFields}
+        isOpen={showAddMemberModal && selectedGroup !== null}
+        onClose={() => setShowAddMemberModal(false)}
+        onSubmit={handleAddMember}
+        submitButtonText="Add Server"
+        cancelButtonText="Cancel"
+        width="md"
+        colors={waddlebotColors}
+      />
     </div>
   );
 }

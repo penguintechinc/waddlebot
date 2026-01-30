@@ -84,6 +84,7 @@ export async function register(req, res, next) {
     }
 
     // Create user
+    // Username defaults to email for consistency across SSO/local logins
     const result = await query(
       `INSERT INTO hub_users
        (email, password_hash, username, is_active, email_verified, email_verification_token, email_verification_expires, created_at)
@@ -92,7 +93,7 @@ export async function register(req, res, next) {
       [
         email.toLowerCase(),
         passwordHash,
-        username || email.split('@')[0],
+        username || email.toLowerCase(),
         !requireVerification, // email_verified is true only if verification not required
         verificationToken,
         verificationExpires
@@ -1237,7 +1238,7 @@ async function exchangeOAuthCode(platform, code, redirectUri) {
 
       return {
         id: userInfo.id,
-        username: channelName || userInfo.email.split('@')[0],
+        username: channelName || userInfo.email.toLowerCase(),
         email: userInfo.email,
         avatar_url: userInfo.picture,
         access_token: tokens.access_token,
@@ -1316,9 +1317,9 @@ async function exchangeOAuthCode(platform, code, redirectUri) {
  */
 async function addUserToGlobalCommunity(userId) {
   try {
-    // Find the global community
+    // Find the global community (check config->>'is_global')
     const globalCommunity = await query(
-      'SELECT id FROM communities WHERE is_global = true AND is_active = true LIMIT 1'
+      "SELECT id FROM communities WHERE config->>'is_global' = 'true' AND is_active = true LIMIT 1"
     );
 
     if (globalCommunity.rows.length === 0) {

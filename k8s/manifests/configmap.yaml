@@ -9,64 +9,81 @@ metadata:
     app.kubernetes.io/component: configuration
 data:
   # Database Configuration
-  DATABASE_URL: "postgres://waddlebot:${POSTGRES_PASSWORD}@postgres-service:5432/waddlebot"
-  DATABASE_HOST: "postgres-service"
+  # NOTE: DATABASE_URL is constructed in deployments using secretKeyRef for password
+  # Router module uses component-based config (DATABASE_HOST, etc.)
+  DATABASE_HOST: "infra-postgres"
   DATABASE_PORT: "5432"
   DATABASE_NAME: "waddlebot"
   DATABASE_USER: "waddlebot"
   DB_POOL_SIZE: "20"
   DB_MAX_OVERFLOW: "10"
+  # Read replica for router load balancing
+  READ_REPLICA_HOST: "infra-postgres-replica"
+  READ_REPLICA_PORT: "5432"
 
   # Redis Configuration
-  REDIS_HOST: "redis-service"
+  REDIS_HOST: "infra-redis"
   REDIS_PORT: "6379"
   REDIS_DB: "0"
+  # Module-specific Redis key prefixes
+  REDIS_KEY_PREFIX: "waddlebot:"
 
   # MinIO Configuration
-  MINIO_ENDPOINT: "minio-service:9000"
-  MINIO_BUCKET: "waddlebot"
-  MINIO_ACCESS_KEY: "minioadmin"
+  MINIO_ENDPOINT: "infra-minio:9000"
+  MINIO_BUCKET: "waddlebot-assets"
+  S3_STORAGE_ENABLED: "true"
+  S3_BUCKET_NAME: "waddlebot-assets"
+  S3_ENDPOINT_URL: "http://infra-minio:9000"
 
   # Qdrant Configuration
-  QDRANT_HOST: "qdrant-service"
+  QDRANT_HOST: "infra-qdrant"
   QDRANT_PORT: "6333"
-  QDRANT_COLLECTION: "waddlebot_vectors"
+  QDRANT_URL: "http://infra-qdrant:6333"
+  MEM0_VECTOR_STORE: "qdrant"
 
   # Ollama Configuration
-  OLLAMA_HOST: "http://ollama-service:11434"
-  OLLAMA_MODEL: "llama2"
+  OLLAMA_HOST: "ai-ollama"
+  OLLAMA_PORT: "11434"
+  OLLAMA_MODEL: "tinyllama"
+  OLLAMA_USE_TLS: "false"
+  AI_PROVIDER: "ollama"
 
   # Service URLs - Processing
-  ROUTER_URL: "http://router-service:8000"
-  ROUTER_HOST: "router-service"
+  ROUTER_URL: "http://core-router:8000"
+  ROUTER_API_URL: "http://core-router:8000"
+  ROUTER_HOST: "core-router"
   ROUTER_PORT: "8000"
 
   # Service URLs - Core
-  IDENTITY_URL: "http://identity-core:8050"
-  LABELS_URL: "http://labels-core:8051"
-  BROWSER_SOURCE_URL: "http://browser-source:8052"
-  REPUTATION_URL: "http://reputation:8053"
-  COMMUNITY_URL: "http://community:8054"
+  IDENTITY_API_URL: "http://core-identity:8050"
+  LABELS_API_URL: "http://core-labels:8023"
+  BROWSER_SOURCE_API_URL: "http://core-browser-source:8027"
+  REPUTATION_API_URL: "http://core-reputation:8021"
+  COMMUNITY_URL: "http://core-community:8020"
 
-  # Service URLs - Action Interactive
-  AI_INTERACTION_URL: "http://ai-interaction:8005"
-  ALIAS_INTERACTION_URL: "http://alias-interaction:8006"
-  SHOUTOUT_INTERACTION_URL: "http://shoutout-interaction:8007"
-  INVENTORY_INTERACTION_URL: "http://inventory-interaction:8008"
-  CALENDAR_INTERACTION_URL: "http://calendar-interaction:8009"
-  MEMORIES_INTERACTION_URL: "http://memories-interaction:8010"
-  YOUTUBE_MUSIC_INTERACTION_URL: "http://youtube-music-interaction:8011"
-  SPOTIFY_INTERACTION_URL: "http://spotify-interaction:8012"
+  # Service URLs - Action Interactive (matches docker-compose.yml ports)
+  AI_INTERACTION_URL: "http://interactive-ai:8005"
+  ALIAS_INTERACTION_URL: "http://interactive-alias:8010"
+  SHOUTOUT_API_URL: "http://interactive-shoutout:8011"
+  INVENTORY_API_URL: "http://interactive-inventory:8024"
+  CALENDAR_API_URL: "http://interactive-calendar:8030"
+  MEMORIES_API_URL: "http://interactive-memories:8031"
+  YOUTUBE_MUSIC_URL: "http://interactive-youtube-music:8025"
+  SPOTIFY_URL: "http://interactive-spotify:8026"
+  LOYALTY_API_URL: "http://interactive-loyalty:8032"
 
-  # Service URLs - Trigger Receivers
-  TWITCH_RECEIVER_URL: "http://twitch-receiver:8020"
-  DISCORD_RECEIVER_URL: "http://discord-receiver:8021"
-  SLACK_RECEIVER_URL: "http://slack-receiver:8022"
+  # Service URLs - Trigger Receivers (matches docker-compose.yml)
+  TWITCH_RECEIVER_URL: "http://trigger-twitch:8002"
+  DISCORD_RECEIVER_URL: "http://trigger-discord:8003"
+  SLACK_RECEIVER_URL: "http://trigger-slack:8004"
+  YOUTUBE_RECEIVER_URL: "http://trigger-youtube:8006"
+  KICK_RECEIVER_URL: "http://trigger-kick:8007"
 
   # Service URLs - Admin
-  HUB_URL: "http://hub-service:8080"
-  HUB_HOST: "hub-service"
-  HUB_PORT: "8080"
+  HUB_URL: "http://hub-api:8060"
+  HUB_API_URL: "http://hub-api:8060"
+  HUB_HOST: "hub-api"
+  HUB_PORT: "8060"
 
   # Application Configuration
   RELEASE_MODE: "false"

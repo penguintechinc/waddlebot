@@ -278,14 +278,14 @@ Returns the Redis port.
 Create the name of the config map for common configuration
 */}}
 {{- define "waddlebot.commonConfigName" -}}
-{{- printf "%s-common-config" (include "waddlebot.fullname" .) }}
+{{- printf "%s-config" (include "waddlebot.fullname" .) }}
 {{- end }}
 
 {{/*
 Create the name of the secret for common secrets
 */}}
 {{- define "waddlebot.commonSecretName" -}}
-{{- printf "%s-common-secret" (include "waddlebot.fullname" .) }}
+{{- printf "%s-secrets" (include "waddlebot.fullname" .) }}
 {{- end }}
 
 {{/*
