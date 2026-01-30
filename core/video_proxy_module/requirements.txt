@@ -5,7 +5,7 @@ hypercorn==0.17.3
 # gRPC
 grpcio==1.63.0
 grpcio-tools==1.63.0
-protobuf==5.27.0
+protobuf==6.33.5
 
 # Database
 pydal==20241111.1
