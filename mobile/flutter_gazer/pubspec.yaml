@@ -21,7 +21,9 @@ dependencies:
   flutter_secure_storage: ^9.0.0
   package_info_plus: ^9.0.0
   flutter_libs:
-    path: ../../../penguin-libs/packages/flutter_libs
+    git:
+      url: https://github.com/penguintechinc/penguin-libs.git
+      path: packages/flutter_libs
 
 dev_dependencies:
   flutter_test:
