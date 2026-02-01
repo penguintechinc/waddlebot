@@ -301,6 +301,14 @@ class _MainScreenState extends State<MainScreen> {
           Navigator.of(context).pop();
         }
       },
+      onRouteSelected: (routePath) {
+        // Find matching AppRoute and navigate to it
+        final route = AppRoute.values.firstWhere(
+          (r) => r.path == routePath,
+          orElse: () => AppRoute.streaming,
+        );
+        _navigateToRoute(route);
+      },
     );
   }
 

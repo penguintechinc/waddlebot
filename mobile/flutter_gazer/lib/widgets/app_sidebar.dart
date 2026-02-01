@@ -9,12 +9,14 @@ class AppSidebar extends StatefulWidget {
   final User currentUser;
   final VoidCallback onNavigate;
   final String selectedRoute;
+  final Function(String)? onRouteSelected;
 
   const AppSidebar({
     Key? key,
     required this.currentUser,
     required this.onNavigate,
     required this.selectedRoute,
+    this.onRouteSelected,
   }) : super(key: key);
 
   @override
@@ -114,7 +116,12 @@ class _AppSidebarState extends State<AppSidebar> {
     widget.onNavigate();
     // Navigate based on role-based permissions
     if (_canAccessRoute(route)) {
-      Navigator.of(context).pushNamed(route);
+      // Use custom route callback if provided, otherwise fall back to named routes
+      if (widget.onRouteSelected != null) {
+        widget.onRouteSelected!(route);
+      } else {
+        Navigator.of(context).pushNamed(route);
+      }
     } else {
       _showAccessDenied(route);
     }
