@@ -1,4 +1,11 @@
-name: Android App Build
+# LEGACY: Kotlin Android App Workflow
+# This workflow is for the legacy Kotlin-based Android application in Premium/Android/
+# New Android development should use flutter_gazer instead.
+# See: https://github.com/penguintechinc/flutter_gazer
+#
+# Deprecated: This workflow will be removed in a future version.
+# Maintenance Mode: Critical bug fixes and security patches only.
+name: Android App Build (LEGACY)
 
 on:
   push:
