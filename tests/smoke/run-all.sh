@@ -74,6 +74,14 @@ if [ "$ENV" = "local" ]; then
     run_test "Page Load Smoke Test" \
         "cd '$SCRIPT_DIR' && BASE_URL=http://localhost:3000 node smoke-pages.js"
 
+    # Android build smoke test (if Flutter is available)
+    if command -v flutter &> /dev/null; then
+        run_test "Android Build Smoke Test" \
+            "cd '$SCRIPT_DIR' && bash android-smoke.sh"
+    else
+        echo -e "${YELLOW}⊘ Skipping Android smoke test (Flutter not installed)${NC}"
+    fi
+
 elif [ "$ENV" = "beta" ]; then
     # Beta environment tests
     run_test "Beta API Smoke Test (Basic)" \
@@ -90,6 +98,14 @@ elif [ "$ENV" = "beta" ]; then
 
     run_test "Beta Page Load Smoke Test" \
         "cd '$SCRIPT_DIR' && BASE_URL=https://waddlebot.penguintech.io node smoke-pages.js"
+
+    # Android build smoke test (if Flutter is available)
+    if command -v flutter &> /dev/null; then
+        run_test "Android Build Smoke Test" \
+            "cd '$SCRIPT_DIR' && bash android-smoke.sh"
+    else
+        echo -e "${YELLOW}⊘ Skipping Android smoke test (Flutter not installed)${NC}"
+    fi
 
 else
     echo -e "${RED}Unknown environment: $ENV${NC}"
