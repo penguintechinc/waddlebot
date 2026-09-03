@@ -1,8 +1,8 @@
 ## Waddlebot - Alpha Environment Overrides
 global:
-  imageRegistry: ""
+  imageRegistry: "localhost:32000/waddlebot"
   imageTag: "alpha"
-  imagePullPolicy: Never
+  imagePullPolicy: IfNotPresent
   # gRPC transport TLS (PR #264) -- alpha is single-node local dev with no cert material
   # provisioned, so it uses flask_core's own documented dev-only escape hatch instead of
   # real certs (refused outright under production posture, so this can never leak into
@@ -47,6 +47,12 @@ infrastructure:
 # rather than crash-looping/degrading against an unreachable backend. Now global (T10):
 # svc-ingest/svc-process/svc-action all render WADDLES_AI_ENABLED from this same value.
 pipeline:
+  # T10 (v3 demo) — service images (locally built, pushed to localhost:32000)
+  hubApiImage: "localhost:32000/waddlebot/hub-api:alpha"
+  svcIngestImage: "localhost:32000/waddlebot/svc-ingest:alpha"
+  svcProcessImage: "localhost:32000/waddlebot/svc-process:alpha"
+  svcActionImage: "localhost:32000/waddlebot/svc-action:alpha"
+
   hubApi:
     aiEnabled: false
   # T10 (v3 demo) -- minimal 5-of-8 container demo set. Only svc-ingest, svc-process,
@@ -134,7 +140,7 @@ modules:
 ingress:
   enabled: false
 spire:
-  enabled: true
+  enabled: false
   environment: "alpha"
 
 # PostHog stays OFF by default even in alpha (trimmed stack still budgets

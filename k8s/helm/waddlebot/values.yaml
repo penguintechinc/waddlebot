@@ -444,7 +444,7 @@ pipeline:
 
   svcIngest:
     enabled: true
-    port: 8200
+    port: 8210
     replicas: 2
     # T10 (v3 demo) -- sane defaults for svc-ingest's held-socket lease (Discord
     # gateway / Twitch IRC single-connection ownership via Valkey), see
@@ -463,7 +463,7 @@ pipeline:
 
   svcProcess:
     enabled: true
-    port: 8201
+    port: 8211
     replicas: 2
     resources:
       requests:
@@ -475,7 +475,7 @@ pipeline:
 
   svcAction:
     enabled: true
-    port: 8202
+    port: 8212
     replicas: 2
     resources:
       requests:

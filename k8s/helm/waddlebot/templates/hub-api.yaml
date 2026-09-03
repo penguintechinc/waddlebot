@@ -32,10 +32,8 @@ spec:
       {{- include "waddlebot.dbMigrateInitContainer" . | nindent 6 }}
       containers:
       - name: hub-api
-        # SKELETON PLACEHOLDER — no Dockerfile/CI image exists yet for hub-api; pinned to
-        # the repo's existing Python base digest rather than inventing one or using a mutable
-        # tag. Replace once hub-api has its own Dockerfile and CI build.
-        image: "{{ .Values.pipeline.pythonBaseImage }}"
+        # T10 (v3 demo) — use locally-built image for alpha
+        image: "{{ .Values.pipeline.hubApiImage | default .Values.pipeline.pythonBaseImage }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         securityContext:
           {{- toYaml .Values.securityContext | nindent 10 }}
