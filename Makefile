@@ -1,8 +1,14 @@
 .PHONY: dev test test-unit test-integration test-e2e test-functional test-security \
         smoke-test lint build docker-build docker-push deploy-dev deploy-prod \
-        seed-mock-data clean pre-commit run-ai-local check-docs
+        seed-mock-data clean pre-commit run-ai-local check-docs grpc-dev-certs
 
-dev:
+# Dev-only self-signed CA + server/client cert pair for the gRPC transport
+# TLS required by every service in docker-compose.yml (security audit A02).
+# Idempotent -- skips regeneration if certs/grpc-dev is already populated.
+grpc-dev-certs:
+	@bash scripts/setup/generate_dev_grpc_certs.sh
+
+dev: grpc-dev-certs
 	docker-compose up
 
 build:
@@ -28,12 +34,12 @@ test-unit:
 
 test-integration:
 	@echo "Running integration tests..."
-	@[ -d tests/integration ] || $(error tests/integration directory not found)
+	@test -d tests/integration || { echo "tests/integration directory not found" >&2; exit 1; }
 	@bash scripts/test-api-all.sh
 
 test-e2e:
 	@echo "Running e2e tests..."
-	@[ -f scripts/e2e-test-alpha.sh ] || $(error scripts/e2e-test-alpha.sh not found)
+	@test -f scripts/e2e-test-alpha.sh || { echo "scripts/e2e-test-alpha.sh not found" >&2; exit 1; }
 	@bash scripts/e2e-test-alpha.sh
 
 test-functional:
@@ -44,12 +50,12 @@ test-security:
 
 smoke-test:
 	@echo "Running smoke tests..."
-	@[ -f tests/alpha-smoke-test.sh ] || $(error tests/alpha-smoke-test.sh not found)
+	@test -f tests/alpha-smoke-test.sh || { echo "tests/alpha-smoke-test.sh not found" >&2; exit 1; }
 	@bash tests/alpha-smoke-test.sh
 
 seed-mock-data:
 	@echo "Seeding mock data..."
-	@[ -f scripts/seed-admin.sh ] || $(error scripts/seed-admin.sh not found)
+	@test -f scripts/seed-admin.sh || { echo "scripts/seed-admin.sh not found" >&2; exit 1; }
 	@bash scripts/seed-admin.sh
 
 clean:
@@ -59,7 +65,7 @@ clean:
 
 deploy-dev:
 	@echo "Deploy to dev/alpha environment..."
-	@[ -f scripts/deploy-alpha.sh ] || $(error scripts/deploy-alpha.sh not found)
+	@test -f scripts/deploy-alpha.sh || { echo "scripts/deploy-alpha.sh not found" >&2; exit 1; }
 	@bash scripts/deploy-alpha.sh
 
 deploy-prod:
@@ -81,3 +87,62 @@ pre-commit:
 	@$(MAKE) test-security
 	@$(MAKE) test
 	@echo "=== Pre-commit complete ==="
+
+# --- Gazer Mobile 2.0 (mobile/gazer) -----------------------------------
+# Every target below runs inside the gazer-toolchain image -- never on the
+# host. Host Flutter (snap) is never invoked directly; see docs/superpowers/
+# specs/2026-09-07-gazer-mobile-v2-design.md Toolchain, CI, Versioning.
+.PHONY: mobile-toolchain mobile-run mobile-lint mobile-test mobile-test-android mobile-build mobile-build-signed mobile-security mobile-codegen mobile-clean mobile-test-integration mobile-screenshots seed-mock-data-mobile
+# mobile-test-integration is added later by Task 21; mobile-screenshots and
+# seed-mock-data-mobile are added later by Task 26 -- pre-declared phony here
+# (harmless before those targets exist) so the whole mobile-* target set is
+# uniformly a .PHONY gate from the very first commit.
+
+MOBILE_IMAGE := gazer-toolchain:3.47.2
+# MOBILE_RUN_EXTRA_ARGS is a hook for target-specific `docker run` flags (e.g.
+# mobile-build-signed's -e GAZER_REQUIRE_SIGNING=1 below) that must land BEFORE $(MOBILE_IMAGE)
+# on the command line -- `docker run` only parses options preceding the image argument, so a
+# flag appended after $(MOBILE_RUN) in a recipe would be silently treated as part of the
+# container's own command instead. MOBILE_RUN is deliberately `=` (recursive), not `:=`, so this
+# variable is re-expanded per invocation and picks up a target-specific override (see Make's
+# "target-specific variable values"). Empty by default -- no effect on any existing target.
+MOBILE_RUN_EXTRA_ARGS ?=
+MOBILE_RUN = docker run --rm --user $(shell id -u):$(shell id -g) \
+	-v $(CURDIR)/mobile/gazer:/work \
+	-v gazer-pub-cache:/home/appuser/.pub-cache \
+	-v gazer-gradle:/home/appuser/.gradle \
+	$(MOBILE_RUN_EXTRA_ARGS) \
+	-w /work $(MOBILE_IMAGE)
+
+mobile-toolchain:
+	docker build -t $(MOBILE_IMAGE) mobile/gazer
+
+mobile-run:
+	@test -n "$(CMD)" || { echo "usage: make mobile-run CMD=\"<command>\"" >&2; exit 1; }
+	$(MOBILE_RUN) bash -lc "$(CMD)"
+
+mobile-lint:
+	$(MOBILE_RUN) bash -lc "set -euo pipefail; flutter analyze; dart format --set-exit-if-changed .; if [ -d android ]; then cd android && ./gradlew ktlintCheck lint; fi"
+
+mobile-test:
+	$(MOBILE_RUN) bash -lc "set -euo pipefail; flutter test --coverage; bash scripts/coverage_gate.sh 90 coverage/lcov.info lcov"
+
+mobile-test-android:
+	$(MOBILE_RUN) bash -lc "set -euo pipefail; cd android && ./gradlew testDebugUnitTest jacocoTestReport && cd .. && bash scripts/coverage_gate.sh 90 android/app/build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml jacoco"
+
+mobile-build:
+	$(MOBILE_RUN) bash -lc "set -euo pipefail; flutter build apk --split-per-abi --obfuscate --split-debug-info=build/symbols; flutter build appbundle --obfuscate --split-debug-info=build/symbols"
+
+mobile-build-signed: MOBILE_RUN_EXTRA_ARGS := -e GAZER_REQUIRE_SIGNING=1
+mobile-build-signed:
+	@test -f mobile/gazer/android/key.properties || { echo "mobile-build-signed requires mobile/gazer/android/key.properties -- see docs/superpowers/plans/2026-09-07-gazer-mobile-v2-m1.md Task 25 Step 4 (one-time keystore procedure) or Step 8c (throwaway local keystore for testing)" >&2; exit 1; }
+	$(MOBILE_RUN) bash -lc "set -euo pipefail; flutter build apk --split-per-abi --obfuscate --split-debug-info=build/symbols; flutter build appbundle --obfuscate --split-debug-info=build/symbols"
+
+mobile-security:
+	$(MOBILE_RUN) bash -lc "set -euo pipefail; bash scripts/osv_scan_assert.sh pubspec.lock; bash scripts/osv_scan_assert.sh android/app/gradle.lockfile; semgrep --config auto --error .; gitleaks detect --source . --no-git -v"
+
+mobile-codegen:
+	$(MOBILE_RUN) bash -lc "set -euo pipefail; dart run pigeon --input pigeons/pipeline.dart; dart run build_runner build --delete-conflicting-outputs; flutter gen-l10n"
+
+mobile-clean:
+	$(MOBILE_RUN) bash -lc "set -euo pipefail; flutter clean; if [ -d android ]; then cd android && ./gradlew clean; fi"

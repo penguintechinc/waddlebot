@@ -186,6 +186,9 @@ config/kong/ssl/*.key
 config/kong/ssl/*.crt
 config/kong/ssl/*.pem
 
+# Dev-only gRPC transport TLS certs (generate_dev_grpc_certs.sh), never committed
+certs/grpc-dev/
+
 # Node.js
 node_modules/
 
@@ -198,3 +201,14 @@ mobile/flutter_gazer/android/build/
 *.apk
 *.aab
 
+
+# Superpowers SDD scratch workspace (ledger, briefs, review packages)
+.superpowers/
+
+# Gazer Mobile 2.0 (mobile/gazer) -- build/ and **/.gradle/ above already
+# cover this app's build output and Gradle caches at any depth.
+mobile/gazer/.dart_tool/
+mobile/gazer/coverage/
+mobile/gazer/android/local.properties
+mobile/gazer/android/key.properties
+mobile/gazer/android/*.jks
