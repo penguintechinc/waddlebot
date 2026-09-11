@@ -92,18 +92,23 @@ pre-commit:
 # Every target below runs inside the gazer-toolchain image -- never on the
 # host. Host Flutter (snap) is never invoked directly; see docs/superpowers/
 # specs/2026-09-07-gazer-mobile-v2-design.md Toolchain, CI, Versioning.
-.PHONY: mobile-toolchain mobile-run mobile-lint mobile-test mobile-test-android mobile-build mobile-security mobile-codegen mobile-clean mobile-test-integration mobile-screenshots seed-mock-data-mobile
+.PHONY: mobile-toolchain mobile-run mobile-lint mobile-test mobile-test-android mobile-build mobile-build-signed mobile-security mobile-codegen mobile-clean mobile-test-integration mobile-screenshots seed-mock-data-mobile
 # mobile-test-integration is added later by Task 21; mobile-screenshots and
 # seed-mock-data-mobile are added later by Task 26 -- pre-declared phony here
 # (harmless before those targets exist) so the whole mobile-* target set is
 # uniformly a .PHONY gate from the very first commit.
 
 MOBILE_IMAGE := gazer-toolchain:3.47.2
-MOBILE_RUN := docker run --rm --user $(shell id -u):$(shell id -g) \
+# MOBILE_RUN_EXTRA_ARGS is empty by default; mobile-build-signed sets it (target-specific
+# variable, below) to pass -e GAZER_REQUIRE_SIGNING=1 to the container. It must land BEFORE
+# $(MOBILE_IMAGE) -- docker run only parses flags preceding the image argument -- so MOBILE_RUN
+# is `=` (recursive, re-expanded per use) rather than `:=`, and the hook sits ahead of `-w /work`.
+MOBILE_RUN_EXTRA_ARGS ?=
+MOBILE_RUN = docker run --rm --user $(shell id -u):$(shell id -g) \
 	-v $(CURDIR)/mobile/gazer:/work \
 	-v gazer-pub-cache:/home/appuser/.pub-cache \
 	-v gazer-gradle:/home/appuser/.gradle \
-	-w /work $(MOBILE_IMAGE)
+	$(MOBILE_RUN_EXTRA_ARGS) -w /work $(MOBILE_IMAGE)
 
 mobile-toolchain:
 	docker build -t $(MOBILE_IMAGE) mobile/gazer
@@ -124,6 +129,23 @@ mobile-test-android:
 mobile-build:
 	$(MOBILE_RUN) bash -lc "set -euo pipefail; flutter build apk --split-per-abi --obfuscate --split-debug-info=build/symbols; flutter build appbundle --obfuscate --split-debug-info=build/symbols"
 
+mobile-build-signed: MOBILE_RUN_EXTRA_ARGS := -e GAZER_REQUIRE_SIGNING=1
+mobile-build-signed:
+	@test -f mobile/gazer/android/key.properties || { echo "mobile-build-signed requires mobile/gazer/android/key.properties -- see docs/superpowers/plans/2026-09-07-gazer-mobile-v2-m1.md Task 25 Step 4 (one-time keystore procedure) or Step 8c (throwaway local keystore for testing)" >&2; exit 1; }
+	$(MOBILE_RUN) bash -lc "set -euo pipefail; flutter build apk --split-per-abi --obfuscate --split-debug-info=build/symbols; flutter build appbundle --obfuscate --split-debug-info=build/symbols"
+
+# Gates on android/app/gradle.lockfile, which locks only the classpaths :app actually ships
+# (controller ruling R23) -- osv-scanner never sees build-tooling-only dependencies (AGP's
+# Unified Test Platform, ktlint, kotlin compiler tooling), which this project cannot meaningfully
+# remediate and which never reach a device. R23 Step 3 also asked for a non-gating advisory scan
+# of the FULL dependency graph (all configurations, tooling included) alongside this gate.
+# Omitted: Gradle's dependency-locking writer has no supported option to target a lockfile path
+# other than the project's own gradle.lockfile, so a second full-graph scan would require either
+# repeatedly toggling lockAllConfigurations() on and off across separate ./gradlew invocations (a
+# multi-minute round trip on every `make mobile-security`, and disruptive to the real,
+# shipped-classpath lockfile this target gates on) or a bespoke Gradle init script/plugin to
+# redirect the lock output -- both too invasive to add reliably within this task. Noted here per
+# R23's explicit escape hatch rather than left unexplained.
 mobile-security:
 	$(MOBILE_RUN) bash -lc "set -euo pipefail; osv-scanner --lockfile=pubspec.lock; (cd android && osv-scanner -r . --allow-no-lockfiles); semgrep --config auto --error .; gitleaks detect --source . --no-git -v"
 
