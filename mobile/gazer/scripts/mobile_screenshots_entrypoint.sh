@@ -11,6 +11,14 @@
 # the tablet shots, tears it down. scripts/decode_screenshots.py (Task 21)
 # is additive across both runs.
 #
+# Produces exactly five files, one per distinct screen, which
+# scripts/collect_screenshots.sh then copies into docs/screenshots/gazer/
+# and asserts on by name:
+#   phone  -> home-idle-phone, settings-phone, status-panel-phone
+#   tablet -> home-tablet, settings-tablet
+# (Ruling R42: "settings-tablet" replaced "status-panel-tablet", which
+# rendered the same screen as "home-tablet".)
+#
 # Mirrors scripts/run_integration_test.sh's proven boot/build/grant/drive
 # sequence rather than `flutter test integration_test/...`: only
 # `flutter drive --driver=test_driver/integration_test.dart` writes
