@@ -7,10 +7,13 @@ import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gazer/models/gazer_settings.dart';
 import 'package:gazer/models/license_state.dart';
+import 'package:gazer/models/pipeline_state.dart';
 import 'package:gazer/models/stream_target_settings.dart';
+import 'package:gazer/pigeon/pipeline.g.dart';
 import 'package:gazer/providers/connectivity_provider.dart';
 import 'package:gazer/providers/devices_provider.dart';
 import 'package:gazer/providers/license_provider.dart';
+import 'package:gazer/providers/pipeline_provider.dart';
 import 'package:gazer/providers/settings_provider.dart';
 import 'package:gazer/providers/telemetry_provider.dart';
 import 'package:gazer/providers/update_provider.dart';
@@ -22,18 +25,22 @@ import '../helpers/fake_host_api.dart';
 import '../helpers/fakes.dart';
 import '../helpers/pump_app.dart';
 
-/// Golden coverage for [StatusPanel] at the two breakpoints: phone
-/// (bottom sheet, portrait) and tablet (persistent side pane, landscape).
+/// Golden coverage for [StatusPanel] at the four states the spec's Testing
+/// Strategy names: phone portrait, tablet landscape, error, reconnecting.
 ///
 /// Per the task brief: these run under `flutter_test`'s default test
 /// font (no `flutter_test_config.dart`, no bundled Roboto) — deterministic
 /// across every machine that runs `make mobile-run` regardless of host
 /// fonts, so they verify layout and colour, not real glyph shapes. Real
 /// glyphs are covered by the marketing-screenshots pass instead.
+///
+/// The host API is seeded with two cameras: the previous goldens baked in
+/// an empty source picker and a permanently disabled Go Live button, which
+/// is not the state any user sees.
 void main() {
   late FakeGazerHostApi hostApi;
 
-  List<Override> overrides() => <Override>[
+  List<Override> overrides({PipelineState? state}) => <Override>[
     settingsRepositoryProvider.overrideWithValue(
       FakeSettingsRepository(
         GazerSettings.defaults().copyWith(
@@ -74,10 +81,30 @@ void main() {
         deploymentEnvironment: 'test',
       ),
     ),
+    // A fixed state stream, not a live controller: the error and
+    // reconnecting goldens must render one deterministic frame, and a real
+    // ReconnectingState carries a backoff timer that would still be
+    // pending at teardown.
+    if (state != null)
+      pipelineStateProvider.overrideWith(
+        (Ref ref) => Stream<PipelineState>.value(state),
+      ),
   ];
 
   setUp(() {
-    hostApi = FakeGazerHostApi();
+    hostApi = FakeGazerHostApi()
+      ..videoDevices = <VideoDevice>[
+        VideoDevice(
+          id: 'camera:back',
+          kind: VideoDeviceKind.backCamera,
+          name: 'Back Camera',
+        ),
+        VideoDevice(
+          id: 'camera:front',
+          kind: VideoDeviceKind.frontCamera,
+          name: 'Front Camera',
+        ),
+      ];
   });
 
   testWidgets('status panel — phone portrait', (WidgetTester tester) async {
@@ -103,6 +130,40 @@ void main() {
     await expectLater(
       find.byType(StatusPanel),
       matchesGoldenFile('status_panel_tablet_landscape.png'),
+    );
+  });
+
+  testWidgets('status panel — error state', (WidgetTester tester) async {
+    await pumpGazerApp(
+      tester,
+      overrides: overrides(
+        state: const ErrorState(
+          GazerError(code: GazerErrorCode.rtmpConnectFailed),
+        ),
+      ),
+      size: const Size(390, 844),
+    );
+    await tester.tap(find.byType(StatusChip));
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(StatusPanel),
+      matchesGoldenFile('status_panel_error.png'),
+    );
+  });
+
+  testWidgets('status panel — reconnecting state', (WidgetTester tester) async {
+    await pumpGazerApp(
+      tester,
+      overrides: overrides(
+        state: const ReconnectingState(2, Duration(seconds: 4)),
+      ),
+      size: const Size(390, 844),
+    );
+    await tester.tap(find.byType(StatusChip));
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(StatusPanel),
+      matchesGoldenFile('status_panel_reconnecting.png'),
     );
   });
 }
