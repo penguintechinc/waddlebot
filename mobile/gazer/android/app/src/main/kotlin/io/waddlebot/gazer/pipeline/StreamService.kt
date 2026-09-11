@@ -58,8 +58,14 @@ class RelayPipelineListener : PipelineListener {
 /**
  * Foreground service hosting the live GazerPipeline. Owns the persistent "gazer.stream"
  * notification (with a Stop action broadcasting ACTION_STOP), a partial wake lock held only
- * while streaming, and stops the pipeline in onDestroy so a killed/removed app never leaves
- * RootEncoder running against a camera or socket.
+ * while streaming, and stops the pipeline on task removal and in onDestroy so a killed/removed app
+ * never leaves RootEncoder running against a camera or socket.
+ *
+ * Every decision this service makes is delegated to an already-unit-tested helper -
+ * [WakeLockController], [ServiceTeardownController], [startForegroundOrReportDenied],
+ * [foregroundServiceType], [isStopAction], [buildStreamPipeline] - because the Service lifecycle
+ * callbacks themselves cannot run on the JVM unit-test target and are JaCoCo-excluded (ruling R29).
+ * Anything added here later must be extracted the same way, never left inline.
  */
 class StreamService : Service() {
     companion object {
@@ -102,22 +108,23 @@ class StreamService : Service() {
 
     private val wakeLockController = WakeLockController(acquire = ::acquireWakeLock, release = ::releaseWakeLock)
 
+    private val teardownController =
+        ServiceTeardownController(
+            stopPipeline = { pipeline.stop() },
+            dropForegroundNotification = { stopForeground(STOP_FOREGROUND_REMOVE) },
+            stopService = { stopSelf() },
+        )
+
     private val stopReceiver =
         object : BroadcastReceiver() {
             override fun onReceive(
                 context: Context,
                 intent: Intent,
             ) {
-                // isStopAction is the only decision here (already extracted, unit-tested in
-                // StreamServicePoliciesTest); the resulting teardown sequence below is fixed and
-                // entirely Service-framework-bound (pipeline.stop() needs the live pipeline,
-                // stopForeground()/stopSelf() need a real Service instance), so there is no
-                // further pure logic to pull out of this receiver.
-                if (isStopAction(intent.action)) {
-                    pipeline.stop()
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
-                }
+                // isStopAction and the teardown ordering are the only decisions here, and both are
+                // extracted and unit-tested (StreamServicePoliciesTest); what is left is purely
+                // Service-framework-bound plumbing.
+                if (isStopAction(intent.action)) teardownController.stopEverything()
             }
         }
 
@@ -137,7 +144,10 @@ class StreamService : Service() {
                     state: NativePipelineState,
                     error: GazerErrorCode?,
                     detail: String?,
-                ) = wakeLockController.onState(state)
+                ) {
+                    wakeLockController.onState(state)
+                    teardownController.onState(state)
+                }
 
                 override fun onStats(sample: StatsSample) = Unit
 
@@ -153,18 +163,36 @@ class StreamService : Service() {
     ): Int {
         val notification = buildNotification()
         val serviceType = foregroundServiceType(Build.VERSION.SDK_INT)
-        if (serviceType != null) {
-            startForeground(NOTIFICATION_ID, notification, serviceType)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        val started =
+            startForegroundOrReportDenied(
+                startForeground = {
+                    if (serviceType != null) {
+                        startForeground(NOTIFICATION_ID, notification, serviceType)
+                    } else {
+                        startForeground(NOTIFICATION_ID, notification)
+                    }
+                },
+                reportDenied = { error, detail -> listenerRelay.onState(NativePipelineState.ERROR, error, detail) },
+            )
+        if (!started) teardownController.stopEverything()
         return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
 
+    /**
+     * Swiping the app away removes the task but not a started foreground service, so without this
+     * the stream would keep running against the camera, mic and RTMP socket with MainActivity and
+     * the Flutter engine already gone - reachable only through the notification's Stop action. The
+     * spec's Foreground Service section requires "App killed: stream stops cleanly".
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        teardownController.stopEverything()
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
-        pipeline.stop()
+        pipeline.dispose()
         releaseWakeLock()
         runCatching { unregisterReceiver(stopReceiver) }
         super.onDestroy()
