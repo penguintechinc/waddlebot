@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart' show PlatformException;
+
 import '../config/flag_keys.dart';
 import '../models/gazer_settings.dart';
 import '../models/pipeline_state.dart';
@@ -194,21 +196,28 @@ class PipelineController {
       );
 
       final sendCredentials = flags.isEnabled(FlagKeys.rtmpAuth);
-      _pendingTarget = StreamTarget(
+      final StreamTarget target = StreamTarget(
         url: TargetValidator.effectiveUrl(settings.target),
         username: sendCredentials ? settings.target.username : null,
         password: sendCredentials ? settings.target.password : null,
       );
+      _pendingTarget = target;
 
       GazerLog.info('pipeline.goLive', <String, Object?>{
-        'host': Uri.tryParse(_pendingTarget!.url)?.host ?? '',
+        'host': Uri.tryParse(target.url)?.host ?? '',
       });
 
       _emit(const PreparingState());
       _pendingConfig = config;
-      final prepareSpan = GazerTelemetry.startSpan('gazer.pipeline.prepare');
-      final result = await _host.prepare(config);
-      prepareSpan.end();
+      final Span prepareSpan = GazerTelemetry.startSpan(
+        'gazer.pipeline.prepare',
+      );
+      final PrepareResult result;
+      try {
+        result = await _guardedPrepare(config);
+      } finally {
+        prepareSpan.end();
+      }
       if (!result.ok) {
         _emit(
           ErrorState(
@@ -223,24 +232,111 @@ class PipelineController {
       _emit(const ReadyState());
       _emit(const ConnectingState());
       _connectingStartedAt = DateTime.now();
-      final startSpan = GazerTelemetry.startSpan('gazer.pipeline.start');
-      await _host.start(_pendingTarget!);
-      startSpan.end();
+      final Span startSpan = GazerTelemetry.startSpan('gazer.pipeline.start');
+      final GazerError? startError;
+      try {
+        startError = await _guardedCall('start', () => _host.start(target));
+      } finally {
+        startSpan.end();
+      }
+      if (startError != null) _emit(ErrorState(startError));
     } finally {
       _goingLive = false;
     }
   }
 
   /// Requests a clean stop and cancels any pending reconnect retry.
+  ///
+  /// Never throws and always converges on [IdleState]: the native `stop()`
+  /// goes through [_guardedCall], and the trailing Idle is emitted from a
+  /// `finally`. A native stop that fails (a dead service binding, say)
+  /// would otherwise leave the UI pinned in [StoppingState], which renders
+  /// neither Go Live nor Stop — an unusable app until it is force-quit.
   Future<void> stop() async {
     _cancelled = true;
     _reconnecting = false;
     _sessionEpoch += 1;
     _emit(const StoppingState());
-    final stopSpan = GazerTelemetry.startSpan('gazer.pipeline.stop');
-    await _host.stop();
-    stopSpan.end();
-    _emit(const IdleState());
+    final Span stopSpan = GazerTelemetry.startSpan('gazer.pipeline.stop');
+    try {
+      await _guardedCall('stop', _host.stop);
+    } finally {
+      stopSpan.end();
+      _emit(const IdleState());
+    }
+  }
+
+  /// Invokes [call] — one Pigeon host-API method — and converts anything it
+  /// throws into a [GazerError] instead of letting it escape the
+  /// controller. Returns `null` when [call] completed normally.
+  ///
+  /// Pigeon surfaces a Kotlin-side throw as a [PlatformException], and the
+  /// channel itself can fail before Kotlin is reached at all (an
+  /// unregistered plugin, a messenger torn down mid-call). Neither may
+  /// propagate out of [goLive]/[stop]/[_retryAfter]: an unhandled async
+  /// error there strands the state machine in Preparing or Stopping, where
+  /// the UI offers neither Go Live nor Stop and the only recovery is a
+  /// force-quit.
+  Future<GazerError?> _guardedCall(
+    String op,
+    Future<void> Function() call,
+  ) async {
+    try {
+      await call();
+      return null;
+    } catch (error) {
+      return _mapHostFailure(op, error);
+    }
+  }
+
+  /// `prepare` under the same never-throw guard as [_guardedCall], with a
+  /// thrown failure converted into the *same* failed [PrepareResult] shape
+  /// a Kotlin-side error result already produces — so both failure modes
+  /// take exactly one code path in [goLive] and [_retryAfter].
+  Future<PrepareResult> _guardedPrepare(StreamConfig config) async {
+    try {
+      return await _host.prepare(config);
+    } catch (error) {
+      final GazerError mapped = _mapHostFailure('prepare', error);
+      return PrepareResult(
+        ok: false,
+        error: mapped.code,
+        detail: mapped.detail,
+      );
+    }
+  }
+
+  /// Maps a thrown host call onto the *existing* [GazerErrorCode] set — this
+  /// path introduces no new codes.
+  ///
+  /// `prepare` is the call that binds and starts the foreground service, so
+  /// a throw from it reports [GazerErrorCode.serviceStartDenied]: the code
+  /// the design reserves for exactly that refusal (Android 12+ rejects
+  /// `startForegroundService` outside an allowed start state). Every other
+  /// host call maps to [GazerErrorCode.unknown] — a channel failure on
+  /// `start`/`stop` says nothing about RTMP or the encoder, and claiming
+  /// otherwise would mislead [ReconnectPolicy]. Both codes are
+  /// non-retryable, so a broken bridge surfaces to the user immediately
+  /// instead of spinning down the reconnect budget.
+  ///
+  /// The detail carries the operation name plus the platform error *code*
+  /// (a short symbolic string) or the exception's runtime type — never the
+  /// exception's message, which on this path can quote the target URL and
+  /// with it the stream key.
+  GazerError _mapHostFailure(String op, Object error) {
+    final String detail = error is PlatformException
+        ? '$op failed: ${error.code}'
+        : '$op failed: ${error.runtimeType}';
+    GazerLog.error('pipeline.hostCallFailed', <String, Object?>{
+      'op': op,
+      'detail': detail,
+    });
+    return GazerError(
+      code: op == 'prepare'
+          ? GazerErrorCode.serviceStartDenied
+          : GazerErrorCode.unknown,
+      detail: detail,
+    );
   }
 
   /// M1 has no UVC/USB audio path: `usbAudio` and `auto` both resolve to
@@ -345,9 +441,13 @@ class PipelineController {
         _pendingConfig == null) {
       return;
     }
-    final prepareSpan = GazerTelemetry.startSpan('gazer.pipeline.prepare');
-    final result = await _host.prepare(_pendingConfig!);
-    prepareSpan.end();
+    final Span prepareSpan = GazerTelemetry.startSpan('gazer.pipeline.prepare');
+    final PrepareResult result;
+    try {
+      result = await _guardedPrepare(_pendingConfig!);
+    } finally {
+      prepareSpan.end();
+    }
     if (_isDisposed || _cancelled || epoch != _sessionEpoch) return;
     _reconnecting = false;
     if (!result.ok) {
@@ -363,9 +463,15 @@ class PipelineController {
     }
     _connectingStartedAt = DateTime.now();
     _emit(const ConnectingState());
-    final retrySpan = GazerTelemetry.startSpan('gazer.pipeline.start');
-    await _host.start(_pendingTarget!);
-    retrySpan.end();
+    final StreamTarget retryTarget = _pendingTarget!;
+    final Span retrySpan = GazerTelemetry.startSpan('gazer.pipeline.start');
+    final GazerError? retryError;
+    try {
+      retryError = await _guardedCall('start', () => _host.start(retryTarget));
+    } finally {
+      retrySpan.end();
+    }
+    if (retryError != null) _emit(ErrorState(retryError));
   }
 
   void _onNativeStats(StatsSample sample) {
