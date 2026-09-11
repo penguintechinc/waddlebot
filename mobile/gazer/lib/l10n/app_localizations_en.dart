@@ -415,4 +415,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsSaveFailed => 'Failed to save settings. Please try again.';
+
+  @override
+  String get settingsDebugLogsLabel => 'Debug logs';
 }
