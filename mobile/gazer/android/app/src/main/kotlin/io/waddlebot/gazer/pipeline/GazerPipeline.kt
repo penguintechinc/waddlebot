@@ -43,7 +43,6 @@ class GazerPipeline(
     private val statsSampler: StatsSampler,
 ) : ConnectChecker {
     private companion object {
-        const val CONGESTION_THRESHOLD_PERCENT = 20f
         const val MIN_BITRATE_KBPS = 500
         const val MAX_BITRATE_KBPS = 5000
         const val AUDIO_SAMPLE_RATE = 48000
@@ -81,19 +80,47 @@ class GazerPipeline(
             return PrepareResult(ok = false, error = GazerErrorCode.ENCODER_FAILED, detail = validationError)
         }
 
-        synchronized(lock) { state = NativePipelineState.PREPARING }
-        listener.onState(NativePipelineState.PREPARING)
-
-        // Superseding the generation here - before the new engine exists - means a trailing
-        // callback from whatever engine this prepare() is about to replace (e.g. RootEncoder's
-        // onDisconnect, which always follows a terminal onConnectionFailed) is dropped by its own
-        // now-stale GenerationGuardedChecker rather than reaching this pipeline's real onXxx
-        // methods and being misapplied to the new session's state.
+        // Superseding the generation here - before PREPARING is even announced, and before the new
+        // engine exists - means a trailing callback from whatever engine this prepare() is about to
+        // replace (e.g. RootEncoder's onDisconnect, which always follows a terminal
+        // onConnectionFailed) is dropped by its own now-stale GenerationGuardedChecker rather than
+        // reaching this pipeline's real onXxx methods and being misapplied to the new session's
+        // state. Hoisted above the PREPARING write so not even that one-statement window exists.
         val myGeneration = generationCounter.incrementAndGet()
 
-        val videoSource = videoSources.create(config.videoDeviceId)
-        val audioSource = audioSources.create(config.audioDeviceId)
-        val newEngine = engineFactory(GenerationGuardedChecker(myGeneration), videoSource, audioSource)
+        // Snapshot-and-clear whatever engine is still held, so a prepare() from state=READY (or a
+        // second prepare() after a successful one) can never drop a configured MediaCodec +
+        // Camera2Source on the floor un-released - the leak that makes the *next* session fail with
+        // a camera-in-use error. Releasing a superseded engine is resource hygiene, not policy, so
+        // it belongs here rather than depending on Dart's session-epoch guard. Released outside the
+        // lock, per the locking contract above.
+        val supersededEngine: StreamEngine?
+        synchronized(lock) {
+            supersededEngine = engine
+            engine = null
+            bitrateAdapter = null
+            state = NativePipelineState.PREPARING
+        }
+        listener.onState(NativePipelineState.PREPARING)
+        runCatching { supersededEngine?.release() }
+
+        // Source and engine construction can throw: both factories reject an unknown device id with
+        // IllegalArgumentException, and GenericStream's constructor can fail on a device whose
+        // encoder or camera service is unavailable. Letting that escape hands Dart a
+        // PlatformException while this pipeline sits at PREPARING with no ERROR event - the UI
+        // sticks in PreparingState, where canGoLive is false, unrecoverable without an app restart.
+        // prepare() promises "never throws" in its own KDoc; these runCatching blocks keep it.
+        val videoSource =
+            runCatching { videoSources.create(config.videoDeviceId) }
+                .getOrElse { return failPrepare(GazerErrorCode.ENCODER_FAILED, "video source creation failed: ${it.describe()}") }
+        val audioSource =
+            runCatching { audioSources.create(config.audioDeviceId) }
+                .getOrElse {
+                    return failPrepare(GazerErrorCode.AUDIO_SOURCE_FAILED, "audio source creation failed: ${it.describe()}")
+                }
+        val newEngine =
+            runCatching { engineFactory(GenerationGuardedChecker(myGeneration), videoSource, audioSource) }
+                .getOrElse { return failPrepare(GazerErrorCode.ENCODER_FAILED, "engine creation failed: ${it.describe()}") }
 
         val rotation = if (config.orientation == OutputOrientation.PORTRAIT) 90 else 0
         val videoOk =
@@ -158,6 +185,26 @@ class GazerPipeline(
         )
     }
 
+    /**
+     * Reports a failed prepare: moves to ERROR, tells the listener, and returns the matching
+     * PrepareResult. The engine field was already cleared at the top of [prepare], so there is
+     * nothing left to release here.
+     */
+    private fun failPrepare(
+        error: GazerErrorCode,
+        detail: String,
+    ): PrepareResult {
+        emitError(error, detail)
+        return PrepareResult(ok = false, error = error, detail = detail)
+    }
+
+    /**
+     * Renders a caught throwable for a `detail` string as its class name alone. Deliberately drops
+     * the message: RootEncoder and the Android media stack embed the target URL - and therefore the
+     * stream key - in exception messages, and `detail` is relayed to Dart and rendered in the UI.
+     */
+    private fun Throwable.describe(): String = this::class.java.simpleName
+
     /** Starts streaming to [target]; only valid from state=READY, otherwise reports GazerErrorCode.UNKNOWN. */
     fun start(target: StreamTarget) {
         val snapshotState: NativePipelineState
@@ -177,14 +224,38 @@ class GazerPipeline(
             listener.onState(NativePipelineState.ERROR, GazerErrorCode.UNKNOWN, "start() called from state=$snapshotState")
             return
         }
-        engineToUse.setAuthorization(target.username, target.password)
+        // setAuthorization and startStream both reach into RootEncoder's own stack (socket setup,
+        // MediaCodec start) and can throw. An escaping exception becomes a Pigeon PlatformException
+        // while this pipeline sits at CONNECTING with a leaked engine and a running stats sampler:
+        // Dart's UI sticks in ConnectingState, where canGoLive is false. Report ERROR + release
+        // instead, so the failure is recoverable by tapping Go Live again.
+        runCatching { engineToUse.setAuthorization(target.username, target.password) }
+            .onFailure { return failStart(it) }
         listener.onState(NativePipelineState.CONNECTING)
         statsSampler.start()
-        engineToUse.startStream(target.url)
+        runCatching { engineToUse.startStream(target.url) }
+            .onFailure { return failStart(it) }
+    }
+
+    /**
+     * Reports a throw out of an engine call made by [start]: stops sampling, releases the engine,
+     * and moves to ERROR. Mirrors the terminal ConnectChecker callbacks so Dart sees exactly the
+     * shape of failure it already handles.
+     */
+    private fun failStart(cause: Throwable) {
+        val engineToRelease = captureEngineForErrorRelease()
+        statsSampler.stop()
+        runCatching { engineToRelease?.release() }
+        listener.onState(NativePipelineState.ERROR, GazerErrorCode.RTMP_CONNECT_FAILED, "startStream failed: ${cause.describe()}")
     }
 
     /** Stops streaming from any state, releasing the engine and returning to idle. */
     fun stop() {
+        // Bumping the generation supersedes the engine being released below, so its own trailing
+        // callbacks (RootEncoder delivers onDisconnect as it tears the socket down) are dropped by
+        // their now-stale GenerationGuardedChecker instead of pushing an ERROR on top of the IDLE
+        // this stop is about to report.
+        generationCounter.incrementAndGet()
         val currentEngine: StreamEngine?
         synchronized(lock) {
             currentEngine = engine
@@ -200,6 +271,17 @@ class GazerPipeline(
         }
         synchronized(lock) { state = NativePipelineState.IDLE }
         listener.onState(NativePipelineState.IDLE)
+    }
+
+    /**
+     * Stops the pipeline and releases the stats sampler's executor thread for good. Called once,
+     * from StreamService.onDestroy: the service (and with it this pipeline) is destroyed and rebuilt
+     * on every Go Live -> Stop -> Go Live cycle, so without this each session would strand one live
+     * sampler thread for the life of the process.
+     */
+    fun dispose() {
+        stop()
+        statsSampler.shutdown()
     }
 
     /** Sets the live video bitrate, clamped to the supported 500..5000 kbps range. */

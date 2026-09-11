@@ -10,10 +10,12 @@ import io.mockk.verify
 import io.waddlebot.gazer.pigeon.GazerErrorCode
 import io.waddlebot.gazer.pigeon.NativePipelineState
 import io.waddlebot.gazer.pigeon.OutputOrientation
+import io.waddlebot.gazer.pigeon.StatsSample
 import io.waddlebot.gazer.pigeon.StreamConfig
 import io.waddlebot.gazer.pigeon.StreamTarget
 import io.waddlebot.gazer.pipeline.sources.AudioSourceFactory
 import io.waddlebot.gazer.pipeline.sources.VideoSourceFactory
+import org.junit.jupiter.api.Assertions.assertDoesNotThrow
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -404,4 +406,230 @@ class GazerPipelineTest {
         pipeline.setVideoBitrate(9000)
         verify { engine.setVideoBitrateOnFly(5_000_000) }
     }
+
+    @Test
+    fun `start hands the target's credentials to the engine before connecting`() {
+        pipeline.prepare(validConfig)
+
+        pipeline.start(StreamTarget(url = "rtmp://example.com/live/key", username = "publisher", password = "secret"))
+
+        verify { engine.setAuthorization("publisher", "secret") }
+        verify { engine.startStream("rtmp://example.com/live/key") }
+    }
+
+    @Test
+    fun `a second prepare releases the still-held engine before building a new one`() {
+        // Without the snapshot-and-release at the top of prepare(), the first engine - holding a
+        // configured MediaCodec and an open Camera2Source - is simply overwritten, and the *next*
+        // session fails with a camera-in-use error. Only Dart's session epoch prevented this
+        // before; releasing a superseded engine is resource hygiene, not policy.
+        val engine2 = mockk<StreamEngine>(relaxed = true)
+        every { engine2.prepareVideo(any(), any(), any(), any(), any()) } returns true
+        every { engine2.prepareAudio(any(), any(), any()) } returns true
+        val engines = listOf(engine, engine2).iterator()
+        pipeline = pipelineWith { _, _, _ -> engines.next() }
+
+        assertTrue(pipeline.prepare(validConfig).ok)
+        verify(exactly = 0) { engine.release() }
+
+        assertTrue(pipeline.prepare(validConfig).ok)
+
+        assertEquals(NativePipelineState.READY, pipeline.state)
+        verify(exactly = 1) { engine.release() }
+        verify(exactly = 0) { engine2.release() }
+    }
+
+    @Test
+    fun `a second prepare survives a superseded engine whose release throws`() {
+        val engine2 = mockk<StreamEngine>(relaxed = true)
+        every { engine2.prepareVideo(any(), any(), any(), any(), any()) } returns true
+        every { engine2.prepareAudio(any(), any(), any()) } returns true
+        every { engine.release() } throws RuntimeException("boom")
+        val engines = listOf(engine, engine2).iterator()
+        pipeline = pipelineWith { _, _, _ -> engines.next() }
+        pipeline.prepare(validConfig)
+
+        assertTrue(pipeline.prepare(validConfig).ok)
+    }
+
+    @Test
+    fun `prepare's release of the superseded engine does not hold the lock`() {
+        // R28: engine calls always happen outside the monitor. Blocking inside release() must not
+        // stop a concurrent RootEncoder callback from acquiring the lock and completing.
+        val releaseEntered = CountDownLatch(1)
+        val proceed = CountDownLatch(1)
+        every { engine.release() } answers {
+            releaseEntered.countDown()
+            proceed.await(5, TimeUnit.SECONDS)
+        }
+        val engine2 = mockk<StreamEngine>(relaxed = true)
+        every { engine2.prepareVideo(any(), any(), any(), any(), any()) } returns true
+        every { engine2.prepareAudio(any(), any(), any()) } returns true
+        val engines = listOf(engine, engine2).iterator()
+        pipeline = pipelineWith { _, _, _ -> engines.next() }
+        pipeline.prepare(validConfig)
+
+        val prepareThread = Thread { pipeline.prepare(validConfig) }
+        prepareThread.start()
+        assertTrue(releaseEntered.await(5, TimeUnit.SECONDS))
+
+        val callbackCompleted = CountDownLatch(1)
+        Thread {
+            pipeline.onNewBitrate(1_000L)
+            callbackCompleted.countDown()
+        }.start()
+
+        assertTrue(
+            callbackCompleted.await(2, TimeUnit.SECONDS),
+            "onNewBitrate() blocked - the lock was held across the superseded engine's release()",
+        )
+        proceed.countDown()
+        prepareThread.join(5_000)
+    }
+
+    @Test
+    fun `a throwing video source factory reports encoderFailed instead of escaping to Pigeon`() {
+        every { videoSources.create(any()) } throws IllegalArgumentException("Unknown video device id: camera:back")
+
+        // An escaping exception fails this test on its own - that is exactly the old behavior.
+        val result = pipeline.prepare(validConfig)
+
+        assertFalse(result.ok)
+        assertEquals(GazerErrorCode.ENCODER_FAILED, result.error)
+        assertEquals(NativePipelineState.ERROR, pipeline.state)
+        verify { listener.onState(NativePipelineState.ERROR, GazerErrorCode.ENCODER_FAILED, any()) }
+    }
+
+    @Test
+    fun `a throwing audio source factory reports audioSourceFailed instead of escaping to Pigeon`() {
+        every { audioSources.create(any()) } throws IllegalArgumentException("Unknown audio device id: audio:mic")
+
+        // An escaping exception fails this test on its own - that is exactly the old behavior.
+        val result = pipeline.prepare(validConfig)
+
+        assertFalse(result.ok)
+        assertEquals(GazerErrorCode.AUDIO_SOURCE_FAILED, result.error)
+        assertEquals(NativePipelineState.ERROR, pipeline.state)
+    }
+
+    @Test
+    fun `a throwing engine factory reports encoderFailed instead of escaping to Pigeon`() {
+        pipeline = pipelineWith { _, _, _ -> throw IllegalStateException("MediaCodec unavailable") }
+
+        // An escaping exception fails this test on its own - that is exactly the old behavior.
+        val result = pipeline.prepare(validConfig)
+
+        assertFalse(result.ok)
+        assertEquals(GazerErrorCode.ENCODER_FAILED, result.error)
+        assertEquals(NativePipelineState.ERROR, pipeline.state)
+    }
+
+    @Test
+    fun `a throwing startStream reports ERROR and releases the engine instead of escaping to Pigeon`() {
+        // Left unguarded, this reaches Dart as a PlatformException while the pipeline sits at
+        // CONNECTING with a leaked engine and a running sampler: the UI sticks in ConnectingState,
+        // where canGoLive is false - unrecoverable without an app restart.
+        every { engine.startStream(any()) } throws RuntimeException("rtmp://user:key@host refused")
+        pipeline.prepare(validConfig)
+
+        assertDoesNotThrow { pipeline.start(StreamTarget(url = "rtmp://example.com/live/key")) }
+
+        assertEquals(NativePipelineState.ERROR, pipeline.state)
+        verify { listener.onState(NativePipelineState.ERROR, GazerErrorCode.RTMP_CONNECT_FAILED, any()) }
+        verify { statsSampler.stop() }
+        verify(exactly = 1) { engine.release() }
+    }
+
+    @Test
+    fun `the detail of a start failure never carries the throwable's message`() {
+        // RootEncoder embeds the target URL - and therefore the stream key - in its exception
+        // messages, and `detail` is relayed to Dart and rendered in the UI.
+        val details = mutableListOf<String?>()
+        val recording =
+            object : PipelineListener {
+                override fun onState(
+                    state: NativePipelineState,
+                    error: GazerErrorCode?,
+                    detail: String?,
+                ) {
+                    details.add(detail)
+                }
+
+                override fun onStats(sample: StatsSample) = Unit
+
+                override fun onAuthResult(ok: Boolean) = Unit
+            }
+        every { engine.startStream(any()) } throws RuntimeException("failed publishing to rtmp://host/live/SUPERSECRETKEY")
+        val recordingPipeline =
+            GazerPipeline(
+                engineFactory = { _, _, _ -> engine },
+                videoSources = videoSources,
+                audioSources = audioSources,
+                listener = recording,
+                statsSampler = statsSampler,
+            )
+        recordingPipeline.prepare(validConfig)
+
+        recordingPipeline.start(StreamTarget(url = "rtmp://example.com/live/key"))
+
+        assertTrue(details.isNotEmpty())
+        details.forEach { assertFalse(it.orEmpty().contains("SUPERSECRETKEY")) }
+    }
+
+    @Test
+    fun `a throwing setAuthorization reports ERROR instead of escaping to Pigeon`() {
+        every { engine.setAuthorization(any(), any()) } throws RuntimeException("boom")
+        pipeline.prepare(validConfig)
+
+        assertDoesNotThrow { pipeline.start(StreamTarget(url = "rtmp://example.com/live/key", username = "u", password = "p")) }
+
+        assertEquals(NativePipelineState.ERROR, pipeline.state)
+        verify(exactly = 0) { engine.startStream(any()) }
+    }
+
+    @Test
+    fun `stop supersedes the generation so the released engine's trailing callback cannot overwrite IDLE`() {
+        val checkers = mutableListOf<ConnectChecker>()
+        pipeline =
+            pipelineWith { checker, _, _ ->
+                checkers.add(checker)
+                engine
+            }
+        pipeline.prepare(validConfig)
+        pipeline.start(StreamTarget(url = "rtmp://example.com/live/key"))
+        pipeline.onConnectionSuccess()
+
+        pipeline.stop()
+        assertEquals(NativePipelineState.IDLE, pipeline.state)
+        clearMocks(listener, answers = false)
+
+        // RootEncoder delivers onDisconnect as it tears the socket down, after stop() already
+        // reported IDLE. Keyed on state alone this pushed an ERROR on top of a finished session.
+        checkers.single().onDisconnect()
+
+        assertEquals(NativePipelineState.IDLE, pipeline.state)
+        verify(exactly = 0) { listener.onState(NativePipelineState.ERROR, any(), any()) }
+    }
+
+    @Test
+    fun `dispose stops the pipeline and shuts the stats sampler's executor down`() {
+        pipeline.prepare(validConfig)
+        pipeline.start(StreamTarget(url = "rtmp://example.com/live/key"))
+
+        pipeline.dispose()
+
+        assertEquals(NativePipelineState.IDLE, pipeline.state)
+        verify { engine.release() }
+        verify { statsSampler.shutdown() }
+    }
+
+    /** Rebuilds [pipeline] with [engineFactory], keeping every other collaborator from [setUp]. */
+    private fun pipelineWith(engineFactory: (ConnectChecker, VideoSource, AudioSource) -> StreamEngine): GazerPipeline =
+        GazerPipeline(
+            engineFactory = engineFactory,
+            videoSources = videoSources,
+            audioSources = audioSources,
+            listener = listener,
+            statsSampler = statsSampler,
+        )
 }
