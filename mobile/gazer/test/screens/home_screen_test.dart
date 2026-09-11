@@ -163,9 +163,18 @@ void main() {
   testWidgets(
     'a retryable error enters ReconnectingState; Stop cancels back to Idle',
     (WidgetTester tester) async {
+      // Explicit phone width: at the default (unset) test viewport size,
+      // MediaQuery.size.width >= 600 triggers the two-pane responsive
+      // layout (feat: StatusPanel and responsive two-pane HomeScreen
+      // layout), which renders StatusPanel's own status label alongside
+      // StatusChip's — ambiguous for the single-widget `find.text(...)`
+      // assertions below, which predate that layout and only care about
+      // HomeScreen's own reconnect/idle behavior. `Size(390, 844)` matches
+      // the "phone" breakpoint used by home_screen_responsive_test.dart.
       await pumpGazerApp(
         tester,
         overrides: overrides(license: license(flagsSet: true)),
+        size: const Size(390, 844),
       );
       await tester.tap(find.widgetWithText(FilledButton, 'Go Live'));
       await tester.pumpAndSettle();
