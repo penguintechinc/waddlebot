@@ -418,4 +418,18 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsDebugLogsLabel => 'Debug logs';
+
+  @override
+  String get permissionDeniedMessage =>
+      'Camera and microphone permission are needed to go live.';
+
+  @override
+  String get permissionDeniedRetryLabel => 'Retry';
+
+  @override
+  String get permissionPermanentlyDeniedMessage =>
+      'Camera or microphone permission was permanently denied.';
+
+  @override
+  String get permissionOpenSettingsLabel => 'Open settings';
 }

@@ -133,5 +133,9 @@
   "statusPanelCloseButtonLabel": "Close",
   "goLiveFailedMessage": "Could not start the stream. Please try again.",
   "settingsSaveFailed": "Failed to save settings. Please try again.",
-  "settingsDebugLogsLabel": "Debug logs"
+  "settingsDebugLogsLabel": "Debug logs",
+  "permissionDeniedMessage": "Camera and microphone permission are needed to go live.",
+  "permissionDeniedRetryLabel": "Retry",
+  "permissionPermanentlyDeniedMessage": "Camera or microphone permission was permanently denied.",
+  "permissionOpenSettingsLabel": "Open settings"
 }
