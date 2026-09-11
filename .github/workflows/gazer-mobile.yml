@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      packages: write  # pushes the built toolchain image to ghcr.io (Log in to GHCR / Build and push steps below)
     timeout-minutes: 90
     outputs:
       image: ${{ steps.resolve.outputs.image }}
@@ -100,7 +100,7 @@ jobs:
           fi
           echo "image=${REGISTRY}/${IMAGE_NAME}@${DIGEST}" >> "$GITHUB_OUTPUT"
 
-  # All 5 jobs below share one container setup: `options: --user 0:0` (root) is set ONLY because
+  # All jobs below share one container setup: `options: --user 0:0` (root) is set ONLY because
   # GitHub Actions job containers cannot run their own checkout/cache/artifact-upload machinery
   # as a non-root user whose uid does not match the hosted runner's own account uid (1001 on
   # ubuntu-latest) -- a documented GitHub Actions platform limitation (actions/checkout#956,
@@ -118,6 +118,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 20
     container:
       image: ${{ needs.toolchain.outputs.image }}  # zizmor: ignore[unpinned-images] -- resolved to a repo@sha256:<digest> ref by toolchain job's "Resolve image ref" step; static analysis cannot see through the job-output indirection
       options: --user 0:0
@@ -145,12 +146,23 @@ jobs:
           working-directory: mobile/gazer
           command: dart format --set-exit-if-changed .
 
+      # I4 (final-review-platform.md): make mobile-lint runs flutter analyze + dart format +
+      # gradlew ktlintCheck lint, but this job previously ran only the first two, so a CI-green
+      # branch could carry failing ktlintCheck/lint. Runs from mobile/gazer/android to match the
+      # Makefile's `cd android && ./gradlew ktlintCheck lint`.
+      - name: ktlint + Android Lint
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer/android
+          command: ./gradlew ktlintCheck lint
+
   test:
     name: Dart unit tests + coverage gate
     needs: toolchain
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 20
     container:
       image: ${{ needs.toolchain.outputs.image }}  # zizmor: ignore[unpinned-images] -- resolved to a repo@sha256:<digest> ref by toolchain job's "Resolve image ref" step; static analysis cannot see through the job-output indirection
       # root ONLY for the runner's own checkout/cache/artifact steps -- see analyze job's comment
@@ -168,17 +180,32 @@ jobs:
           working-directory: mobile/gazer
           command: flutter pub get
 
+      # I10 (final-review-platform.md): `make mobile-test` always passes
+      # --dart-define=GAZER_SEED=true; this step previously ran bare `flutter test --coverage`,
+      # so a local pass and a CI pass no longer meant the same thing. Mirrored here instead of
+      # invoking `make mobile-test` directly because that target's docker-run wrapper cannot
+      # run from inside this job's own container (no docker-in-docker).
       - name: flutter test --coverage
         uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
         with:
           working-directory: mobile/gazer
-          command: flutter test --coverage
+          command: flutter test --coverage --dart-define=GAZER_SEED=true
+
+      # I6 (final-review-platform.md): coverage_gate_selftest.sh is the only artifact proving the
+      # coverage gate can fail on purpose (critical-rules.md Verification Integrity), but nothing
+      # ran it. Runs before the real gate below so a broken gate mechanism fails loudly rather
+      # than silently passing real coverage data.
+      - name: Coverage gate selftest (proves the gate can fail)
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: bash scripts/coverage_gate_selftest.sh
 
       - name: Coverage gate (>=90%)
         uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
         with:
           working-directory: mobile/gazer
-          command: bash scripts/coverage_gate.sh 90 coverage/lcov.info lcov
+          command: bash scripts/coverage_gate.sh 90 coverage/lcov.info lcov lib
 
       - name: Upload coverage artifact
         if: always()
@@ -193,6 +220,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 30
     container:
       image: ${{ needs.toolchain.outputs.image }}  # zizmor: ignore[unpinned-images] -- resolved to a repo@sha256:<digest> ref by toolchain job's "Resolve image ref" step; static analysis cannot see through the job-output indirection
       # root ONLY for the runner's own checkout/cache/artifact steps -- see analyze job's comment
@@ -229,12 +257,51 @@ jobs:
           name: gazer-android-coverage
           path: mobile/gazer/android/app/build/reports/jacoco/
 
-  build:
-    name: Build APK + AAB
+  telemetry:
+    name: Telemetry emission gate
     needs: toolchain
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 20
+    container:
+      image: ${{ needs.toolchain.outputs.image }}  # zizmor: ignore[unpinned-images] -- resolved to a repo@sha256:<digest> ref by toolchain job's "Resolve image ref" step; static analysis cannot see through the job-output indirection
+      # root ONLY for the runner's own checkout/cache/artifact steps -- see analyze job's comment
+      # above for why; toolchain commands still run rootless via run-as-appuser below.
+      options: --user 0:0
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        with:
+          persist-credentials: false
+
+      - name: flutter pub get
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: flutter pub get
+
+      # I5 (final-review-platform.md): critical-rules.md Observability and testing.md Telemetry
+      # Validation require this gate every commit; before this job it only ran when a human
+      # walked the plan's Task 26 Step 13 merge gate by hand. Mirrors `make mobile-telemetry-check`
+      # verbatim -- set -euo pipefail means a test failure already aborts before the grep runs;
+      # the grep is the second, independent check (critical-rules.md Verification Integrity).
+      - name: Telemetry emission gate (make mobile-telemetry-check)
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: >-
+            set -euo pipefail;
+            flutter test test/telemetry/otlp_sink_test.dart 2>&1 | tee /tmp/gazer-telemetry-check.log;
+            grep -E 'telemetry sink received: logs=[1-9][0-9]* metrics=[1-9][0-9]* histograms=[1-9][0-9]* spans=[1-9][0-9]*' /tmp/gazer-telemetry-check.log
+
+  build:
+    name: Build APK + AAB (debug/testing artifacts)
+    needs: toolchain
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 45
     # Container jobs default `run:` steps to `sh`, not `bash`, even when the image has bash
     # installed (confirmed by run 34547868184: "Illegal option -o pipefail" from dash) -- the
     # bash-only `set -euo pipefail` used throughout this job's plain run: steps requires this.
@@ -258,63 +325,19 @@ jobs:
           working-directory: mobile/gazer
           command: flutter pub get
 
-      # The `secrets` context is not a recognized named-value in `if:` conditionals (job- or
-      # step-level) -- GitHub Actions rejects the whole workflow file at parse time if it's used
-      # there ("Unrecognized named-value: 'secrets'"), confirmed by run 34547396519 failing with
-      # zero jobs scheduled. The standard workaround: read the secret into `env:` (allowed) in a
-      # step that always runs, emit a step output, and gate the real step on `steps.*.outputs`
-      # (which IS available in step.if) instead of `secrets` directly.
-      - name: Check for upload keystore secret
-        id: check_keystore
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEY_STORE_B64 }}
-        run: |
-          set -euo pipefail
-          if [ -n "${KEYSTORE_B64}" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Never inline ${{ secrets.* }} inside `run:` (zizmor template-injection rule) -- every
-      # secret value crosses into the shell only via `env:`. Runs as root (this job container's
-      # default user -- see options: --user 0:0 above), unlike the run-as-appuser steps around
-      # it, because the final `chown` here must run as root to hand the files to appuser; every
-      # later step that reads key.properties/the keystore (the two `flutter build` steps below)
-      # runs as appuser via run-as-appuser and needs read access to what this step writes.
-      - name: Decode upload keystore and write key.properties
-        if: steps.check_keystore.outputs.present == 'true'
-        working-directory: mobile/gazer/android
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEY_STORE_B64 }}
-          KEY_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
-          KEY_ALIAS_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS_PASSWORD }}
-        run: |
-          set -euo pipefail
-          echo "${KEYSTORE_B64}" | base64 -d > upload-keystore.jks
-          cat > key.properties <<KEYPROPS_EOF
-          storeFile=upload-keystore.jks
-          storePassword=${KEY_STORE_PASSWORD}
-          keyAlias=${KEY_ALIAS}
-          keyPassword=${KEY_ALIAS_PASSWORD}
-          KEYPROPS_EOF
-          chown appuser:appuser upload-keystore.jks key.properties
-
-      # GAZER_REQUIRE_SIGNING is passed as a `VAR=value` prefix baked into the composite action's
-      # `command:` input (evaluated via `eval` inside the runuser'd appuser shell -- see
-      # .github/actions/run-as-appuser/action.yml), not via this step's own `env:`, because a
-      # step-level `env:` set on a `uses:` call to a composite action is not reliably exposed to
-      # that composite's own internal steps (the action only forwards its declared `working-
-      # directory`/`command` inputs, nothing else). The interpolated value is always the literal
-      # string `0` or `1` (never attacker-influenced ref content), so this is not the zizmor
-      # template-injection pattern the note above warns about.
+      # C1 (final-review-platform.md): this job runs for every push/PR and never has access to
+      # the upload signing key -- GAZER_REQUIRE_SIGNING is always 0 here, so the release build
+      # always falls back to debug-signing (ci.log previously showed "release build is
+      # debug-signed (no key.properties)"). The real, upload-key-signed build now lives ONLY in
+      # the tag-gated build-signed job below, under the gazer-release environment. This keeps
+      # "non-tag pushes keep producing debug-signed APK/AAB artifacts for testing" true without
+      # ever exposing the four ANDROID_UPLOAD_KEY_* secrets to a branch build.
       - name: flutter build apk --split-per-abi
         uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
         with:
           working-directory: mobile/gazer
           command: >-
-            GAZER_REQUIRE_SIGNING=${{ startsWith(github.ref, 'refs/tags/gazer-v') && '1' || '0' }}
+            GAZER_REQUIRE_SIGNING=0
             flutter build apk --split-per-abi --obfuscate --split-debug-info=build/symbols
 
       - name: flutter build appbundle
@@ -322,26 +345,37 @@ jobs:
         with:
           working-directory: mobile/gazer
           command: >-
-            GAZER_REQUIRE_SIGNING=${{ startsWith(github.ref, 'refs/tags/gazer-v') && '1' || '0' }}
+            GAZER_REQUIRE_SIGNING=0
             flutter build appbundle --obfuscate --split-debug-info=build/symbols
 
       # apksigner ships in the pinned build-tools;36.0.0 package (Task 1 Dockerfile) at
       # $ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner (= /opt/android-sdk/build-tools/36.0.0/
       # apksigner in this image; also already on PATH per Task 1's ENV PATH line). Runs as root
-      # (read-only verification of the already-built APK; no appuser privilege needed).
-      - name: Verify APK is signed with exactly one certificate
+      # (read-only verification of the already-built APKs; no appuser privilege needed).
+      # Minor 5 (final-review-platform.md): loops over every split-ABI APK instead of inspecting
+      # only app-arm64-v8a-release.apk, so a per-ABI signing regression cannot slip through.
+      - name: Verify every APK is signed with exactly one certificate
         working-directory: mobile/gazer
         run: |
           set -euo pipefail
           APKSIGNER="${ANDROID_SDK_ROOT}/build-tools/36.0.0/apksigner"
-          # Matching 'Signer #1 certificate SHA-256' literally can never detect a second signer --
-          # apksigner labels additional signers 'Signer #2 ...', 'Signer #3 ...', etc. Count every
-          # signer's SHA-256 digest line instead. `|| :` only absorbs grep's exit 1 for zero
-          # matches (not a real failure by itself); the `test` line right after is the actual gate.
-          OUTPUT=$("${APKSIGNER}" verify --print-certs build/app/outputs/flutter-apk/app-arm64-v8a-release.apk)
-          echo "${OUTPUT}"
-          COUNT=$(echo "${OUTPUT}" | grep -c 'certificate SHA-256' || :)
-          test "${COUNT}" = 1 || { echo "expected exactly 1 signer cert, got ${COUNT}" >&2; exit 1; }
+          FOUND_BAD=0
+          while IFS= read -r -d '' apk; do
+            echo "checking: ${apk}"
+            OUTPUT=$("${APKSIGNER}" verify --print-certs "${apk}")
+            echo "${OUTPUT}"
+            # Matching 'Signer #1 certificate SHA-256' literally can never detect a second signer
+            # -- apksigner labels additional signers 'Signer #2 ...', 'Signer #3 ...', etc. Count
+            # every signer's SHA-256 digest line instead. `|| :` only absorbs grep's exit 1 for
+            # zero matches (not a real failure by itself); the `test` line right after is the
+            # actual gate.
+            COUNT=$(echo "${OUTPUT}" | grep -c 'certificate SHA-256' || :)
+            if [ "${COUNT}" != 1 ]; then
+              echo "FAIL: ${apk} expected exactly 1 signer cert, got ${COUNT}" >&2
+              FOUND_BAD=1
+            fi
+          done < <(find build/app/outputs/apk -name '*.apk' -print0)
+          test "${FOUND_BAD}" -eq 0
 
       - name: Upload APKs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
@@ -354,6 +388,129 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: gazer-aab
+          path: mobile/gazer/build/app/outputs/bundle/**/*.aab
+          retention-days: 30
+
+  # C1 (final-review-platform.md): the ONLY job that ever decodes the upload signing keystore.
+  # Gated on both `if: startsWith(github.ref, 'refs/tags/gazer-v')` (job-level -- the whole job,
+  # including the keystore-decode step, never even starts on a branch push or PR) AND
+  # `environment: gazer-release` (a protected GitHub Environment -- referencing it here
+  # auto-creates it; see README.md's release section for the one-time human step of moving the
+  # four ANDROID_UPLOAD_KEY_* secrets into that environment and adding a required reviewer).
+  # GAZER_REQUIRE_SIGNING=1 is hardcoded (fail-closed): if the environment's secrets are not
+  # configured yet, the decode step below still runs (this job only runs on a tag, so there is no
+  # "leak to an arbitrary branch" risk left to guard against) but produces an empty/invalid
+  # keystore, and the signed flutter build then fails loudly instead of silently falling back to
+  # debug-signing on a real release tag.
+  build-signed:
+    name: Build signed release APK + AAB (release tags only)
+    needs: toolchain
+    if: startsWith(github.ref, 'refs/tags/gazer-v')
+    environment: gazer-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: ${{ needs.toolchain.outputs.image }}  # zizmor: ignore[unpinned-images] -- resolved to a repo@sha256:<digest> ref by toolchain job's "Resolve image ref" step; static analysis cannot see through the job-output indirection
+      options: --user 0:0
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        with:
+          persist-credentials: false
+
+      - name: flutter pub get
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: flutter pub get
+
+      # Never inline ${{ secrets.* }} inside `run:` (zizmor template-injection rule) -- every
+      # secret value crosses into the shell only via `env:`. Runs as root (this job container's
+      # default user -- see options: --user 0:0 above), unlike the run-as-appuser steps around
+      # it, because the final `chown` here must run as root to hand the files to appuser; the
+      # later steps that read key.properties/the keystore (the two `flutter build` steps below)
+      # run as appuser via run-as-appuser and need read access to what this step writes.
+      # Minor 4 (final-review-platform.md): the original step used an UNQUOTED heredoc
+      # (<<KEYPROPS_EOF) to write key.properties. Written with `printf '%s'` instead -- each
+      # secret value is substituted as a single literal argument with no shell re-interpretation
+      # of its bytes, so a password containing a backtick, $(...), or sed-metacharacters (&, #,
+      # /) is written byte-for-byte and can never be command-substituted or corrupt the file.
+      - name: Decode upload keystore and write key.properties
+        working-directory: mobile/gazer/android
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEY_STORE_B64 }}
+          KEY_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+          KEY_ALIAS_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_B64}" ]; then
+            echo "::error::ANDROID_UPLOAD_KEY_STORE_B64 is not set in the gazer-release environment -- move the four ANDROID_UPLOAD_KEY_* secrets there (see README.md release section) before tagging a release." >&2
+            exit 1
+          fi
+          echo "${KEYSTORE_B64}" | base64 -d > upload-keystore.jks
+          {
+            printf 'storeFile=upload-keystore.jks\n'
+            printf 'storePassword=%s\n' "${KEY_STORE_PASSWORD}"
+            printf 'keyAlias=%s\n' "${KEY_ALIAS}"
+            printf 'keyPassword=%s\n' "${KEY_ALIAS_PASSWORD}"
+          } > key.properties
+          chown appuser:appuser upload-keystore.jks key.properties
+
+      - name: flutter build apk --split-per-abi (signed)
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: >-
+            GAZER_REQUIRE_SIGNING=1
+            flutter build apk --split-per-abi --obfuscate --split-debug-info=build/symbols
+
+      - name: flutter build appbundle (signed)
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: >-
+            GAZER_REQUIRE_SIGNING=1
+            flutter build appbundle --obfuscate --split-debug-info=build/symbols
+
+      - name: Verify every signed APK has exactly one certificate and is not debug-signed
+        working-directory: mobile/gazer
+        run: |
+          set -euo pipefail
+          APKSIGNER="${ANDROID_SDK_ROOT}/build-tools/36.0.0/apksigner"
+          FOUND_BAD=0
+          while IFS= read -r -d '' apk; do
+            echo "checking: ${apk}"
+            OUTPUT=$("${APKSIGNER}" verify --print-certs "${apk}")
+            echo "${OUTPUT}"
+            COUNT=$(echo "${OUTPUT}" | grep -c 'certificate SHA-256' || :)
+            if [ "${COUNT}" != 1 ]; then
+              echo "FAIL: ${apk} expected exactly 1 signer cert, got ${COUNT}" >&2
+              FOUND_BAD=1
+            fi
+            if echo "${OUTPUT}" | grep -q 'CN=Android Debug'; then
+              echo "FAIL: ${apk} is signed with the well-known Android debug certificate" >&2
+              FOUND_BAD=1
+            fi
+          done < <(find build/app/outputs/apk -name '*.apk' -print0)
+          test "${FOUND_BAD}" -eq 0
+
+      - name: Upload signed APKs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: gazer-apk-signed
+          path: mobile/gazer/build/app/outputs/apk/**/*.apk
+          retention-days: 30
+
+      - name: Upload signed AAB
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: gazer-aab-signed
           path: mobile/gazer/build/app/outputs/bundle/**/*.aab
           retention-days: 30
 
@@ -370,6 +527,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 20
     container:
       image: ${{ needs.toolchain.outputs.image }}  # zizmor: ignore[unpinned-images] -- resolved to a repo@sha256:<digest> ref by toolchain job's "Resolve image ref" step; static analysis cannot see through the job-output indirection
       # root ONLY for the runner's own checkout/cache/artifact steps -- see analyze job's comment
@@ -408,11 +566,21 @@ jobs:
           working-directory: mobile/gazer
           command: bash scripts/osv_scan_assert.sh android/app/gradle.lockfile
 
+      # I9 (final-review-platform.md): `--config auto` remains a network-fetched, mutable
+      # ruleset (vendoring a pinned rules directory is deferred to M2 -- see README.md's tooling
+      # notes). The ruling also asked for `--metrics=off`, but semgrep 1.176.1 hard-refuses that
+      # combination ("Cannot create auto config when metrics are off. Please allow metrics or run
+      # with a specific config." -- verified interactively against the pinned toolchain image), so
+      # `--metrics=on` is explicit instead -- disabling metrics needs the M2 vendored/pinned
+      # ruleset. The tool's own binary version stays pinned in the Dockerfile
+      # (SEMGREP_VERSION=1.176.1). Semgrep's own summary output already prints the resolved
+      # ruleset/rule count ("Rules run: N") so the verification doc can record it without an extra
+      # flag.
       - name: semgrep
         uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
         with:
           working-directory: mobile/gazer
-          command: semgrep --config auto --error .
+          command: semgrep --config auto --metrics=on --error .
 
       - name: gitleaks
         uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
@@ -445,26 +613,46 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Set up Java 17
+      # R32 parity gap 1 (final-review-platform.md): was `java-version: '17'`, a floating patch
+      # that could silently drift from the Dockerfile's pinned temurin-17-jdk. Pinned to the
+      # latest ordinary (non point-release-of-a-point-release) Temurin 17 LTS build available at
+      # the time this fix was written (verified live against
+      # https://api.adoptium.net/v3/assets/feature_releases/17/ga?vendor=eclipse -- release
+      # jdk-17.0.20+8). Re-verify against that endpoint before bumping.
+      - name: Set up Java 17 (pinned exact build)
         uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654  # v5.0.0
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '17.0.20+8'
 
-      - name: Cache Flutter SDK
+      # I1 (final-review-platform.md): the cache used to hold the EXTRACTED SDK, and verification
+      # only ran on a cache miss -- a poisoned cache entry (GitHub Actions caches are writable
+      # from branch refs and restorable by descendants of the default branch) became an
+      # unverified toolchain executed in CI. Restructured to cache only the small compressed
+      # tarball; the sha256 check below now runs unconditionally, on both a fresh download and a
+      # cache hit, before anything is ever extracted or executed.
+      - name: Cache Flutter SDK tarball
         id: flutter-cache
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v4.5.0
         with:
-          path: ~/flutter-3.47.2
-          key: flutter-3.47.2-linux-${{ runner.arch }}
+          path: /tmp/flutter.tar.xz
+          key: flutter-3.47.2-linux-tarball-${{ runner.arch }}
 
-      - name: Install Flutter 3.47.2 (pinned, sha256-verified)
+      - name: Download Flutter 3.47.2 tarball (skipped on cache hit)
         if: steps.flutter-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           curl -fsSL -o /tmp/flutter.tar.xz \
             https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.2-stable.tar.xz
+
+      - name: Verify Flutter tarball sha256 (always -- cache hit or fresh download)
+        run: |
+          set -euo pipefail
           echo "447878859d01ca9bfdb99a85f245af07ed8a15fedcd9d189c4749e8e92d1f185  /tmp/flutter.tar.xz" | sha256sum -c -
+
+      - name: Extract Flutter SDK
+        run: |
+          set -euo pipefail
           mkdir -p ~/flutter-3.47.2
           tar -xJf /tmp/flutter.tar.xz -C ~/flutter-3.47.2 --strip-components=1
 
@@ -474,6 +662,20 @@ jobs:
       - name: flutter pub get
         working-directory: mobile/gazer
         run: flutter pub get
+
+      # R32 parity gap 2 (final-review-platform.md): sdkmanager used to come from the runner
+      # image's own preinstalled cmdline-tools (whatever version actions/runner-images happens to
+      # ship), not the pinned commandlinetools-linux-15859902 zip the Dockerfile uses. Downloads
+      # and sha256-verifies the identical zip here and invokes ITS sdkmanager (still installing
+      # packages into the runner's existing ANDROID_SDK_ROOT/ANDROID_HOME) instead.
+      - name: Download pinned Android cmdline-tools (matches Dockerfile)
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/cmdline-tools-pinned
+          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip -o /tmp/cmdline-tools.zip
+          echo "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  /tmp/cmdline-tools.zip" | sha256sum -c -
+          unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools-pinned
+          rm /tmp/cmdline-tools.zip
 
       - name: Install Android SDK components
         # Mirrors the gazer-toolchain Dockerfile's sdkmanager package list exactly (R32) --
@@ -499,21 +701,21 @@ jobs:
         run: |
           set -euo pipefail
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?ANDROID_HOME/ANDROID_SDK_ROOT not set by runner image}}"
-          SDKMANAGER="${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          SDKMANAGER="/tmp/cmdline-tools-pinned/cmdline-tools/bin/sdkmanager"
           if [ ! -x "${SDKMANAGER}" ]; then
-            echo "::error::sdkmanager not found at ${SDKMANAGER}" >&2
-            find "${SDK_ROOT}/cmdline-tools" -maxdepth 2 -name sdkmanager 2>/dev/null || true
+            echo "::error::pinned sdkmanager not found at ${SDKMANAGER}" >&2
+            find /tmp/cmdline-tools-pinned -maxdepth 3 -name sdkmanager 2>/dev/null || true
             exit 1
           fi
           set +e
-          yes | "${SDKMANAGER}" --licenses > /dev/null
+          yes | "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" --licenses > /dev/null
           LICENSE_STATUS="${PIPESTATUS[1]}"
           set -e
           if [ "${LICENSE_STATUS}" -ne 0 ]; then
             echo "::error::sdkmanager --licenses failed with exit ${LICENSE_STATUS}" >&2
             exit "${LICENSE_STATUS}"
           fi
-          "${SDKMANAGER}" \
+          "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" \
             "platforms;android-34" \
             "platforms;android-35" \
             "platforms;android-36" \
@@ -584,6 +786,11 @@ jobs:
           # test cannot dismiss it -- the gate would resolve to `denied` and Go Live would
           # never reach ConnectingState. mobile/gazer/scripts/run_integration_test.sh grants
           # the identical three so the local and CI paths do not diverge.
+          # I3 (final-review-platform.md): `grep -q "BUILD SUCCESSFUL"` alone is true even when
+          # connectedDebugAndroidTest executes ZERO tests (Gradle still prints BUILD SUCCESSFUL),
+          # so deleting/filtering out StreamServiceTest.kt would leave this green. The added
+          # `Starting [1-9]... tests on` assertion requires at least one instrumentation test to
+          # actually have run.
           working-directory: mobile/gazer
           script: |
             adb install -r build/app/outputs/flutter-apk/app-debug.apk
@@ -595,6 +802,7 @@ jobs:
             python3 scripts/decode_screenshots.py
             bash -eo pipefail -c "cd android && ./gradlew connectedDebugAndroidTest 2>&1 | tee /tmp/gradle_connected.log"
             grep -q "BUILD SUCCESSFUL" /tmp/gradle_connected.log
+            grep -qE 'Starting [1-9][0-9]* tests on' /tmp/gradle_connected.log
 
       - name: Upload integration screenshots
         if: always()
@@ -618,20 +826,23 @@ jobs:
       - name: Clean up runner workspace artifacts
         if: always()
         run: |
+          set -euo pipefail
           rm -rf mobile/gazer/build/integration_screenshots
           rm -rf mobile/gazer/build/app/reports/androidTests/connected
           rm -rf mobile/gazer/build/app/outputs/flutter-apk
 
   # `integration` gates this job (Task 21) so a tagged release never ships without the emulator
   # test passing. `toolchain` is also a dependency (Task 25) so this job can pull the toolchain
-  # image for its apksigner verification step below.
+  # image for its apksigner verification step below. `build-signed` (not `build`) is the artifact
+  # source for a release -- see C1 comment on that job.
   release:
     name: GitHub Release
-    needs: [toolchain, build, test, android-unit, security, integration]
+    needs: [toolchain, build, build-signed, test, android-unit, telemetry, security, integration]
     if: startsWith(github.ref, 'refs/tags/gazer-v')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
-      contents: write
+      contents: write  # required by softprops/action-gh-release below to create the GitHub Release and upload assets
       packages: read  # added so this job's new container: step below can pull the toolchain image
     # See the `build` job's identical comment above: container jobs default run: steps to sh,
     # not bash, and the process-substitution + set -o pipefail below need real bash.
@@ -650,16 +861,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download APK artifact
+      - name: Download signed APK artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
         with:
-          name: gazer-apk
+          name: gazer-apk-signed
           path: release-artifacts
 
-      - name: Download AAB artifact
+      - name: Download signed AAB artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
         with:
-          name: gazer-aab
+          name: gazer-aab-signed
           path: release-artifacts
 
       - name: Verify no downloaded APK is debug-signed
