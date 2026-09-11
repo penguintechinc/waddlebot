@@ -47,6 +47,22 @@ LD_LIBRARY_PATH="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/emulator/lib64/qt/lib${LD_LI
   -camera-back emulated -camera-front emulated &
 EMULATOR_PID=$!
 
+# I8 (final-review-platform.md): mobile_screenshots_entrypoint.sh has a correct, idempotent,
+# status-preserving `trap cleanup_emulator EXIT`; this script had none, so a `set -e` abort
+# anywhere between here and the normal `adb emu kill` teardown at the end leaked the emulator
+# process (only `docker run --rm` container teardown reaped it). Ported verbatim: cleanup_emulator
+# never calls `exit` itself, so the script's real exit status (whatever caused the trap to fire)
+# always propagates unchanged; kill -0 on an already-exited pid fails silently, making a second
+# invocation (normal-path kill already happened) a no-op.
+cleanup_emulator() {
+  if kill -0 "$EMULATOR_PID" 2>/dev/null; then
+    echo "cleanup: emulator (pid $EMULATOR_PID) still running on exit -- killing it"
+    adb emu kill 2>/dev/null || kill "$EMULATOR_PID" 2>/dev/null || true
+    wait "$EMULATOR_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup_emulator EXIT
+
 # Bounded: if the emulator dies during startup (as it does when a dlopen it
 # needs fails), a bare `adb wait-for-device` blocks forever and the failure
 # only ever surfaces as a job-level timeout with no diagnosis.
@@ -109,9 +125,13 @@ python3 scripts/decode_screenshots.py
 cd android
 ./gradlew connectedDebugAndroidTest | tee /tmp/gradle_connected.log
 grep -q "BUILD SUCCESSFUL" /tmp/gradle_connected.log
+# I3 (final-review-platform.md): "BUILD SUCCESSFUL" alone is also true when
+# connectedDebugAndroidTest executes ZERO tests, so deleting/filtering out
+# StreamServiceTest.kt would leave this green. Requires at least one instrumentation test to
+# actually have run -- mirrors the identical assertion added to the CI workflow's integration job.
+grep -qE 'Starting [1-9][0-9]* tests on' /tmp/gradle_connected.log
 cd ..
 
-adb emu kill || echo "emulator already exited"
-wait "$EMULATOR_PID" 2>/dev/null || echo "emulator process already reaped"
-
+# The EXIT trap (cleanup_emulator, above) tears down the emulator uniformly for both this normal
+# completion path and any earlier `set -e` abort -- no separate teardown needed here.
 echo "integration test + connectedDebugAndroidTest complete"
