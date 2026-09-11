@@ -49,6 +49,23 @@ class FakeGazerHostApi implements GazerHostApi {
   /// Value [prepare] resolves to; tests can override to simulate failure.
   PrepareResult prepareResult = PrepareResult(ok: true);
 
+  /// When non-null, [prepare] throws this instead of resolving — the
+  /// *thrown* failure mode, distinct from [prepareResult]`.ok == false`
+  /// (the reported one). Pigeon surfaces any Kotlin-side throw as a
+  /// [PlatformException], so a test that wants to exercise the real
+  /// bridge failure should set a `PlatformException`; any other object
+  /// exercises the non-Pigeon path (a torn-down messenger, a plugin that
+  /// was never registered).
+  Object? prepareError;
+
+  /// When non-null, [start] throws this instead of resolving. See
+  /// [prepareError].
+  Object? startError;
+
+  /// When non-null, [stop] throws this instead of resolving. See
+  /// [prepareError].
+  Object? stopError;
+
   /// When set, [prepare] awaits this before resolving. Lets a test hold a
   /// `prepare()` call in flight -- e.g. to inject native `preparing`/`ready`
   /// events via [bridge] while the real Pigeon round trip is still
@@ -114,6 +131,10 @@ class FakeGazerHostApi implements GazerHostApi {
     prepareCalls.add(config);
     final gate = prepareGate;
     if (gate != null) await gate.future;
+    // Thrown *after* the gate so a test can hold a failing prepare in
+    // flight exactly as it can hold a succeeding one.
+    final Object? error = prepareError;
+    if (error != null) throw error;
     return prepareResult;
   }
 
@@ -121,12 +142,16 @@ class FakeGazerHostApi implements GazerHostApi {
   Future<void> start(StreamTarget target) async {
     calls.add('start');
     startCalls.add(target);
+    final Object? error = startError;
+    if (error != null) throw error;
   }
 
   @override
   Future<void> stop() async {
     calls.add('stop');
     stopCallCount += 1;
+    final Object? error = stopError;
+    if (error != null) throw error;
   }
 
   @override

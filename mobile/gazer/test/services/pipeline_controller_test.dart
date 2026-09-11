@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gazer/config/flag_keys.dart';
 import 'package:gazer/models/gazer_settings.dart';
@@ -698,5 +699,113 @@ void main() {
         await sub.cancel();
       },
     );
+  });
+
+  group('host call throws (never-throw contract)', () {
+    test('a throwing prepare ends in ErrorState(serviceStartDenied), never an unhandled error', () async {
+      host.prepareError = PlatformException(code: 'SERVICE_START_DENIED');
+
+      // The call itself must complete normally: on the unguarded code
+      // the PlatformException escapes as an unhandled async error and
+      // the controller is stranded in PreparingState, where the UI
+      // renders neither Go Live nor Stop.
+      await expectLater(
+        controller.goLive(
+          settingsWith(),
+          devices: [backCamera],
+          videoDeviceId: 'camera:back',
+          flags: flagsWith(),
+        ),
+        completes,
+      );
+
+      expect(controller.current, isA<ErrorState>());
+      expect(
+        (controller.current as ErrorState).error.code,
+        GazerErrorCode.serviceStartDenied,
+      );
+      expect(host.startCalls, isEmpty);
+    });
+
+    test('a throwing start ends in ErrorState(unknown)', () async {
+      host.startError = PlatformException(code: 'CHANNEL_ERROR');
+
+      await expectLater(
+        controller.goLive(
+          settingsWith(),
+          devices: [backCamera],
+          videoDeviceId: 'camera:back',
+          flags: flagsWith(),
+        ),
+        completes,
+      );
+
+      expect(controller.current, isA<ErrorState>());
+      expect(
+        (controller.current as ErrorState).error.code,
+        GazerErrorCode.unknown,
+      );
+    });
+
+    test('a non-PlatformException throw is guarded too', () async {
+      host.prepareError = MissingPluginException('no GazerHostApi registered');
+
+      await expectLater(
+        controller.goLive(
+          settingsWith(),
+          devices: [backCamera],
+          videoDeviceId: 'camera:back',
+          flags: flagsWith(),
+        ),
+        completes,
+      );
+
+      expect(controller.current, isA<ErrorState>());
+      expect(
+        (controller.current as ErrorState).error.code,
+        GazerErrorCode.serviceStartDenied,
+      );
+    });
+
+    test(
+      'a throwing stop still reaches IdleState so the UI stays usable',
+      () async {
+        await controller.goLive(
+          settingsWith(),
+          devices: [backCamera],
+          videoDeviceId: 'camera:back',
+          flags: flagsWith(),
+        );
+        host.stopError = PlatformException(code: 'NOT_BOUND');
+
+        await expectLater(controller.stop(), completes);
+
+        // Without the `finally`, a failed native stop pins the controller
+        // in StoppingState -- Go Live is disabled there and Stop is the
+        // only button rendered, so the app can only be force-quit.
+        expect(controller.current, isA<IdleState>());
+      },
+    );
+
+    test('the mapped detail carries the platform code, never the exception message', () async {
+      // A Kotlin-side message can quote the target URL, and with it the
+      // stream key -- the mapped detail must never echo it.
+      host.prepareError = PlatformException(
+        code: 'SERVICE_START_DENIED',
+        message: 'startForegroundService refused for rtmp://ingest-a.example.com/live/demo-key-0001',
+      );
+
+      await controller.goLive(
+        settingsWith(),
+        devices: [backCamera],
+        videoDeviceId: 'camera:back',
+        flags: flagsWith(),
+      );
+
+      final String detail = (controller.current as ErrorState).error.detail!;
+      expect(detail, contains('SERVICE_START_DENIED'));
+      expect(detail, isNot(contains('demo-key-0001')));
+      expect(detail, isNot(contains('ingest-a.example.com')));
+    });
   });
 }
