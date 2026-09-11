@@ -6,9 +6,14 @@
 #       counts only the real one;
 #   (b) a fixture containing only generated-path records fails with the
 #       zero-denominator message, not a false pass.
+#   (c) I7 (final-review-platform.md): the on-disk completeness check
+#       (lib-root 4th arg) fails when a hand-written .dart file on disk has
+#       no SF: record at all, and passes when every on-disk hand-written
+#       file is represented.
 #
-# This never touches the real coverage/lcov.info -- it is pure fixture
-# data written to a scratch directory, cleaned up on exit.
+# This never touches the real coverage/lcov.info or the real mobile/gazer/lib
+# -- it is pure fixture data written to a scratch directory, cleaned up on
+# exit.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -107,6 +112,72 @@ if ! grep -q "zero SF (source file) records" "${GENERATED_ONLY_OUTPUT}"; then
 fi
 if ! grep -q "excluded 4 generated-file record(s) of 4 total, 0 remaining" "${GENERATED_ONLY_OUTPUT}"; then
   echo "SELFTEST FAIL (b): expected all 4 records to be reported excluded" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+
+# --- Fixture (c): on-disk completeness check (I7) ------------------------
+# A fixture lib-root with two hand-written files (present.dart, missing.dart)
+# and one generated file (skip.g.dart). An lcov report covering only
+# present.dart must FAIL (missing.dart has zero SF: records even though it
+# exists on disk); a report covering both hand-written files must PASS.
+FIXTURE_LIB_ROOT="${WORKDIR}/fixture_lib/lib"
+mkdir -p "${FIXTURE_LIB_ROOT}"
+echo '// hand-written, present in the report' > "${FIXTURE_LIB_ROOT}/present.dart"
+echo '// hand-written, MISSING from the report' > "${FIXTURE_LIB_ROOT}/missing.dart"
+echo '// generated, excluded from the on-disk count entirely' > "${FIXTURE_LIB_ROOT}/skip.g.dart"
+
+INCOMPLETE_LCOV="${WORKDIR}/incomplete.info"
+cat > "${INCOMPLETE_LCOV}" <<EOF
+SF:${FIXTURE_LIB_ROOT}/present.dart
+DA:1,1
+LF:1
+LH:1
+end_of_record
+EOF
+
+INCOMPLETE_OUTPUT="$(mktemp "${WORKDIR}/incomplete_output.XXXXXX")"
+INCOMPLETE_STATUS=0
+"${GATE}" 90 "${INCOMPLETE_LCOV}" lcov "${FIXTURE_LIB_ROOT}" > "${INCOMPLETE_OUTPUT}" 2>&1 || INCOMPLETE_STATUS=$?
+
+echo "--- fixture (c1): on-disk file missing from report ---"
+cat "${INCOMPLETE_OUTPUT}"
+
+if [[ "${INCOMPLETE_STATUS}" -eq 0 ]]; then
+  echo "SELFTEST FAIL (c1): expected non-zero exit (missing.dart has no SF: record), got 0" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+if ! grep -q "on-disk completeness check FAILED" "${INCOMPLETE_OUTPUT}"; then
+  echo "SELFTEST FAIL (c1): expected the on-disk completeness failure message" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+
+COMPLETE_LCOV="${WORKDIR}/complete.info"
+cat > "${COMPLETE_LCOV}" <<EOF
+SF:${FIXTURE_LIB_ROOT}/present.dart
+DA:1,1
+LF:1
+LH:1
+end_of_record
+SF:${FIXTURE_LIB_ROOT}/missing.dart
+DA:1,1
+LF:1
+LH:1
+end_of_record
+EOF
+
+COMPLETE_OUTPUT="$(mktemp "${WORKDIR}/complete_output.XXXXXX")"
+COMPLETE_STATUS=0
+"${GATE}" 90 "${COMPLETE_LCOV}" lcov "${FIXTURE_LIB_ROOT}" > "${COMPLETE_OUTPUT}" 2>&1 || COMPLETE_STATUS=$?
+
+echo "--- fixture (c2): every on-disk hand-written file present ---"
+cat "${COMPLETE_OUTPUT}"
+
+if [[ "${COMPLETE_STATUS}" -ne 0 ]]; then
+  echo "SELFTEST FAIL (c2): expected exit 0 (both hand-written files represented, 100% coverage), got ${COMPLETE_STATUS}" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+if ! grep -q "on-disk completeness check OK" "${COMPLETE_OUTPUT}"; then
+  echo "SELFTEST FAIL (c2): expected the on-disk completeness OK message" >&2
   FAILURES=$((FAILURES + 1))
 fi
 
