@@ -418,4 +418,24 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsDebugLogsLabel => 'Debug logs';
+
+  @override
+  String get telemetryEndpointFieldLabel => 'Telemetry endpoint';
+
+  @override
+  String get telemetryEndpointFieldHint =>
+      'https://otel-collector.example.com:4318';
+
+  @override
+  String get statusPanelTelemetryLabel => 'Telemetry';
+
+  @override
+  String get statusPanelTelemetryDisabledLabel =>
+      'Disabled (no endpoint configured)';
+
+  @override
+  String get statusPanelTelemetryExportingLabel => 'Exporting';
+
+  @override
+  String get statusPanelTelemetryFailedLabel => 'Last export failed';
 }

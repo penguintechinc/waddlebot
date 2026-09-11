@@ -7,6 +7,7 @@ import '../models/quality.dart';
 import '../models/stream_stats.dart';
 import '../models/validation_issue.dart';
 import '../pigeon/pipeline.g.dart';
+import '../telemetry/gazer_telemetry.dart';
 import 'feature_flags.dart';
 import 'gazer_log.dart';
 import 'native_event_bridge.dart';
@@ -61,6 +62,7 @@ class PipelineController {
   bool _isDisposed = false;
   bool _goingLive = false;
   DateTime? _streamStartedAt;
+  DateTime? _connectingStartedAt;
 
   // Running sum/count instead of a growing sample list: the rolling
   // average is O(1) per sample in both time and memory, however long a
@@ -173,7 +175,9 @@ class PipelineController {
       });
 
       _emit(const PreparingState());
+      final prepareSpan = GazerTelemetry.startSpan('gazer.pipeline.prepare');
       final result = await _host.prepare(config);
+      prepareSpan.end();
       if (!result.ok) {
         _emit(
           ErrorState(
@@ -187,7 +191,10 @@ class PipelineController {
       }
       _emit(const ReadyState());
       _emit(const ConnectingState());
+      _connectingStartedAt = DateTime.now();
+      final startSpan = GazerTelemetry.startSpan('gazer.pipeline.start');
       await _host.start(_pendingTarget!);
+      startSpan.end();
     } finally {
       _goingLive = false;
     }
@@ -197,7 +204,9 @@ class PipelineController {
   Future<void> stop() async {
     _cancelled = true;
     _emit(const StoppingState());
+    final stopSpan = GazerTelemetry.startSpan('gazer.pipeline.stop');
     await _host.stop();
+    stopSpan.end();
     _emit(const IdleState());
   }
 
@@ -267,8 +276,11 @@ class PipelineController {
   Future<void> _retryAfter(Duration delay) async {
     await _sleeper(delay);
     if (_isDisposed || _cancelled || _pendingTarget == null) return;
+    _connectingStartedAt = DateTime.now();
     _emit(const ConnectingState());
+    final retrySpan = GazerTelemetry.startSpan('gazer.pipeline.start');
     await _host.start(_pendingTarget!);
+    retrySpan.end();
   }
 
   void _onNativeStats(StatsSample sample) {
@@ -287,6 +299,10 @@ class PipelineController {
       uptime: uptime,
       congestionPercent: sample.congestionPercent,
     );
+    GazerTelemetry.histogram(
+      'gazer.stream.bitrate_kbps',
+      sample.bitrateKbps.toDouble(),
+    );
     _statsController.add(_statsSnapshot);
   }
 
@@ -301,6 +317,20 @@ class PipelineController {
       'to': next.runtimeType.toString(),
       if (next is ErrorState) 'errorCode': next.error.code.name,
     });
+    GazerTelemetry.counter('gazer.pipeline.state_change', <String, Object?>{
+      'from': _current.runtimeType.toString(),
+      'to': next.runtimeType.toString(),
+    });
+    if (next is StreamingState && _connectingStartedAt != null) {
+      final latencyMs = DateTime.now()
+          .difference(_connectingStartedAt!)
+          .inMilliseconds;
+      GazerTelemetry.histogram(
+        'gazer.rtmp.connect_latency_ms',
+        latencyMs.toDouble(),
+      );
+      _connectingStartedAt = null;
+    }
     _current = next;
     _stateController.add(next);
   }

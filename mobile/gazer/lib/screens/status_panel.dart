@@ -14,9 +14,12 @@ import '../providers/devices_provider.dart';
 import '../providers/license_provider.dart';
 import '../providers/pipeline_provider.dart';
 import '../providers/settings_provider.dart';
+import '../providers/telemetry_provider.dart';
 import '../providers/update_provider.dart';
 import '../services/feature_flags.dart';
 import '../services/pipeline_controller.dart';
+import '../telemetry/gazer_telemetry.dart';
+import '../telemetry/telemetry_config.dart';
 import '../widgets/masked_text.dart';
 
 /// Opens the status panel as a modal bottom sheet on phones (<600dp
@@ -80,6 +83,9 @@ class StatusPanel extends ConsumerWidget {
     final List<VideoDevice> devices =
         ref.watch(videoDevicesProvider).value ?? const <VideoDevice>[];
     final GazerSettings? settings = ref.watch(settingsProvider).value;
+    final AsyncValue<TelemetryConfig> telemetryConfig = ref.watch(
+      telemetryConfigProvider,
+    );
 
     final bool cameraOn = state is! IdleState && state is! ErrorState;
     final String? deviceLabel = cameraOn && devices.isNotEmpty
@@ -244,6 +250,17 @@ class StatusPanel extends ConsumerWidget {
               state is! IdleState
                   ? l10n.statusPanelForegroundServiceActiveLabel
                   : l10n.statusPanelForegroundServiceInactiveLabel,
+            ),
+            const Divider(),
+            _row(
+              context,
+              l10n.statusPanelTelemetryLabel,
+              (telemetryConfig.value?.endpoint.isNotEmpty ?? false)
+                  ? (GazerTelemetry.exportFailures > 0 &&
+                            GazerTelemetry.exportSuccesses == 0
+                        ? l10n.statusPanelTelemetryFailedLabel
+                        : l10n.statusPanelTelemetryExportingLabel)
+                  : l10n.statusPanelTelemetryDisabledLabel,
             ),
           ],
         ),
