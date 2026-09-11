@@ -222,8 +222,11 @@ tasks.register<JacocoReport>("jacocoTestReport") {
             "**/MainActivity.class",
             "**/MainActivity\$*.class",
             // RootEncoderEngine wraps RootEncoder's GenericStream (real Camera2/MediaCodec/
-            // socket stack); it cannot run on the JVM unit-test target and is exercised by the
-            // instrumented StreamServiceTest (Task 20) instead. Excluded here so the JaCoCo
+            // socket stack); it cannot run on the JVM unit-test target. Its actual runtime gate is
+            // the on-emulator integration_test/go_live_unreachable_test.dart, which drives
+            // prepare -> startStream -> failure -> re-prepare through a real engine (NOT the
+            // instrumented StreamServiceTest, which never constructs one: StreamService's pipeline
+            // is lazy and that test never prepares it). Excluded here so the JaCoCo
             // >=90% gate does not count admittedly-uncovered forwarding calls against a class
             // that unit tests structurally cannot reach - narrow, single class, documented, not
             // a blanket exclusion. (Folded into this shared fileFilter -- rather than a separate
