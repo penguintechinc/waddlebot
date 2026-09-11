@@ -408,4 +408,8 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get statusPanelCloseButtonLabel => 'Close';
+
+  @override
+  String get goLiveFailedMessage =>
+      'Could not start the stream. Please try again.';
 }
