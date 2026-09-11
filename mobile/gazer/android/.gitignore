@@ -1,8 +1,8 @@
-gradle-wrapper.jar
+# gradlew, gradlew.bat and gradle/wrapper/gradle-wrapper.jar are deliberately COMMITTED here (the
+# container toolchain runs ./gradlew and the wrapper is pinned by distributionSha256Sum), so the
+# Flutter template's ignores for them are removed rather than force-added around.
 /.gradle
 /captures/
-/gradlew
-/gradlew.bat
 /local.properties
 GeneratedPluginRegistrant.java
 .cxx/

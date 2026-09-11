@@ -1,6 +1,7 @@
 package io.waddlebot.gazer.pipeline.sources
 
 import android.content.Context
+import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import com.pedro.encoder.input.sources.video.Camera2Source
@@ -17,16 +18,28 @@ interface CameraIds {
     fun byFacing(facing: Int): String?
 }
 
-/** Production [CameraIds] backed by the real [CameraManager]. */
+/**
+ * Production [CameraIds] backed by the real [CameraManager].
+ *
+ * `cameraIdList`/`getCameraCharacteristics` throw `CameraAccessException` when the camera service
+ * is unavailable or the camera is disabled by device policy. This feeds `listVideoDevices()`, a
+ * non-suspend Pigeon method, so an escaping throw would reach Dart as a PlatformException on a
+ * plain device-list query; "this device has no usable camera right now" is exactly a null/empty
+ * answer, so it is reported as one.
+ */
 class CameraManagerIds(
     private val cameraManager: CameraManager,
 ) : CameraIds {
     override fun byFacing(facing: Int): String? {
-        for (id in cameraManager.cameraIdList) {
-            val characteristics = cameraManager.getCameraCharacteristics(id)
-            if (characteristics.get(CameraCharacteristics.LENS_FACING) == facing) {
-                return id
+        try {
+            for (id in cameraManager.cameraIdList) {
+                val characteristics = cameraManager.getCameraCharacteristics(id)
+                if (characteristics.get(CameraCharacteristics.LENS_FACING) == facing) {
+                    return id
+                }
             }
+        } catch (_: CameraAccessException) {
+            return null
         }
         return null
     }

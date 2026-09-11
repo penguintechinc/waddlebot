@@ -17,11 +17,14 @@ import org.junit.runner.RunWith
 /**
  * Instrumented lifecycle test: StreamService must post its foreground notification on start and
  * remove it cleanly when ACTION_STOP is broadcast (the real path the notification's own Stop
- * action - and any other Stop trigger - takes; see StreamService's stopReceiver, which calls
- * pipeline.stop(), stopForeground(STOP_FOREGROUND_REMOVE), and stopSelf()). Cannot run on the JVM
- * unit-test target since it needs a real NotificationManager and Android service lifecycle - this
- * is also RootEncoderEngine's only coverage, since it can't run outside a real Camera2/MediaCodec
- * -capable device or emulator.
+ * action - and any other Stop trigger - takes; see StreamService's stopReceiver, which delegates to
+ * ServiceTeardownController.stopEverything(): pipeline.stop(), stopForeground(STOP_FOREGROUND_REMOVE),
+ * stopSelf()). Cannot run on the JVM unit-test target since it needs a real NotificationManager and
+ * Android service lifecycle.
+ *
+ * Note this test does NOT cover RootEncoderEngine: StreamService's pipeline is lazy and is never
+ * prepared here, so no engine is ever constructed. RootEncoderEngine's runtime gate is
+ * integration_test/go_live_unreachable_test.dart on the same emulator job.
  */
 @RunWith(AndroidJUnit4::class)
 class StreamServiceTest {
