@@ -14,9 +14,11 @@ import 'package:gazer/providers/devices_provider.dart';
 import 'package:gazer/providers/license_provider.dart';
 import 'package:gazer/providers/pipeline_provider.dart';
 import 'package:gazer/providers/settings_provider.dart';
+import 'package:gazer/providers/telemetry_provider.dart';
 import 'package:gazer/providers/update_provider.dart';
 import 'package:gazer/services/pipeline_controller.dart';
 import 'package:gazer/services/reconnect_policy.dart';
+import 'package:gazer/telemetry/telemetry_config.dart';
 
 import '../helpers/fake_host_api.dart';
 import '../helpers/fakes.dart';
@@ -81,6 +83,16 @@ void main() {
     isOnlineProvider.overrideWith((Ref ref) => Stream<bool>.value(true)),
     updateCheckerProvider.overrideWith(
       (Ref ref) async => FakeUpdateChecker(null),
+    ),
+    telemetryConfigProvider.overrideWith(
+      (Ref ref) async => const TelemetryConfig(
+        endpoint: '',
+        protocol: 'http/json',
+        headers: <String, String>{},
+        serviceName: 'gazer',
+        serviceVersion: '0.0.0',
+        deploymentEnvironment: 'test',
+      ),
     ),
   ];
 
@@ -163,9 +175,19 @@ void main() {
   testWidgets(
     'a retryable error enters ReconnectingState; Stop cancels back to Idle',
     (WidgetTester tester) async {
+      // Pinned to a phone-width viewport: the default flutter_test surface
+      // (800x600) is >=600dp wide, which (since Task 16) renders a
+      // persistent StatusPanel pane alongside HomeScreen's controls -- that
+      // pane's own stream-state row duplicates the exact "Reconnecting"/
+      // "Idle" text this test asserts via the StatusChip below, so a bare
+      // `find.text(...)` would match twice. Not a telemetry concern; this
+      // predates Task 27 and is a pre-existing Task 14/Task 16 test/layout
+      // interaction fixed here per the house "never ignore pre-existing
+      // failures" rule.
       await pumpGazerApp(
         tester,
         overrides: overrides(license: license(flagsSet: true)),
+        size: const Size(390, 844),
       );
       await tester.tap(find.widgetWithText(FilledButton, 'Go Live'));
       await tester.pumpAndSettle();
