@@ -7,6 +7,14 @@ import com.pedro.encoder.input.sources.video.VideoSource
 import com.pedro.library.generic.GenericStream
 
 /**
+ * Percentage of the stream client's send queue that must be occupied before
+ * [StreamEngine.hasCongestion] reports congestion. Shared by GazerPipeline (which feeds
+ * BitrateAdapter) and StatsSampler (which reports it to Dart) so the two can never drift apart
+ * and report different congestion for the same instant.
+ */
+internal const val CONGESTION_THRESHOLD_PERCENT = 20f
+
+/**
  * Bridge between GazerPipeline and whatever RTMP/H.264 implementation backs it. Exists so
  * GazerPipeline's state machine and tests never touch RootEncoder types directly - only this
  * narrow surface, verified against RootEncoder 2.8.1's StreamBase and GenericStreamClient.
@@ -39,8 +47,6 @@ interface StreamEngine {
 
     fun setReTries(n: Int)
 
-    fun setTlsHostVerification(enabled: Boolean)
-
     fun sentVideoFrames(): Long
 
     fun droppedVideoFrames(): Long
@@ -51,11 +57,32 @@ interface StreamEngine {
 }
 
 /**
- * Wraps RootEncoder's GenericStream (Camera2/Mic -> MediaCodec H.264/AAC -> RTMP/RTMPS) behind
+ * Wraps RootEncoder's GenericStream (Camera2/Mic -> MediaCodec H.264/AAC -> RTMP) behind
  * StreamEngine. Deliberately thin: every method is a 1:1 forward to a verified RootEncoder 2.8.1
  * API, so GazerPipelineTest exercises this class only indirectly via a fake StreamEngine -
- * RootEncoderEngine itself is exercised by the instrumented StreamServiceTest in Task 20, the
- * only place a real Camera2/MediaCodec/socket stack can run.
+ * RootEncoderEngine's real runtime coverage is the on-emulator
+ * `integration_test/go_live_unreachable_test.dart`, which drives prepare -> startStream -> failure
+ * -> re-prepare against a real Camera2/MediaCodec/socket stack.
+ *
+ * TLS, VERIFIED against the 2.8.1 artifacts (decompiled from the Gradle cache; see the M1 fix-wave
+ * Android report for the exact bytecode citations):
+ * - `RtmpClient.establishConnection` builds `TcpSocket(socketType, host, port, tlsEnabled,
+ *   socketTimeout, tlsHostVerification, certificates)`; `socketType` defaults to `SocketType.JAVA`
+ *   and both `tlsHostVerification` and `certificates` are left at their Kotlin defaults
+ *   (`false`/`null`) unless a caller changes them.
+ * - `TcpStreamSocketJava.onConnectSocket` therefore does `SSLContext.getInstance("TLS").init(null,
+ *   null, SecureRandom())` for an `rtmps://` target: the **certificate chain IS validated** against
+ *   the platform trust store, but `SSLParameters.endpointIdentificationAlgorithm = "HTTPS"` is only
+ *   applied when `hostVerification` is true - so **hostname verification is OFF by default**.
+ * - The only switch for it, `RtmpStreamClient.setTlsHostVerification`, is unreachable from here:
+ *   `GenericStream.getStreamClient()` returns `GenericStreamClient`, which exposes
+ *   `addCertificates` but not `setTlsHostVerification`, and keeps its wrapped `RtmpStreamClient`
+ *   private.
+ * Consequence: `rtmps://` through `GenericStream` does not meet `security.md`'s certificate
+ * validation bar in M1 and must be rejected by Dart's TargetValidator. This class deliberately
+ * makes no TLS call at all - there is none it could make that would help - and the dead
+ * `setTlsHostVerification` forwarder that used to sit here (it only called `addCertificates(null)`,
+ * i.e. re-selected the default trust store) has been removed so nobody believes it is wired.
  */
 class RootEncoderEngine(
     context: Context,
@@ -98,20 +125,6 @@ class RootEncoderEngine(
 
     override fun setReTries(n: Int) {
         stream.getStreamClient().setReTries(n)
-    }
-
-    /**
-     * VERIFIED GAP (RootEncoder 2.8.1): `GenericStreamClient` — the type returned by
-     * `GenericStream.getStreamClient()` — does not declare `setTlsHostVerification`; only the
-     * protocol-specific `RtmpStreamClient` does, and `GenericStreamClient` does not expose its
-     * wrapped `RtmpStreamClient`. [enabled] is therefore accepted but otherwise unused;
-     * `addCertificates(null)` (system trust) is the closest control available on the generic
-     * client, so this override is a documented no-op beyond that — the [StreamEngine] interface
-     * keeps the method (it is part of the shared contract every engine implements), only this
-     * RootEncoder-backed implementation cannot honor it fully in 2.8.1.
-     */
-    override fun setTlsHostVerification(enabled: Boolean) {
-        stream.getStreamClient().addCertificates(null)
     }
 
     override fun sentVideoFrames(): Long = stream.getStreamClient().getSentVideoFrames()
