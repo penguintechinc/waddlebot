@@ -795,6 +795,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Close'**
   String get statusPanelCloseButtonLabel;
+
+  /// No description provided for @goLiveFailedMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not start the stream. Please try again.'**
+  String get goLiveFailedMessage;
 }
 
 class _AppLocalizationsDelegate
