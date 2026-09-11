@@ -412,4 +412,7 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get goLiveFailedMessage =>
       'Could not start the stream. Please try again.';
+
+  @override
+  String get settingsSaveFailed => 'Failed to save settings. Please try again.';
 }
