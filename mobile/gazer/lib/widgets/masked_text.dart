@@ -29,9 +29,13 @@ class MaskedText extends StatefulWidget {
   State<MaskedText> createState() => _MaskedTextState();
 }
 
+/// Holds the reveal/hide toggle state for one [MaskedText].
 class _MaskedTextState extends State<MaskedText> {
   bool _revealed = false;
 
+  /// [MaskedText.value] with every character but the last 4 replaced by
+  /// [MaskedText.maskChar]; a value of 4 characters or fewer is masked
+  /// entirely rather than leaking itself, and an empty value stays empty.
   String get _masked {
     final String v = widget.value;
     if (v.isEmpty) return '';
@@ -48,6 +52,9 @@ class _MaskedTextState extends State<MaskedText> {
         Semantics(
           label: widget.revealSemanticsLabel,
           button: true,
+          // IconButton contributes its own (icon-derived) semantics node;
+          // merging it under the explicit label announces the control twice.
+          excludeSemantics: true,
           child: IconButton(
             icon: Icon(_revealed ? Icons.visibility_off : Icons.visibility),
             onPressed: () => setState(() => _revealed = !_revealed),
