@@ -93,7 +93,7 @@ Gazer 1.0 (`mobile/flutter_gazer`) is scaffolding: faked "streaming"/"connected"
 - Coverage ≥90% mandatory: Dart enforced in CI via lcov threshold; Kotlin via JaCoCo on testDebugUnitTest; native C++ helpers unit-tested on host with googletest + llvm-cov ≥90%; JNI glue covered by instrumented + manual matrix (no coverage number claimed)
 - Supply-chain: no PRC-origin, no dead/archived libraries (ffmpeg-kit, apivideo_live_stream out); all third-party pinned by commit/tag + SHA256
 - Foreground service (types: camera, microphone, connectedDevice): user-initiated start only, persistent notification with Stop action, partial wake lock, screen-off preserves stream
-- Permissions: CAMERA, RECORD_AUDIO, FOREGROUND_SERVICE (+ _CAMERA, _MICROPHONE, _CONNECTED_DEVICE), INTERNET, FEATURE_USB_HOST (not required=false), POST_NOTIFICATIONS (13+)
+- Permissions: CAMERA, RECORD_AUDIO, FOREGROUND_SERVICE (+ _CAMERA, _MICROPHONE, _CONNECTED_DEVICE), INTERNET, FEATURE_USB_HOST (required=false), POST_NOTIFICATIONS (13+)
 
 ## Architecture
 
@@ -536,12 +536,15 @@ Test configurations documented in README:
 - Java 17 (temurin or eclipse-adoptium)
 - CMake 3.28+
 - rootless USER appuser
-- Entrypoint: make target (mobile-lint, mobile-test, mobile-build, mobile-security)
+- No ENTRYPOINT: every `mobile-*` make target passes its full command as the container CMD
+  (shipped this way — see `Dockerfile`'s own comment for the rationale)
 
 ### Make Targets (repo root)
 
 - `make mobile-lint`: flutter analyze + dart format --set-exit-if-changed + gradle lint + ktlint
-- `make mobile-test`: flutter test --coverage + coverage ≥90% gate + gradle testDebugUnitTest
+- `make mobile-test`: coverage_gate_selftest.sh + flutter test --coverage + coverage ≥90% gate
+  (`gradle testDebugUnitTest` is its own separate target, `make mobile-test-android`, not part of
+  `mobile-test`)
 - `make mobile-build`: flutter build apk --split-per-abi --obfuscate --split-debug-info + flutter build appbundle
 - `make mobile-security`: osv-scanner pubspec.lock + gradle deps + semgrep + gitleaks
 - All targets run inside Dockerfile (no local machine setup)
@@ -550,13 +553,17 @@ Test configurations documented in README:
 ### GitHub Workflow
 
 Path-filtered to `mobile/gazer/**`:
-1. **analyze**: flutter analyze
-2. **test**: flutter test --coverage + coverage gate ≥90%
-3. **android-unit**: gradle testDebugUnitTest
-4. **build**: apk + appbundle (arm64-v8a, armeabi-v7a, x86_64), artifacts uploaded
-5. **security**: osv-scanner, semgrep, gitleaks
-6. **release** (on tag gazer-v*.*.* only): upload artifacts to GitHub Release
-7. All actions pinned by full commit SHA
+1. **toolchain**: build/push the pinned toolchain image, resolved to an immutable digest for every downstream job
+2. **analyze**: flutter analyze + dart format + ktlint/Android Lint
+3. **test**: flutter test --coverage + coverage gate ≥90% (+ coverage_gate_selftest.sh)
+4. **android-unit**: gradle testDebugUnitTest + JaCoCo gate ≥90%
+5. **telemetry**: OTel local-sink emission gate
+6. **build**: debug-signed apk + appbundle (arm64-v8a, armeabi-v7a, x86_64), artifacts uploaded, every push/PR
+7. **build-signed** (on tag gazer-v*.*.* only, under the `gazer-release` GitHub Environment): upload-key-signed apk + appbundle
+8. **security**: osv-scanner, semgrep, gitleaks
+9. **integration**: emulator-based `integration_test/` + `connectedDebugAndroidTest`, bare `ubuntu-latest` runner (KVM)
+10. **release** (on tag gazer-v*.*.* only): upload build-signed's artifacts to GitHub Release
+11. All actions pinned by full commit SHA
 
 ### Signing
 
