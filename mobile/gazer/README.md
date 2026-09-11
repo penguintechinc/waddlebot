@@ -4,7 +4,9 @@ Live-streaming client for Android phones and tablets. Streams the device's
 back or front camera to any RTMP/RTMPS endpoint (H.264 + AAC, adaptive
 bitrate, automatic reconnect). Standalone — no WaddleBot login; you supply
 the RTMP URL/key/auth. M1 scope: phone camera only (no USB capture card yet
-— see M2/M3 in `docs/superpowers/specs/2026-09-07-gazer-mobile-v2-design.md`).
+— see M2/M3 in `docs/superpowers/specs/2026-09-07-gazer-mobile-v2-design.md`),
+and **no on-screen camera preview in M1** — the stream is verified from the
+RTMP target and the app's own StatusPanel, not a live viewfinder.
 
 ## What works offline vs. online
 
@@ -53,18 +55,33 @@ host.
 
 ```
 make mobile-toolchain          # build the toolchain image (once, or after Dockerfile changes)
-make mobile-lint                # flutter analyze + dart format --set-exit-if-changed + ktlint
-make mobile-test                 # flutter test --coverage, gated >=90%
+make mobile-lint                # flutter analyze + dart format --set-exit-if-changed + ktlint + Android Lint
+make mobile-test                 # coverage_gate_selftest + flutter test --coverage, gated >=90%
 make mobile-test-android          # gradle testDebugUnitTest + JaCoCo, gated >=90%
 make mobile-test-integration        # emulator (needs /dev/kvm): integration_test/ + connectedDebugAndroidTest
-make mobile-build                    # apk --split-per-abi + appbundle
+make mobile-build                    # apk --split-per-abi + appbundle (debug-signed; CI's tag-gated build-signed job produces the upload-key-signed release artifact)
+make mobile-build-signed              # same as mobile-build, but requires android/key.properties and fails closed on unsigned output (local upload-key testing only)
 make mobile-security                  # osv-scanner + semgrep + gitleaks
 make mobile-telemetry-check            # OTel local-sink smoke test (logs/metrics/histograms/spans >=1)
-make mobile-screenshots                # docs/screenshots/gazer/ marketing set (needs /dev/kvm)
-make seed-mock-data-mobile               # interactive: launch with mock data seeded (needs a running device)
+make mobile-codegen                     # dart run pigeon + build_runner + flutter gen-l10n (regenerate generated sources)
+make mobile-clean                        # flutter clean + gradlew clean
+make mobile-screenshots                   # docs/screenshots/gazer/ marketing set (needs /dev/kvm)
+make seed-mock-data-mobile                 # interactive: launch with mock data seeded (needs a running device)
+```
+
+To install a debug-signed APK for manual testing on an already-running
+emulator/device:
+
+```
+make mobile-run CMD="flutter build apk --debug"
+adb install -r mobile/gazer/build/app/outputs/flutter-apk/app-debug.apk
 ```
 
 ## Device matrix (M1 — phone camera only)
+
+"Camera path" below is the capture source used for the stream, not an
+on-screen preview — M1 ships no live viewfinder on any device (see the M1
+scope note above); status is surfaced via the StatusPanel instead.
 
 | Device | Camera path | Orientation | Status |
 |---|---|---|---|
@@ -75,6 +92,31 @@ make seed-mock-data-mobile               # interactive: launch with mock data se
 
 USB capture-card rows (Camera2-external, libuvc) are out of scope until
 M2/M3.
+
+## Release signing
+
+Tagging `gazer-vX.Y.Z` triggers CI's `build-signed` job, which decodes the
+upload keystore and produces the real, Play-uploadable signed APK/AAB. That
+job runs under the `gazer-release` GitHub Environment (auto-created the
+first time the workflow references it) — **one-time human step**: move the
+four `ANDROID_UPLOAD_KEY_STORE_B64` / `ANDROID_UPLOAD_KEY_STORE_PASSWORD` /
+`ANDROID_UPLOAD_KEY_ALIAS` / `ANDROID_UPLOAD_KEY_ALIAS_PASSWORD` repository
+secrets into that environment's own secret store (Settings → Environments →
+`gazer-release`) and add at least one required reviewer, so a release build
+needs human approval before it can read the signing key. Every non-tag push
+(branches, PRs) still produces a debug-signed APK/AAB from the regular
+`build` job for testing — the upload key is never decoded outside a
+`gazer-v*` tag.
+
+## Tooling notes
+
+- `mobile-security`'s semgrep step runs `--config auto`, a network-fetched
+  ruleset (tool version pinned in the Dockerfile). Usage metrics stay
+  enabled (`--metrics=on`, explicit) — semgrep 1.176.1 refuses `--metrics=off`
+  together with `--config auto` ("Cannot create auto config when metrics are
+  off. Please allow metrics or run with a specific config."). Disabling
+  metrics requires switching to a vendored/pinned rules directory, deferred
+  to M2.
 
 ## Troubleshooting
 
