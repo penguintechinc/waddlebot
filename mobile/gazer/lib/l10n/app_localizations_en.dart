@@ -36,9 +36,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get sourceFrontCameraLabel => 'Front camera';
 
   @override
-  String sourceTileSemanticsLabel(String name) {
-    return '$name camera source';
-  }
+  String get sourcePickerEmptyLabel => 'No cameras found';
 
   @override
   String get goLiveButtonLabel => 'Go Live';
@@ -198,6 +196,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get usernameFieldLabel => 'Username';
 
   @override
+  String get revealUsernameLabel => 'Show username';
+
+  @override
   String get passwordFieldLabel => 'Password';
 
   @override
@@ -226,7 +227,15 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String bitrateFieldValueLabel(int value) {
+    return 'Video Bitrate: $value kbps';
+  }
+
+  @override
   String get adaptiveBitrateLabel => 'Adaptive Bitrate';
+
+  @override
+  String get adaptiveBitrateDisabledHint => 'Not enabled for this license tier';
 
   @override
   String get audioSectionTitle => 'Audio Source';
@@ -347,7 +356,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String statusPanelUptimeLabel(String value) {
-    return 'Uptime: ${value}s';
+    return 'Uptime: $value';
   }
 
   @override
@@ -387,6 +396,13 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get statusPanelLicenseFetchingLabel =>
       'Fetching features… (required to stream)';
+
+  @override
+  String get statusPanelLicenseFetchFailedLabel =>
+      'Could not fetch features — streaming stays disabled';
+
+  @override
+  String get statusPanelLicenseRetryLabel => 'Retry';
 
   @override
   String statusPanelLicenseLastFetchedLabel(String time) {
@@ -442,6 +458,18 @@ class AppLocalizationsEn extends AppLocalizations {
   String get permissionOpenSettingsLabel => 'Open settings';
 
   @override
+  String get permissionDismissLabel => 'Not now';
+
+  @override
+  String get routeNotFoundTitle => 'Page not found';
+
+  @override
+  String get routeNotFoundMessage => 'That screen does not exist.';
+
+  @override
+  String get routeNotFoundHomeLabel => 'Back to Gazer';
+
+  @override
   String get telemetryEndpointFieldLabel => 'Telemetry endpoint';
 
   @override
@@ -452,8 +480,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get statusPanelTelemetryLabel => 'Telemetry';
 
   @override
-  String get statusPanelTelemetryDisabledLabel =>
-      'Disabled (no endpoint configured)';
+  String get statusPanelTelemetryDisabledLabel => 'Disabled (no endpoint)';
 
   @override
   String get statusPanelTelemetryExportingLabel => 'Exporting';

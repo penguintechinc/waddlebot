@@ -83,4 +83,51 @@ void main() {
     );
     expect(find.text('Elgato Cam Link'), findsOneWidget);
   });
+
+  testWidgets('a tile is announced by its name alone, not doubled', (
+    WidgetTester tester,
+  ) async {
+    // The redundant Semantics wrapper made TalkBack read "Back camera
+    // camera source"; RadioListTile already labels itself from its title.
+    // Disposed inline, not via addTearDown: flutter_test verifies handle
+    // disposal *before* tearDown callbacks run.
+    final SemanticsHandle handle = tester.ensureSemantics();
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SourcePicker(
+            devices: _devices,
+            selectedId: 'camera:back',
+            onSelected: (_) {},
+          ),
+        ),
+      ),
+    );
+    expect(
+      tester.getSemantics(find.byKey(const Key('backCameraOption'))).label,
+      'Back camera',
+    );
+    handle.dispose();
+  });
+
+  testWidgets('an empty device list explains itself instead of rendering a '
+      'bare heading', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SourcePicker(
+            devices: const <VideoDevice>[],
+            selectedId: null,
+            onSelected: (_) {},
+          ),
+        ),
+      ),
+    );
+    expect(find.byKey(const Key('sourcePickerEmpty')), findsOneWidget);
+    expect(find.text('No cameras found'), findsOneWidget);
+  });
 }

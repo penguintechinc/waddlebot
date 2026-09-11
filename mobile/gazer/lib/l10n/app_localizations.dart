@@ -142,11 +142,11 @@ abstract class AppLocalizations {
   /// **'Front camera'**
   String get sourceFrontCameraLabel;
 
-  /// No description provided for @sourceTileSemanticsLabel.
+  /// No description provided for @sourcePickerEmptyLabel.
   ///
   /// In en, this message translates to:
-  /// **'{name} camera source'**
-  String sourceTileSemanticsLabel(String name);
+  /// **'No cameras found'**
+  String get sourcePickerEmptyLabel;
 
   /// No description provided for @goLiveButtonLabel.
   ///
@@ -424,6 +424,12 @@ abstract class AppLocalizations {
   /// **'Username'**
   String get usernameFieldLabel;
 
+  /// No description provided for @revealUsernameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Show username'**
+  String get revealUsernameLabel;
+
   /// No description provided for @passwordFieldLabel.
   ///
   /// In en, this message translates to:
@@ -472,11 +478,23 @@ abstract class AppLocalizations {
   /// **'{value} kbps'**
   String bitrateValueLabel(int value);
 
+  /// No description provided for @bitrateFieldValueLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Video Bitrate: {value} kbps'**
+  String bitrateFieldValueLabel(int value);
+
   /// No description provided for @adaptiveBitrateLabel.
   ///
   /// In en, this message translates to:
   /// **'Adaptive Bitrate'**
   String get adaptiveBitrateLabel;
+
+  /// No description provided for @adaptiveBitrateDisabledHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Not enabled for this license tier'**
+  String get adaptiveBitrateDisabledHint;
 
   /// No description provided for @audioSectionTitle.
   ///
@@ -691,7 +709,7 @@ abstract class AppLocalizations {
   /// No description provided for @statusPanelUptimeLabel.
   ///
   /// In en, this message translates to:
-  /// **'Uptime: {value}s'**
+  /// **'Uptime: {value}'**
   String statusPanelUptimeLabel(String value);
 
   /// No description provided for @statusPanelReconnectCountLabel.
@@ -759,6 +777,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Fetching features… (required to stream)'**
   String get statusPanelLicenseFetchingLabel;
+
+  /// No description provided for @statusPanelLicenseFetchFailedLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not fetch features — streaming stays disabled'**
+  String get statusPanelLicenseFetchFailedLabel;
+
+  /// No description provided for @statusPanelLicenseRetryLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get statusPanelLicenseRetryLabel;
 
   /// No description provided for @statusPanelLicenseLastFetchedLabel.
   ///
@@ -850,6 +880,30 @@ abstract class AppLocalizations {
   /// **'Open settings'**
   String get permissionOpenSettingsLabel;
 
+  /// No description provided for @permissionDismissLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Not now'**
+  String get permissionDismissLabel;
+
+  /// No description provided for @routeNotFoundTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Page not found'**
+  String get routeNotFoundTitle;
+
+  /// No description provided for @routeNotFoundMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'That screen does not exist.'**
+  String get routeNotFoundMessage;
+
+  /// No description provided for @routeNotFoundHomeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Back to Gazer'**
+  String get routeNotFoundHomeLabel;
+
   /// No description provided for @telemetryEndpointFieldLabel.
   ///
   /// In en, this message translates to:
@@ -871,7 +925,7 @@ abstract class AppLocalizations {
   /// No description provided for @statusPanelTelemetryDisabledLabel.
   ///
   /// In en, this message translates to:
-  /// **'Disabled (no endpoint configured)'**
+  /// **'Disabled (no endpoint)'**
   String get statusPanelTelemetryDisabledLabel;
 
   /// No description provided for @statusPanelTelemetryExportingLabel.

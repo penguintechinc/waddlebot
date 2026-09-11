@@ -13,8 +13,14 @@ class StatusChip extends StatelessWidget {
   const StatusChip({super.key, required this.state, required this.onTap});
 
   final PipelineState state;
-  final VoidCallback onTap;
 
+  /// Tap handler, or `null` where the chip has nothing to open — at the
+  /// tablet breakpoint the status panel is already a persistent pane, so a
+  /// tappable-but-inert chip would be focusable for no purpose.
+  final VoidCallback? onTap;
+
+  /// Chip background colour for [s]; exhaustive over [PipelineState] with
+  /// no `default:` arm so a new state cannot silently fall through.
   Color _colorFor(PipelineState s) {
     return switch (s) {
       IdleState() => Colors.grey,
@@ -28,6 +34,8 @@ class StatusChip extends StatelessWidget {
     };
   }
 
+  /// Localized chip text for [s]; exhaustive over [PipelineState] for the
+  /// same reason [_colorFor] is.
   String _labelFor(AppLocalizations l10n, PipelineState s) {
     return switch (s) {
       IdleState() => l10n.statusChipIdleLabel,
@@ -48,7 +56,10 @@ class StatusChip extends StatelessWidget {
     return Semantics(
       key: const Key('statusChip'),
       label: l10n.statusChipSemanticsLabel(label),
-      button: true,
+      button: onTap != null,
+      // The Chip's own Text is announced by the explicit label above;
+      // without this the state reads twice ("Stream status: Idle. Idle.").
+      excludeSemantics: true,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(16),

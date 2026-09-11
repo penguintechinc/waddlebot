@@ -21,6 +21,8 @@ class SourcePicker extends StatelessWidget {
   final String? selectedId;
   final ValueChanged<String> onSelected;
 
+  /// Display name for [d]: a localized string for the built-in cameras,
+  /// and the device's own reported product name for UVC sources.
   String _labelFor(AppLocalizations l10n, VideoDevice d) {
     return switch (d.kind) {
       VideoDeviceKind.backCamera => l10n.sourceBackCameraLabel,
@@ -52,21 +54,30 @@ class SourcePicker extends StatelessWidget {
               style: Theme.of(context).textTheme.titleMedium,
             ),
           ),
-          for (final VideoDevice d in devices)
-            Semantics(
-              label: l10n.sourceTileSemanticsLabel(_labelFor(l10n, d)),
-              selected: d.id == selectedId,
-              button: true,
-              child: RadioListTile<String>(
-                // 'camera:back' gets the fixed integration_test key; every
-                // other tile still gets a stable per-device key so the list
-                // never relies on Flutter's positional fallback.
-                key: d.id == 'camera:back'
-                    ? const Key('backCameraOption')
-                    : ValueKey(d.id),
-                value: d.id,
-                title: Text(_labelFor(l10n, d)),
+          if (devices.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                l10n.sourcePickerEmptyLabel,
+                key: const Key('sourcePickerEmpty'),
               ),
+            ),
+          // No wrapping `Semantics` here, deliberately: RadioListTile
+          // already exposes its title as the label plus the `checked` /
+          // `inMutuallyExclusiveGroup` flags and the tap action. An outer
+          // node announced the device name a second time ("Back camera
+          // camera source"), and excluding the child's semantics to stop
+          // that would also drop the radio role and the tap action.
+          for (final VideoDevice d in devices)
+            RadioListTile<String>(
+              // 'camera:back' gets the fixed integration_test key; every
+              // other tile still gets a stable per-device key so the list
+              // never relies on Flutter's positional fallback.
+              key: d.id == 'camera:back'
+                  ? const Key('backCameraOption')
+                  : ValueKey(d.id),
+              value: d.id,
+              title: Text(_labelFor(l10n, d)),
             ),
         ],
       ),
