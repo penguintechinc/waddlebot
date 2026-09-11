@@ -13,41 +13,16 @@ import '../providers/license_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/telemetry_provider.dart';
 import '../services/feature_flags.dart';
-import '../services/target_validator.dart';
+import '../services/settings_validation.dart';
 import '../telemetry/telemetry_config.dart';
-
-/// Validates [settings] against the RTMP/RTMPS target rules plus the
-/// license-gated rtmp-auth flag, returning every failing [ValidationIssue].
-///
-/// Task 14 owns `services/settings_validation.dart` (its
-/// `validateGazerSettings` helper), which is out of scope for this file per
-/// the Task 15 brief's worktree-isolation rule — this inlines the
-/// equivalent check directly against [TargetValidator] plus [flags] so
-/// SettingsScreen never depends on a file Task 14 is concurrently writing.
-List<ValidationIssue> _validateDraft(
-  GazerSettings settings,
-  FeatureFlags flags,
-) {
-  final List<ValidationIssue> issues = const TargetValidator().validate(
-    settings.target,
-  );
-  final bool hasCredentials =
-      (settings.target.username ?? '').isNotEmpty ||
-      (settings.target.password ?? '').isNotEmpty;
-  if (hasCredentials && !flags.isEnabled(FlagKeys.rtmpAuth)) {
-    issues.add(
-      const ValidationIssue(field: 'auth', messageKey: 'rtmpAuthDisabled'),
-    );
-  }
-  return issues;
-}
 
 /// Settings screen: stream target, quality, audio source, and a
 /// long-press-revealed developer section.
 ///
-/// Validation runs on every keystroke via [_validateDraft] (the RTMP/RTMPS
-/// target rules from [TargetValidator] plus the rtmp-auth license flag), so
-/// the Save button is disabled whenever the draft would fail to stream.
+/// Validation runs on every keystroke via [validateGazerSettings] — the
+/// same helper HomeScreen's Go Live enablement uses, so the two screens can
+/// never disagree about validity — and the Save button is disabled whenever
+/// the draft would fail to stream.
 /// Save persists through [SettingsNotifier.save].
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -56,6 +31,9 @@ class SettingsScreen extends ConsumerStatefulWidget {
   ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
 }
 
+/// Owns the editable draft ([_draft] plus the five text controllers) that
+/// every field mutates, and the reveal/developer-section toggles; nothing
+/// is written back to [settingsProvider] until Save succeeds.
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final TextEditingController _url = TextEditingController();
   final TextEditingController _streamKey = TextEditingController();
@@ -67,6 +45,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _telemetryInitialized = false;
   bool _devUnlocked = false;
   bool _streamKeyObscured = true;
+  bool _usernameObscured = true;
   bool _passwordObscured = true;
   late final Future<PackageInfo> _packageInfoFuture;
 
@@ -79,6 +58,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _packageInfoFuture = PackageInfo.fromPlatform();
   }
 
+  /// Copies [s] into the draft and the text controllers, once, the first
+  /// time [settingsProvider] resolves.
   void _seed(GazerSettings s) {
     _draft = s;
     _url.text = s.target.url;
@@ -87,10 +68,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _password.text = s.target.password ?? '';
   }
 
+  /// Applies [f] to the draft and rebuilds, so validation and the Save
+  /// button's enablement re-run on every keystroke.
   void _update(GazerSettings Function(GazerSettings) f) {
     setState(() => _draft = f(_draft!));
   }
 
+  /// Maps a [ValidationIssue.messageKey] to its localized message; an
+  /// unrecognised key falls back to a generic "invalid" string rather than
+  /// rendering the raw key.
   String _messageFor(AppLocalizations l10n, String messageKey) {
     return switch (messageKey) {
       // Keys match TargetValidator.validate()'s literal messageKey strings
@@ -141,7 +127,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
 
     final GazerSettings draft = _draft!;
-    final List<ValidationIssue> issues = _validateDraft(draft, flags);
+    final List<ValidationIssue> issues = validateGazerSettings(draft, flags);
     final Map<String, String> fieldErrors = <String, String>{};
     for (final ValidationIssue issue in issues) {
       final String message = _messageFor(l10n, issue.messageKey);
@@ -157,6 +143,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       }
     }
     final bool canSave = issues.isEmpty;
+    final bool adaptiveBitrateAllowed = flags.isEnabled(
+      FlagKeys.adaptiveBitrate,
+    );
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.settingsScreenTitle)),
@@ -191,6 +180,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 suffixIcon: Semantics(
                   label: l10n.revealStreamKeyLabel,
                   button: true,
+                  excludeSemantics: true,
                   child: IconButton(
                     key: const Key('streamKeyRevealButton'),
                     icon: Icon(
@@ -212,9 +202,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             TextFormField(
               key: const Key('usernameField'),
               controller: _username,
+              // Masked like the password: the spec's Settings rule is
+              // "mask username/password in UI", and an RTMP username is a
+              // shoulder-surfable credential half.
+              obscureText: _usernameObscured,
               decoration: InputDecoration(
                 labelText: l10n.usernameFieldLabel,
                 errorText: fieldErrors['username'],
+                suffixIcon: Semantics(
+                  label: l10n.revealUsernameLabel,
+                  button: true,
+                  excludeSemantics: true,
+                  child: IconButton(
+                    key: const Key('usernameRevealButton'),
+                    icon: Icon(
+                      _usernameObscured
+                          ? Icons.visibility
+                          : Icons.visibility_off,
+                    ),
+                    onPressed: () =>
+                        setState(() => _usernameObscured = !_usernameObscured),
+                  ),
+                ),
               ),
               onChanged: (String v) => _update(
                 (GazerSettings s) =>
@@ -231,6 +240,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 suffixIcon: Semantics(
                   label: l10n.revealPasswordLabel,
                   button: true,
+                  excludeSemantics: true,
                   child: IconButton(
                     key: const Key('passwordRevealButton'),
                     icon: Icon(
@@ -255,6 +265,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
             DropdownButtonFormField<Resolution>(
               key: const Key('resolutionField'),
+              // isExpanded, or the selected item sizes to its natural
+              // width and overflows the decorator Row at 360dp once the
+              // text scale rises.
+              isExpanded: true,
               initialValue: draft.quality.resolution,
               decoration: InputDecoration(labelText: l10n.resolutionFieldLabel),
               items: <DropdownMenuItem<Resolution>>[
@@ -279,28 +293,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     l10n.frameRateFieldLabel,
                     style: Theme.of(context).textTheme.labelLarge,
                   ),
-                  SegmentedButton<FrameRate>(
-                    key: const Key('frameRateField'),
-                    segments: <ButtonSegment<FrameRate>>[
-                      for (final FrameRate fr in FrameRate.values)
-                        ButtonSegment<FrameRate>(
-                          value: fr,
-                          label: Text(l10n.frameRateOptionLabel(fr.value)),
+                  // SegmentedButton neither wraps nor scrolls, and four
+                  // "{n} fps" segments already consume the full 328dp
+                  // content box of a 360dp phone -- any text scale above
+                  // 1.0x threw `RenderFlex overflowed`. A horizontal
+                  // scroll view gives it unbounded width to lay out in and
+                  // lets the user reach the off-screen segments.
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SegmentedButton<FrameRate>(
+                      key: const Key('frameRateField'),
+                      segments: <ButtonSegment<FrameRate>>[
+                        for (final FrameRate fr in FrameRate.values)
+                          ButtonSegment<FrameRate>(
+                            value: fr,
+                            label: Text(l10n.frameRateOptionLabel(fr.value)),
+                          ),
+                      ],
+                      selected: <FrameRate>{draft.quality.frameRate},
+                      onSelectionChanged: (Set<FrameRate> s) => _update(
+                        (GazerSettings gs) => gs.copyWith(
+                          quality: gs.quality.copyWith(frameRate: s.first),
                         ),
-                    ],
-                    selected: <FrameRate>{draft.quality.frameRate},
-                    onSelectionChanged: (Set<FrameRate> s) => _update(
-                      (GazerSettings gs) => gs.copyWith(
-                        quality: gs.quality.copyWith(frameRate: s.first),
                       ),
                     ),
                   ),
                 ],
               ),
             ),
-            Text(
-              '${l10n.bitrateFieldLabel}: ${l10n.bitrateValueLabel(draft.quality.videoBitrateKbps)}',
-            ),
+            Text(l10n.bitrateFieldValueLabel(draft.quality.videoBitrateKbps)),
             Slider(
               key: const Key('bitrateSlider'),
               min: kMinBitrateKbps.toDouble(),
@@ -315,14 +336,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
               ),
             ),
+            // PipelineController only honours adaptive bitrate when this
+            // flag is on, so an ungated switch let the user turn on -- and
+            // save -- a setting the stream silently ignored. Mirrors the
+            // rtmp-auth treatment above.
             SwitchListTile(
               key: const Key('adaptiveBitrateSwitch'),
               title: Text(l10n.adaptiveBitrateLabel),
-              value: draft.quality.adaptiveBitrate,
-              onChanged: (bool v) => _update(
-                (GazerSettings s) =>
-                    s.copyWith(quality: s.quality.copyWith(adaptiveBitrate: v)),
-              ),
+              subtitle: adaptiveBitrateAllowed
+                  ? null
+                  : Text(l10n.adaptiveBitrateDisabledHint),
+              value: adaptiveBitrateAllowed && draft.quality.adaptiveBitrate,
+              onChanged: adaptiveBitrateAllowed
+                  ? (bool v) => _update(
+                      (GazerSettings s) => s.copyWith(
+                        quality: s.quality.copyWith(adaptiveBitrate: v),
+                      ),
+                    )
+                  : null,
             ),
             const Divider(),
             Text(
@@ -331,6 +362,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
             DropdownButtonFormField<AudioSourceChoice>(
               key: const Key('audioSourceField'),
+              isExpanded: true,
               initialValue: draft.audio,
               decoration: InputDecoration(labelText: l10n.audioSectionTitle),
               items: <DropdownMenuItem<AudioSourceChoice>>[
@@ -420,6 +452,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             Semantics(
               label: l10n.saveButtonSemanticsLabel,
               button: true,
+              excludeSemantics: true,
               child: FilledButton(
                 key: const Key('saveSettingsButton'),
                 onPressed: canSave

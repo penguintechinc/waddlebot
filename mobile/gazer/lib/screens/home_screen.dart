@@ -13,6 +13,7 @@ import '../pigeon/pipeline.g.dart';
 import '../providers/devices_provider.dart';
 import '../providers/license_provider.dart';
 import '../providers/pipeline_provider.dart';
+import '../providers/selected_device_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/feature_flags.dart';
 import '../services/permission_gate.dart';
@@ -25,10 +26,10 @@ import 'status_panel.dart';
 /// Landing screen: source picker, Go Live / Stop controls, and the status
 /// chip that opens [showStatusPanel].
 ///
-/// The selected video device id is local widget state (M1 has no
-/// persisted "last camera" preference); everything else is read from
-/// Riverpod providers so the screen re-renders on every pipeline/settings
-/// change.
+/// Every value it renders — including the selected video device, which
+/// lives in [selectedDeviceProvider] so [StatusPanel] can report the same
+/// camera the user picked — is read from Riverpod, so the screen
+/// re-renders on every pipeline/settings/selection change.
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
@@ -36,9 +37,10 @@ class HomeScreen extends ConsumerStatefulWidget {
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
+/// Holds only the Go Live / permission flows; the camera selection itself
+/// lives in [selectedDeviceProvider] (a build-phase `setState`-free home
+/// that [StatusPanel] can also read).
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  String? _selectedDeviceId;
-
   /// Invokes [PipelineController.goLive] and surfaces the two exceptions
   /// it documents as possible ([StateError] on re-entrancy/wrong-state,
   /// [ArgumentError] on validation) as a [SnackBar] — both are races
@@ -52,6 +54,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     required List<VideoDevice> devices,
     required FeatureFlags flags,
     required OutputOrientation orientation,
+    required String videoDeviceId,
   }) async {
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
     final AppLocalizations l10n = AppLocalizations.of(context);
@@ -59,7 +62,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       await controller.goLive(
         settings,
         devices: devices,
-        videoDeviceId: _selectedDeviceId!,
+        videoDeviceId: videoDeviceId,
         flags: flags,
         orientation: orientation,
       );
@@ -83,6 +86,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     required GazerSettings settings,
     required List<VideoDevice> devices,
     required FeatureFlags flags,
+    required String videoDeviceId,
   }) async {
     final AppLocalizations l10n = AppLocalizations.of(context);
     final PermissionGate gate = ref.read(permissionGateProvider);
@@ -96,6 +100,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           settings: settings,
           devices: devices,
           flags: flags,
+          videoDeviceId: videoDeviceId,
           orientation: MediaQuery.orientationOf(context) == Orientation.portrait
               ? OutputOrientation.portrait
               : OutputOrientation.landscape,
@@ -111,6 +116,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 settings: settings,
                 devices: devices,
                 flags: flags,
+                videoDeviceId: videoDeviceId,
               ),
             ),
           ),
@@ -121,6 +127,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           builder: (BuildContext dialogContext) => AlertDialog(
             content: Text(l10n.permissionPermanentlyDeniedMessage),
             actions: <Widget>[
+              // Explicit dismiss: the dialog previously relied on the
+              // barrier/back gesture alone, which is not discoverable and
+              // is unreachable for a user driving the app by switch access.
+              TextButton(
+                key: const Key('permissionDialogDismissButton'),
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: Text(l10n.permissionDismissLabel),
+              ),
               TextButton(
                 onPressed: () {
                   Navigator.of(dialogContext).pop();
@@ -144,10 +158,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final PipelineController controller = ref.watch(pipelineControllerProvider);
     final PipelineState state =
         ref.watch(pipelineStateProvider).value ?? controller.current;
+    final String? selectedDeviceId = ref.watch(selectedDeviceProvider);
 
-    if (_selectedDeviceId == null && devices.isNotEmpty) {
-      _selectedDeviceId = devices.first.id;
-    }
+    // `ref.listen`, not an assignment in `build()`: latching the default
+    // selection is a state mutation, and doing it inline made `build()`
+    // side-effecting. The device list always arrives asynchronously (a
+    // Pigeon round trip), so the loading -> data transition this listener
+    // fires on is the real first-enumeration event.
+    ref.listen<AsyncValue<List<VideoDevice>>>(videoDevicesProvider, (
+      AsyncValue<List<VideoDevice>>? previous,
+      AsyncValue<List<VideoDevice>> next,
+    ) {
+      final List<VideoDevice> enumerated = next.value ?? const <VideoDevice>[];
+      if (enumerated.isNotEmpty) {
+        ref
+            .read(selectedDeviceProvider.notifier)
+            .selectDefaultIfUnset(enumerated.first.id);
+      }
+    });
 
     final List<ValidationIssue> issues = settings == null
         ? const <ValidationIssue>[]
@@ -157,24 +185,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         issues.isEmpty &&
         flags.hasFetchedOnce &&
         flags.isEnabled(FlagKeys.cameraStream) &&
-        _selectedDeviceId != null &&
+        selectedDeviceId != null &&
         (state is IdleState || state is ReadyState || state is ErrorState);
     final bool showStop =
         state is ConnectingState ||
         state is StreamingState ||
         state is ReconnectingState;
 
+    // At the tablet breakpoint the panel is already a persistent pane, so
+    // `showStatusPanel` is a no-op there -- passing null keeps the chip
+    // from advertising a tap that does nothing.
+    final bool chipOpensPanel =
+        MediaQuery.of(context).size.width < kTabletBreakpointWidth;
+
     final Widget controls = Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         children: <Widget>[
-          StatusChip(state: state, onTap: () => showStatusPanel(context)),
+          StatusChip(
+            state: state,
+            onTap: chipOpensPanel ? () => showStatusPanel(context) : null,
+          ),
           const SizedBox(height: 16),
           Expanded(
             child: SourcePicker(
               devices: devices,
-              selectedId: _selectedDeviceId,
-              onSelected: (String id) => setState(() => _selectedDeviceId = id),
+              selectedId: selectedDeviceId,
+              onSelected: (String id) =>
+                  ref.read(selectedDeviceProvider.notifier).select(id),
             ),
           ),
           if (state is ErrorState) _ErrorBanner(error: state.error),
@@ -201,6 +239,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         settings: settings,
                         devices: devices,
                         flags: flags,
+                        // Promoted non-null by `canGoLive`'s own
+                        // `selectedDeviceId != null` conjunct.
+                        videoDeviceId: selectedDeviceId,
                       )
                     : null,
                 child: Text(l10n.goLiveButtonLabel),
@@ -217,6 +258,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           Semantics(
             label: l10n.settingsButtonLabel,
             button: true,
+            // `tooltip` below already supplies the same accessible name;
+            // merging both announces "Settings" twice.
+            excludeSemantics: true,
             child: IconButton(
               key: const Key('settingsGearButton'),
               icon: const Icon(Icons.settings),
