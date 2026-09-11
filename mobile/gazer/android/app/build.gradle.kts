@@ -1,5 +1,5 @@
-import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -116,6 +116,20 @@ jacoco {
     toolVersion = libs.versions.jacoco.get()
 }
 
+// Pigeon-generated Kotlin (android/app/src/main/kotlin/io/waddlebot/gazer/pigeon/) is not
+// hand-maintained: its toString() overrides come out of the Pigeon 28.0.0 Kotlin template as a
+// single line per class and can exceed ktlint's max-line-length (140) rule, which ktlintFormat
+// cannot auto-correct (wrapping a string-template expression across lines is a semantic choice
+// the formatter won't make for you). Regenerating via `make mobile-codegen` is expected to
+// reproduce this on every run, so linting this directory would fail on generated code no author
+// ever hand-edits. Excluded from ktlint entirely -- mirrors the JaCoCo "**/pigeon/**" exclusion
+// in the jacocoTestReport task below for the same reason (generated code, not authored code).
+ktlint {
+    filter {
+        exclude { it.file.path.contains("/pigeon/") }
+    }
+}
+
 dependencies {
     implementation(libs.rootencoder.library)
     implementation(libs.kotlinx.coroutines.core)
@@ -195,16 +209,17 @@ tasks.register<JacocoReport>("jacocoTestReport") {
             "**/Manifest*.*",
             "**/*Test*.*",
             "**/pigeon/**",
-            // Why: MainActivity.kt's constructor/lifecycle methods are never invoked by a plain
-            // JVM unit test (Activities need Robolectric/instrumentation, out of scope here), so
-            // leaving it in this JaCoCo scan drags the LINE ratio down with a permanently-
-            // uncoverable phantom miss. Constraint (controller ruling R11, satisfied by Task 20):
-            // MainActivity.kt stays a <=3-line bridge -- configureFlutterEngine's body is exactly
-            // `super.configureFlutterEngine(flutterEngine); GazerFlutterBindings.install(...)` --
-            // and every real wiring decision (messenger, CameraManager, PigeonHostApiImpl
-            // construction, GazerHostApi.setUp) lives in GazerFlutterBindings.install, covered by
-            // GazerFlutterBindingsTest.kt on the JVM unit-test target. Do not let this exclusion's
-            // scope grow beyond MainActivity itself if real logic is ever added back to it.
+            // Why: MainActivity.kt is stock flutter-create boilerplate (Task 2 leaves it
+            // untouched) with no JVM-testable logic of its own -- its default constructor is
+            // never invoked by a plain JVM unit test (Activities need Robolectric/instrumentation,
+            // out of scope here), so leaving it in this JaCoCo scan drags the LINE ratio down with
+            // a permanently-uncoverable phantom miss unrelated to anything Task 2 introduces.
+            // Constraint (controller ruling R11): this exclusion may stay ONLY as long as
+            // MainActivity stays a flutter-create-boilerplate Activity with no testable logic.
+            // Task 20 MUST keep MainActivity.kt a <=3-line bridge that delegates all real logic to
+            // a separately unit-tested factory/class, and MUST revisit (narrow or remove) this
+            // exclusion when it touches MainActivity.kt -- do not let this scope grow to cover
+            // real logic added later.
             "**/MainActivity.class",
             "**/MainActivity\$*.class",
             // RootEncoderEngine wraps RootEncoder's GenericStream (real Camera2/MediaCodec/
@@ -218,24 +233,6 @@ tasks.register<JacocoReport>("jacocoTestReport") {
             // classDirectories.files.map{fileTree(it){...}} would re-wrap already-resolved leaf
             // .class files instead of directories and silently produce an empty report.)
             "**/pipeline/RootEncoderEngine.class",
-            // Why (controller ruling R29, Task 20): StreamService's Service lifecycle callbacks
-            // (onCreate/onStartCommand/onDestroy/onBind) call real Context methods
-            // (getSystemService, registerReceiver, startForeground, NotificationCompat.Builder.
-            // build()) that NPE on the JVM unit-test target because attachBaseContext is never
-            // invoked outside Robolectric/instrumentation -- confirmed empirically, not assumed.
-            // This project does not adopt Robolectric (its vendored-plugin tests are already
-            // disabled here for Java 17 incompatibility), so these callbacks structurally cannot
-            // be unit-tested. Constraint: StreamService MUST stay a thin lifecycle shell that
-            // delegates every real decision to already-unit-tested helpers (WakeLockController,
-            // buildNotificationChannel/registerNotificationChannel/buildStopPendingIntent,
-            // isStopAction, foregroundServiceType, buildStreamPipeline, GazerFlutterBindings) --
-            // its actual behavior is covered by the instrumented StreamServiceTest in CI's
-            // emulator job (Task 21), just not by this JVM-only gate. Narrow, single class +
-            // its synthetic inner classes, documented, not a blanket exclusion -- any logic added
-            // to StreamService itself later must be extracted into a unit-tested helper instead
-            // of widening this exclusion.
-            "**/pipeline/StreamService.class",
-            "**/pipeline/StreamService\$*.class",
         )
     val debugTree =
         fileTree("${layout.buildDirectory.get()}/tmp/kotlin-classes/debug") {

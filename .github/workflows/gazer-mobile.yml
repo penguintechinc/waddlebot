@@ -6,11 +6,13 @@ on:
       - 'mobile/gazer/**'
       - 'Makefile'
       - '.github/workflows/gazer-mobile.yml'
+      - '.github/actions/run-as-appuser/**'
   pull_request:
     paths:
       - 'mobile/gazer/**'
       - 'Makefile'
       - '.github/workflows/gazer-mobile.yml'
+      - '.github/actions/run-as-appuser/**'
 
 concurrency:
   group: gazer-mobile-${{ github.workflow }}-${{ github.ref }}
@@ -98,6 +100,18 @@ jobs:
           fi
           echo "image=${REGISTRY}/${IMAGE_NAME}@${DIGEST}" >> "$GITHUB_OUTPUT"
 
+  # All 5 jobs below share one container setup: `options: --user 0:0` (root) is set ONLY because
+  # GitHub Actions job containers cannot run their own checkout/cache/artifact-upload machinery
+  # as a non-root user whose uid does not match the hosted runner's own account uid (1001 on
+  # ubuntu-latest) -- a documented GitHub Actions platform limitation (actions/checkout#956,
+  # #1575; actions/runner#2058 and related), confirmed here by two failed runs (34435198299 with
+  # --user 1000:1000, 34474079236 with no override) that both hit identical
+  # `EACCES: .../_runner_file_commands/save_state_*` errors regardless of how the non-root uid
+  # was set. Every actual toolchain command (flutter/dart/gradlew/osv-scanner/semgrep/gitleaks)
+  # instead runs via `uses: ./.github/actions/run-as-appuser`, which chowns the workspace to
+  # appuser and executes the command through `runuser -u appuser` (uid 1000) -- so root here only
+  # ever touches GitHub's own bookkeeping and one `chown`, never the actual build/test/scan
+  # output, matching the project's rootless-container mandate for the workload itself.
   analyze:
     name: Dart analyze
     needs: toolchain
@@ -106,9 +120,6 @@ jobs:
       contents: read
     container:
       image: ${{ needs.toolchain.outputs.image }}  # zizmor: ignore[unpinned-images] -- resolved to a repo@sha256:<digest> ref by toolchain job's "Resolve image ref" step; static analysis cannot see through the job-output indirection
-      # root ONLY for the runner's checkout/cache/artifact steps (GitHub cannot run job
-      # containers as non-root: runner file commands live in a runner-owned dir); all
-      # toolchain commands run as appuser below -- see rootless rule.
       options: --user 0:0
     steps:
       - name: Checkout code
@@ -116,35 +127,23 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Hand workspace to appuser
-        run: chown -R appuser:appuser "$GITHUB_WORKSPACE" /home/appuser
-
       - name: flutter pub get
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer"
-            flutter pub get
-          '
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: flutter pub get
 
       - name: flutter analyze
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer"
-            flutter analyze
-          '
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: flutter analyze
 
       - name: dart format check
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer"
-            dart format --set-exit-if-changed .
-          '
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: dart format --set-exit-if-changed .
 
   test:
     name: Dart unit tests + coverage gate
@@ -154,9 +153,8 @@ jobs:
       contents: read
     container:
       image: ${{ needs.toolchain.outputs.image }}  # zizmor: ignore[unpinned-images] -- resolved to a repo@sha256:<digest> ref by toolchain job's "Resolve image ref" step; static analysis cannot see through the job-output indirection
-      # root ONLY for the runner's checkout/cache/artifact steps (GitHub cannot run job
-      # containers as non-root: runner file commands live in a runner-owned dir); all
-      # toolchain commands run as appuser below -- see rootless rule.
+      # root ONLY for the runner's own checkout/cache/artifact steps -- see analyze job's comment
+      # above for why; toolchain commands still run rootless via run-as-appuser below.
       options: --user 0:0
     steps:
       - name: Checkout code
@@ -164,35 +162,23 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Hand workspace to appuser
-        run: chown -R appuser:appuser "$GITHUB_WORKSPACE" /home/appuser
-
       - name: flutter pub get
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer"
-            flutter pub get
-          '
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: flutter pub get
 
       - name: flutter test --coverage
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer"
-            flutter test --coverage
-          '
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: flutter test --coverage
 
       - name: Coverage gate (>=90%)
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer"
-            bash scripts/coverage_gate.sh 90 coverage/lcov.info lcov
-          '
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: bash scripts/coverage_gate.sh 90 coverage/lcov.info lcov
 
       - name: Upload coverage artifact
         if: always()
@@ -209,9 +195,8 @@ jobs:
       contents: read
     container:
       image: ${{ needs.toolchain.outputs.image }}  # zizmor: ignore[unpinned-images] -- resolved to a repo@sha256:<digest> ref by toolchain job's "Resolve image ref" step; static analysis cannot see through the job-output indirection
-      # root ONLY for the runner's checkout/cache/artifact steps (GitHub cannot run job
-      # containers as non-root: runner file commands live in a runner-owned dir); all
-      # toolchain commands run as appuser below -- see rootless rule.
+      # root ONLY for the runner's own checkout/cache/artifact steps -- see analyze job's comment
+      # above for why; toolchain commands still run rootless via run-as-appuser below.
       options: --user 0:0
     steps:
       - name: Checkout code
@@ -219,35 +204,23 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Hand workspace to appuser
-        run: chown -R appuser:appuser "$GITHUB_WORKSPACE" /home/appuser
-
       - name: flutter pub get
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer"
-            flutter pub get
-          '
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: flutter pub get
 
       - name: gradlew testDebugUnitTest jacocoTestReport
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer/android"
-            ./gradlew testDebugUnitTest jacocoTestReport
-          '
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer/android
+          command: ./gradlew testDebugUnitTest jacocoTestReport
 
       - name: Coverage gate (>=90%)
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer"
-            bash scripts/coverage_gate.sh 90 android/app/build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml jacoco
-          '
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: bash scripts/coverage_gate.sh 90 android/app/build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml jacoco
 
       - name: Upload JaCoCo artifact
         if: always()
@@ -262,11 +235,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # Container jobs default `run:` steps to `sh`, not `bash`, even when the image has bash
+    # installed (confirmed by run 34547868184: "Illegal option -o pipefail" from dash) -- the
+    # bash-only `set -euo pipefail` used throughout this job's plain run: steps requires this.
+    defaults:
+      run:
+        shell: bash
     container:
       image: ${{ needs.toolchain.outputs.image }}  # zizmor: ignore[unpinned-images] -- resolved to a repo@sha256:<digest> ref by toolchain job's "Resolve image ref" step; static analysis cannot see through the job-output indirection
-      # root ONLY for the runner's checkout/cache/artifact steps (GitHub cannot run job
-      # containers as non-root: runner file commands live in a runner-owned dir); all
-      # toolchain commands run as appuser below -- see rootless rule.
+      # root ONLY for the runner's own checkout/cache/artifact steps -- see analyze job's comment
+      # above for why; toolchain commands still run rootless via run-as-appuser below.
       options: --user 0:0
     steps:
       - name: Checkout code
@@ -274,17 +252,29 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Hand workspace to appuser
-        run: chown -R appuser:appuser "$GITHUB_WORKSPACE" /home/appuser
-
       - name: flutter pub get
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: flutter pub get
+
+      # The `secrets` context is not a recognized named-value in `if:` conditionals (job- or
+      # step-level) -- GitHub Actions rejects the whole workflow file at parse time if it's used
+      # there ("Unrecognized named-value: 'secrets'"), confirmed by run 34547396519 failing with
+      # zero jobs scheduled. The standard workaround: read the secret into `env:` (allowed) in a
+      # step that always runs, emit a step output, and gate the real step on `steps.*.outputs`
+      # (which IS available in step.if) instead of `secrets` directly.
+      - name: Check for upload keystore secret
+        id: check_keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEY_STORE_B64 }}
         run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer"
-            flutter pub get
-          '
+          set -euo pipefail
+          if [ -n "${KEYSTORE_B64}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # Never inline ${{ secrets.* }} inside `run:` (zizmor template-injection rule) -- every
       # secret value crosses into the shell only via `env:`. Runs as root (this job container's
@@ -293,7 +283,7 @@ jobs:
       # later step that reads key.properties/the keystore (the two `flutter build` steps below)
       # runs as appuser via run-as-appuser and needs read access to what this step writes.
       - name: Decode upload keystore and write key.properties
-        if: ${{ secrets.ANDROID_UPLOAD_KEY_STORE_B64 != '' }}
+        if: steps.check_keystore.outputs.present == 'true'
         working-directory: mobile/gazer/android
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEY_STORE_B64 }}
@@ -382,9 +372,8 @@ jobs:
       contents: read
     container:
       image: ${{ needs.toolchain.outputs.image }}  # zizmor: ignore[unpinned-images] -- resolved to a repo@sha256:<digest> ref by toolchain job's "Resolve image ref" step; static analysis cannot see through the job-output indirection
-      # root ONLY for the runner's checkout/cache/artifact steps (GitHub cannot run job
-      # containers as non-root: runner file commands live in a runner-owned dir); all
-      # toolchain commands run as appuser below -- see rootless rule.
+      # root ONLY for the runner's own checkout/cache/artifact steps -- see analyze job's comment
+      # above for why; toolchain commands still run rootless via run-as-appuser below.
       options: --user 0:0
     steps:
       - name: Checkout code
@@ -392,59 +381,44 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Hand workspace to appuser
-        run: chown -R appuser:appuser "$GITHUB_WORKSPACE" /home/appuser
-
       - name: flutter pub get
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer"
-            flutter pub get
-          '
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: flutter pub get
 
       - name: osv-scanner (pubspec.lock)
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer"
-            osv-scanner --lockfile=pubspec.lock
-          '
+        # scripts/osv_scan_assert.sh asserts a non-zero package count in addition to osv-scanner's
+        # own exit code -- a scan that silently examines zero packages (misconfigured path, moved
+        # lockfile, etc.) must be a FAILURE, not a vacuous pass (critical-rules.md Verification
+        # Integrity). Shared with the Makefile's mobile-security target so both gates match.
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: bash scripts/osv_scan_assert.sh pubspec.lock
 
       - name: osv-scanner (gradle project)
-        # No Gradle dependency-locking lockfile exists yet (the Android project does not enable
-        # `dependencyLocking`), so a plain `-r .` finds zero package sources and osv-scanner 2.5.1
-        # exits non-zero ("No package sources found"). --allow-no-lockfiles tells the scanner that
-        # a legitimate absence of lockfiles is not a scan failure; it still fully scans any Gradle
-        # lockfile that does exist. Matches the equivalent fix in the Makefile's mobile-security
-        # target (Task 3 osv-scanner path/flag fix).
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer/android"
-            osv-scanner -r . --allow-no-lockfiles
-          '
+        # android/app/gradle.lockfile (controller ruling R16) is generated by
+        # `./gradlew :app:dependencies --write-locks` after enabling Gradle dependency locking for
+        # :app only from android/build.gradle.kts (project(":app") { dependencyLocking {
+        # lockAllConfigurations() } }). Scans that committed lockfile directly instead of a
+        # directory walk that could legitimately find nothing.
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: bash scripts/osv_scan_assert.sh android/app/gradle.lockfile
 
       - name: semgrep
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer"
-            semgrep --config auto --error .
-          '
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: semgrep --config auto --error .
 
       - name: gitleaks
-        run: |
-          runuser -u appuser -- bash -eo pipefail -c '
-            id -u
-            test "$(id -u)" = 1000
-            cd "$GITHUB_WORKSPACE/mobile/gazer"
-            gitleaks detect --source . --no-git -v
-          '
+        uses: ./.github/actions/run-as-appuser  # zizmor: ignore[self-repository] -- repo's pinned pre-commit zizmor (1.25.2) predates the $/ self-repository syntax (GH feature 2026-07-30) and fails to parse it at all; ./... is the form both that hook and older zizmor understand
+        with:
+          working-directory: mobile/gazer
+          command: gitleaks detect --source . --no-git -v
 
   # NOTE for writer E's Task 21: once the `integration` job exists (added after `security`, per
   # Task 21 Step 15), this job's `needs:` list below MUST be extended to
@@ -462,6 +436,11 @@ jobs:
     permissions:
       contents: write
       packages: read  # added so this job's new container: step below can pull the toolchain image
+    # See the `build` job's identical comment above: container jobs default run: steps to sh,
+    # not bash, and the process-substitution + set -o pipefail below need real bash.
+    defaults:
+      run:
+        shell: bash
     container:
       image: ${{ needs.toolchain.outputs.image }}  # zizmor: ignore[unpinned-images] -- resolved to a repo@sha256:<digest> ref by toolchain job's "Resolve image ref" step; static analysis cannot see through the job-output indirection
       # root ONLY for the runner's own checkout/download-artifact steps and the read-only
