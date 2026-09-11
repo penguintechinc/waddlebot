@@ -115,13 +115,29 @@ mobile-toolchain:
 
 mobile-run:
 	@test -n "$(CMD)" || { echo "usage: make mobile-run CMD=\"<command>\"" >&2; exit 1; }
-	$(MOBILE_RUN) bash -lc "$(CMD)"
+# Minor 7 (final-review-platform.md): CMD is embedded into a double-quoted shell string, so a
+# double quote inside CMD (e.g. CMD='echo "hi"') broke out of it. Single-quoting the outer
+# `bash -lc` argument fixes that exact reported case; CMD is still not fully quote-safe for every
+# possible character (a literal single quote in CMD would now break it instead), which would
+# require a more invasive rework of the make/shell quoting boundary -- out of scope here.
+	$(MOBILE_RUN) bash -lc '$(CMD)'
 
 mobile-lint:
-	$(MOBILE_RUN) bash -lc "set -euo pipefail; flutter analyze; dart format --set-exit-if-changed .; if [ -d android ]; then cd android && ./gradlew ktlintCheck lint; fi"
+# Minor 1 (final-review-platform.md): `if [ -d android ]` was a vacuous-pass shape (a wrong mount
+# silently skips ktlint/lint instead of failing). `test -d android` as a hard precondition keeps
+# the guard the plan's Task 26 Step 14 requires, but turns a missing android/ directory into a
+# loud failure instead of a silent skip.
+	$(MOBILE_RUN) bash -lc "set -euo pipefail; flutter analyze; dart format --set-exit-if-changed .; test -d android; cd android && ./gradlew ktlintCheck lint"
 
+# I6 (final-review-platform.md): coverage_gate_selftest.sh was the only artifact proving the
+# coverage gate can fail on purpose, and nothing ran it -- runs first so a broken gate mechanism
+# fails loudly before real coverage data is even collected.
+# I7 (final-review-platform.md): coverage_gate.sh's 4th arg is the on-disk lib/ root; the gate
+# now asserts every hand-written (non-generated) .dart file under it produced at least one SF:
+# record, catching a hand-written file that `flutter test --coverage` never touched at all
+# (invisible to the raw percentage, since flutter only reports files a test actually loaded).
 mobile-test:
-	$(MOBILE_RUN) bash -lc "set -euo pipefail; flutter test --coverage --dart-define=GAZER_SEED=true; bash scripts/coverage_gate.sh 90 coverage/lcov.info lcov"
+	$(MOBILE_RUN) bash -lc "set -euo pipefail; bash scripts/coverage_gate_selftest.sh; flutter test --coverage --dart-define=GAZER_SEED=true; bash scripts/coverage_gate.sh 90 coverage/lcov.info lcov lib"
 
 mobile-test-android:
 	$(MOBILE_RUN) bash -lc "set -euo pipefail; cd android && ./gradlew testDebugUnitTest jacocoTestReport && cd .. && bash scripts/coverage_gate.sh 90 android/app/build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml jacoco"
@@ -144,7 +160,7 @@ mobile-test-integration: ## Boot the container-hosted Android emulator (needs /d
 		-v gazer-pub-cache:/home/appuser/.pub-cache \
 		-v gazer-gradle:/home/appuser/.gradle \
 		-w /work \
-		gazer-toolchain:3.47.2 \
+		$(MOBILE_IMAGE) \
 		bash scripts/run_integration_test.sh
 
 mobile-build:
@@ -167,14 +183,23 @@ mobile-build-signed:
 # shipped-classpath lockfile this target gates on) or a bespoke Gradle init script/plugin to
 # redirect the lock output -- both too invasive to add reliably within this task. Noted here per
 # R23's explicit escape hatch rather than left unexplained.
+# I9 (final-review-platform.md): --config auto stays (vendoring a pinned rules directory is
+# deferred to M2, see README.md tooling notes). The ruling asked to also add --metrics=off, but
+# semgrep 1.176.1 hard-refuses that combination ("Cannot create auto config when metrics are off.
+# Please allow metrics or run with a specific config." -- verified interactively), so --metrics=on
+# is explicit instead (same behavior semgrep already defaults to for a registry-backed --config,
+# just no longer implicit) -- the binary version itself is pinned in the Dockerfile
+# (SEMGREP_VERSION). Disabling metrics requires the M2 vendored/pinned ruleset.
 mobile-security:
-	$(MOBILE_RUN) bash -lc "set -euo pipefail; bash scripts/osv_scan_assert.sh pubspec.lock; bash scripts/osv_scan_assert.sh android/app/gradle.lockfile; semgrep --config auto --error .; gitleaks detect --source . --no-git -v"
+	$(MOBILE_RUN) bash -lc "set -euo pipefail; bash scripts/osv_scan_assert.sh pubspec.lock; bash scripts/osv_scan_assert.sh android/app/gradle.lockfile; semgrep --config auto --metrics=on --error .; gitleaks detect --source . --no-git -v"
 
 mobile-codegen:
 	$(MOBILE_RUN) bash -lc "set -euo pipefail; dart run pigeon --input pigeons/pipeline.dart; dart run build_runner build --delete-conflicting-outputs; flutter gen-l10n"
 
+# Minor 1 (final-review-platform.md): see mobile-lint above -- test -d android turns a missing
+# android/ directory into a loud failure instead of a silent skip.
 mobile-clean:
-	$(MOBILE_RUN) bash -lc "set -euo pipefail; flutter clean; if [ -d android ]; then cd android && ./gradlew clean; fi"
+	$(MOBILE_RUN) bash -lc "set -euo pipefail; flutter clean; test -d android; cd android && ./gradlew clean"
 
 # OpenTelemetry emission gate (Task 27): runs ONLY the local-OTLP-sink test
 # and greps its printed "telemetry sink received: ..." line for four
@@ -195,7 +220,7 @@ seed-mock-data-mobile: ## Launch Gazer with the mock target/quality preset seede
 		-v gazer-pub-cache:/home/appuser/.pub-cache \
 		-v gazer-gradle:/home/appuser/.gradle \
 		-w /work \
-		gazer-toolchain:3.47.2 \
+		$(MOBILE_IMAGE) \
 		bash -lc "set -euo pipefail; flutter build apk --debug --dart-define=GAZER_SEED=true; flutter run --use-application-binary=build/app/outputs/flutter-apk/app-debug.apk --dart-define=GAZER_SEED=true"
 
 mobile-screenshots: ## Capture the docs/screenshots/gazer/ marketing set from seeded phone + tablet emulators (needs /dev/kvm)
@@ -209,6 +234,6 @@ mobile-screenshots: ## Capture the docs/screenshots/gazer/ marketing set from se
 		-v gazer-pub-cache:/home/appuser/.pub-cache \
 		-v gazer-gradle:/home/appuser/.gradle \
 		-w /work \
-		gazer-toolchain:3.47.2 \
+		$(MOBILE_IMAGE) \
 		bash scripts/mobile_screenshots_entrypoint.sh
 	bash mobile/gazer/scripts/collect_screenshots.sh
