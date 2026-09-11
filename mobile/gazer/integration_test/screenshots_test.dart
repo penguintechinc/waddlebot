@@ -73,6 +73,13 @@ void main() {
           'stalled "Fetching features..." license row',
     );
 
+    // `_pumpUntil` returns on the FIRST frame where onPressed != null, which
+    // is part-way through FilledButton's enabled-colour transition -- the
+    // two headline marketing assets shipped with a "Go Live" label at
+    // 1.18:1 contrast against its own fill, reading as a disabled button.
+    // Settle the animation before anything is captured.
+    await tester.pumpAndSettle();
+
     // Android renders Flutter into a SurfaceView the screenshot API cannot
     // read back, so integration_test's IOCallbackManager throws
     // `Call convertFlutterSurfaceToImage() before taking a screenshot`
@@ -82,7 +89,10 @@ void main() {
     // keeps serving every subsequent `takeScreenshot` call in this same
     // test, so it does not need to be repeated per-screenshot.
     await binding.convertFlutterSurfaceToImage();
-    await tester.pump();
+    // pumpAndSettle, not a single pump: swapping the SurfaceView for an
+    // ImageView re-lays-out the whole view, and the first capture of every
+    // run was the one that came out mid-transition.
+    await tester.pumpAndSettle();
 
     // Home, idle, mock target/quality already seeded by --dart-define=GAZER_SEED=true at launch.
     // Phone keeps the historical "home-idle-phone" name; tablet uses "home-tablet" to match
@@ -91,17 +101,25 @@ void main() {
       _formFactor == 'phone' ? 'home-idle-phone' : 'home-tablet',
     );
 
-    if (_formFactor == 'phone') {
-      await tester.tap(find.byKey(const Key('settingsGearButton')));
-      await tester.pumpAndSettle();
-      await binding.takeScreenshot('settings-$_formFactor');
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-    }
-
-    await tester.tap(find.byKey(const Key('statusChip')));
+    // Settings on BOTH form factors. Ruling R42: the old fifth asset,
+    // "status-panel-tablet", was pixel-for-pixel the same screen as
+    // "home-tablet" (showStatusPanel is a deliberate no-op at >=600dp,
+    // where the panel is already the persistent right pane), so it shipped
+    // a second name for a view that does not exist. Settings at tablet
+    // width is a genuinely distinct fifth screen.
+    await tester.tap(find.byKey(const Key('settingsGearButton')));
     await tester.pumpAndSettle();
-    await binding.takeScreenshot('status-panel-$_formFactor');
+    await binding.takeScreenshot('settings-$_formFactor');
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    if (_formFactor == 'phone') {
+      // Phone only: at tablet width the chip has no tap handler at all,
+      // because the panel it would open is already on screen.
+      await tester.tap(find.byKey(const Key('statusChip')));
+      await tester.pumpAndSettle();
+      await binding.takeScreenshot('status-panel-phone');
+    }
   });
 }
 

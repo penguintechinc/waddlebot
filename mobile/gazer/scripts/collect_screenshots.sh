@@ -10,12 +10,17 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SRC_DIR="$REPO_ROOT/mobile/gazer/build/integration_screenshots"
 DEST_DIR="$REPO_ROOT/docs/screenshots/gazer"
 
+# Five distinct screens, not five files. Ruling R42 replaced
+# "status-panel-tablet" with "settings-tablet": the former was the same
+# rendered screen as "home-tablet" (the status panel is already the
+# persistent right pane at >=600dp), so it shipped a duplicate under a
+# name implying a view that does not exist.
 NAMES=(
   "home-idle-phone"
   "settings-phone"
   "status-panel-phone"
   "home-tablet"
-  "status-panel-tablet"
+  "settings-tablet"
 )
 
 mkdir -p "$DEST_DIR"
