@@ -23,26 +23,36 @@ class WakeLockControllerTest {
     }
 
     @Test
-    fun `IDLE releases the wake lock`() {
-        var acquired = 0
-        var released = 0
-        val controller = WakeLockController(acquire = { acquired++ }, release = { released++ })
+    fun `every state that ends the stream releases the wake lock`() {
+        // ERROR is the one that matters in practice: when Dart exhausts its reconnect budget it
+        // settles on ErrorState without ever driving the pipeline back to IDLE, so releasing only
+        // on IDLE left the PARTIAL_WAKE_LOCK held until its 4-hour timeout with nothing streaming.
+        listOf(NativePipelineState.IDLE, NativePipelineState.STOPPING, NativePipelineState.ERROR).forEach { state ->
+            var acquired = 0
+            var released = 0
+            val controller = WakeLockController(acquire = { acquired++ }, release = { released++ })
 
-        controller.onState(NativePipelineState.IDLE)
+            controller.onState(state)
 
-        assertEquals(0, acquired)
-        assertEquals(1, released)
+            assertEquals(0, acquired, "$state must not acquire")
+            assertEquals(1, released, "$state must release the wake lock")
+        }
     }
 
     @Test
     fun `every other state is a no-op`() {
+        val terminal =
+            setOf(
+                NativePipelineState.STREAMING,
+                NativePipelineState.IDLE,
+                NativePipelineState.STOPPING,
+                NativePipelineState.ERROR,
+            )
         var acquired = 0
         var released = 0
         val controller = WakeLockController(acquire = { acquired++ }, release = { released++ })
 
-        NativePipelineState.entries
-            .filter { it != NativePipelineState.STREAMING && it != NativePipelineState.IDLE }
-            .forEach { controller.onState(it) }
+        NativePipelineState.entries.filterNot { it in terminal }.forEach { controller.onState(it) }
 
         assertEquals(0, acquired)
         assertEquals(0, released)

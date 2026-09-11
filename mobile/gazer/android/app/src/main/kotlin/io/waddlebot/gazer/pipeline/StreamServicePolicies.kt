@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.hardware.camera2.CameraManager
 import android.os.Build
+import io.waddlebot.gazer.pigeon.GazerErrorCode
 import io.waddlebot.gazer.pigeon.NativePipelineState
 import io.waddlebot.gazer.pipeline.sources.AudioSourceFactory
 import io.waddlebot.gazer.pipeline.sources.CameraManagerIds
@@ -30,15 +31,88 @@ class WakeLockController(
     private val acquire: () -> Unit,
     private val release: () -> Unit,
 ) {
-    /** Applies the wake-lock decision for [state]: acquire while streaming, release once idle, no-op otherwise. */
+    /**
+     * Applies the wake-lock decision for [state]: acquire while streaming, release on every state
+     * that means the stream is over - IDLE, STOPPING and ERROR alike - and no-op otherwise.
+     *
+     * ERROR is load-bearing, not symmetry: when Dart exhausts its reconnect budget it settles on
+     * ErrorState without driving the pipeline back to IDLE, so releasing only on IDLE leaves the
+     * PARTIAL_WAKE_LOCK held until its 4-hour timeout with nothing streaming behind it.
+     */
     fun onState(state: NativePipelineState) {
         when (state) {
             NativePipelineState.STREAMING -> acquire()
-            NativePipelineState.IDLE -> release()
+            NativePipelineState.IDLE, NativePipelineState.STOPPING, NativePipelineState.ERROR -> release()
             else -> Unit
         }
     }
 }
+
+/**
+ * Owns StreamService's two teardown sequences, with each Service-framework action injected as a
+ * lambda so the ordering - which is the only real decision here - is unit-testable without
+ * Robolectric/instrumentation.
+ */
+class ServiceTeardownController(
+    private val stopPipeline: () -> Unit,
+    private val dropForegroundNotification: () -> Unit,
+    private val stopService: () -> Unit,
+) {
+    /**
+     * Full stop, for the notification's Stop action and for task removal (app swiped away): stop
+     * the pipeline first so the camera, mic and RTMP socket are released and IDLE reaches Dart
+     * while the service is still alive, then drop the notification and the service itself.
+     */
+    fun stopEverything() {
+        stopPipeline()
+        dropForegroundNotification()
+        stopService()
+    }
+
+    /**
+     * Terminal-failure teardown. The pipeline has already released its engine by the time it
+     * reports ERROR, so nothing here touches it - re-entering stop() would emit STOPPING/IDLE over
+     * the failure Dart has already turned into ReconnectingState. Only the foreground claim goes:
+     * the "Gazer is live" notification stops lying, and the started-state is dropped. A bound
+     * client (PigeonHostApiImpl holds BIND_AUTO_CREATE until its own stop()) keeps the service and
+     * its pipeline alive, so a Dart-driven reconnect can re-prepare and re-foreground normally.
+     */
+    fun releaseForegroundOnly() {
+        dropForegroundNotification()
+        stopService()
+    }
+
+    /** PipelineListener hook: ERROR is terminal for the foreground claim, every other state is not. */
+    fun onState(state: NativePipelineState) {
+        if (state == NativePipelineState.ERROR) releaseForegroundOnly()
+    }
+}
+
+/**
+ * Runs [startForeground], mapping an OS refusal to a [GazerErrorCode.SERVICE_START_DENIED] report
+ * through [reportDenied] instead of letting it kill the process; returns whether the service is
+ * actually in the foreground now.
+ *
+ * Android 12+ throws `ForegroundServiceStartNotAllowedException` (an `IllegalStateException`) when
+ * the app is not allowed to start a foreground service, and Android 14+ throws `SecurityException`
+ * when CAMERA/RECORD_AUDIO is not held at start time - a one-time grant can expire, or the user can
+ * revoke it, between Dart's permission gate and this call. Only those two families are caught: any
+ * other throwable is a genuine programming error and still propagates.
+ */
+internal fun startForegroundOrReportDenied(
+    startForeground: () -> Unit,
+    reportDenied: (GazerErrorCode, String) -> Unit,
+): Boolean =
+    try {
+        startForeground()
+        true
+    } catch (e: IllegalStateException) {
+        reportDenied(GazerErrorCode.SERVICE_START_DENIED, "startForeground refused: ${e::class.java.simpleName}")
+        false
+    } catch (e: SecurityException) {
+        reportDenied(GazerErrorCode.SERVICE_START_DENIED, "startForeground refused: ${e::class.java.simpleName}")
+        false
+    }
 
 /**
  * Resolves the FOREGROUND_SERVICE_TYPE flags StreamService must declare to startForeground() on
