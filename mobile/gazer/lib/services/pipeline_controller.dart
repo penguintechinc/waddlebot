@@ -432,46 +432,77 @@ class PipelineController {
   /// the new session already owns (native `prepare()` has no state guard of
   /// its own -- it unconditionally builds a second engine and overwrites
   /// `engine` without releasing the first).
+  ///
+  /// Wrapped end-to-end in `try/finally`: every span is ended and
+  /// [_reconnecting] is cleared on every exit path, including an early
+  /// return and a throw out of the injected sleeper. Without that, a
+  /// failed retry left [_reconnecting] set for the process lifetime and
+  /// the pipeline stayed in [ReconnectingState] forever.
   Future<void> _retryAfter(Duration delay, int epoch) async {
-    await _sleeper(delay);
-    if (_isDisposed ||
-        _cancelled ||
-        epoch != _sessionEpoch ||
-        _pendingTarget == null ||
-        _pendingConfig == null) {
-      return;
-    }
-    final Span prepareSpan = GazerTelemetry.startSpan('gazer.pipeline.prepare');
-    final PrepareResult result;
     try {
-      result = await _guardedPrepare(_pendingConfig!);
-    } finally {
-      prepareSpan.end();
-    }
-    if (_isDisposed || _cancelled || epoch != _sessionEpoch) return;
-    _reconnecting = false;
-    if (!result.ok) {
-      _emit(
-        ErrorState(
-          GazerError(
-            code: result.error ?? GazerErrorCode.encoderFailed,
-            detail: result.detail,
-          ),
-        ),
+      await _sleeper(delay);
+      if (_isDisposed ||
+          _cancelled ||
+          epoch != _sessionEpoch ||
+          _pendingTarget == null ||
+          _pendingConfig == null) {
+        return;
+      }
+      final Span prepareSpan = GazerTelemetry.startSpan(
+        'gazer.pipeline.prepare',
       );
-      return;
-    }
-    _connectingStartedAt = DateTime.now();
-    _emit(const ConnectingState());
-    final StreamTarget retryTarget = _pendingTarget!;
-    final Span retrySpan = GazerTelemetry.startSpan('gazer.pipeline.start');
-    final GazerError? retryError;
-    try {
-      retryError = await _guardedCall('start', () => _host.start(retryTarget));
+      final PrepareResult result;
+      try {
+        result = await _guardedPrepare(_pendingConfig!);
+      } finally {
+        prepareSpan.end();
+      }
+      if (_isDisposed || _cancelled || epoch != _sessionEpoch) return;
+      _reconnecting = false;
+      if (!result.ok) {
+        _emit(
+          ErrorState(
+            GazerError(
+              code: result.error ?? GazerErrorCode.encoderFailed,
+              detail: result.detail,
+            ),
+          ),
+        );
+        return;
+      }
+      _connectingStartedAt = DateTime.now();
+      _emit(const ConnectingState());
+      final StreamTarget retryTarget = _pendingTarget!;
+      final Span retrySpan = GazerTelemetry.startSpan('gazer.pipeline.start');
+      final GazerError? retryError;
+      try {
+        retryError = await _guardedCall(
+          'start',
+          () => _host.start(retryTarget),
+        );
+      } finally {
+        retrySpan.end();
+      }
+      if (retryError != null) _emit(ErrorState(retryError));
+    } catch (error) {
+      // Nothing is listening for this future -- [_handleError] dispatches
+      // it with `unawaited` -- so anything escaping here would become an
+      // unhandled async error and leave the UI on a countdown that never
+      // fires. Every host call is already guarded, so only the injected
+      // sleeper can reach this arm; it still ends the session in
+      // [ErrorState] rather than silently.
+      _emit(ErrorState(_mapHostFailure('reconnect', error)));
     } finally {
-      retrySpan.end();
+      // Backstop for [_reconnecting]: the happy path clears it above,
+      // before ConnectingState is emitted, but every early return and any
+      // throw from the injected sleeper must clear it too. Left set, it
+      // suppresses every later native `preparing`/`ready` event for the
+      // lifetime of the process (see the field doc), so the UI sits on a
+      // countdown that can never advance. Guarded on the epoch so a stale
+      // retry unwinding after a fresh goLive cannot clear the *new*
+      // session's flag.
+      if (epoch == _sessionEpoch) _reconnecting = false;
     }
-    if (retryError != null) _emit(ErrorState(retryError));
   }
 
   void _onNativeStats(StatsSample sample) {

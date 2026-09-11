@@ -28,6 +28,11 @@ class _ManualSleeper {
 
   void resolveNext() => _pending.removeAt(0).complete();
 
+  /// Fails the oldest pending sleep with [error] -- the backoff timer
+  /// itself going wrong, the one path into [PipelineController._retryAfter]
+  /// that is not already covered by the host-call guards.
+  void failNext(Object error) => _pending.removeAt(0).completeError(error);
+
   int get pendingCount => _pending.length;
 }
 
@@ -806,6 +811,103 @@ void main() {
       expect(detail, contains('SERVICE_START_DENIED'));
       expect(detail, isNot(contains('demo-key-0001')));
       expect(detail, isNot(contains('ingest-a.example.com')));
+    });
+  });
+
+  group('reconnect retry never strands the pipeline', () {
+    Future<void> reachReconnecting() async {
+      await controller.goLive(
+        settingsWith(),
+        devices: [backCamera],
+        videoDeviceId: 'camera:back',
+        flags: flagsWith(),
+      );
+      bridge.onStateChanged(StateEvent(state: NativePipelineState.streaming));
+      await Future<void>.delayed(Duration.zero);
+      bridge.onStateChanged(
+        StateEvent(
+          state: NativePipelineState.error,
+          error: GazerErrorCode.rtmpConnectFailed,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.current, isA<ReconnectingState>());
+      expect(sleeper.pendingCount, 1);
+    }
+
+    test('a throwing re-prepare ends in ErrorState and stops suppressing native events', () async {
+      await reachReconnecting();
+      host.prepareError = PlatformException(code: 'SERVICE_START_DENIED');
+
+      sleeper.resolveNext();
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.current, isA<ErrorState>());
+      expect(
+        (controller.current as ErrorState).error.code,
+        GazerErrorCode.serviceStartDenied,
+      );
+
+      // _reconnecting must be clear again: while it is set, every native
+      // preparing/ready event is swallowed, so a later Go Live would
+      // render no progress at all.
+      bridge.onStateChanged(StateEvent(state: NativePipelineState.ready));
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.current, isA<ReadyState>());
+    });
+
+    test('a throwing backoff sleep ends in ErrorState and clears the reconnect suppression', () async {
+      await reachReconnecting();
+
+      sleeper.failNext(StateError('backoff timer torn down'));
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      // Previously this escaped _retryAfter as an unhandled async error
+      // and left _reconnecting true for the process lifetime.
+      expect(controller.current, isA<ErrorState>());
+      expect(
+        (controller.current as ErrorState).error.code,
+        GazerErrorCode.unknown,
+      );
+
+      bridge.onStateChanged(StateEvent(state: NativePipelineState.ready));
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.current, isA<ReadyState>());
+    });
+
+    test('a stale retry unwinding after a fresh goLive leaves the new session reconnecting', () async {
+      await reachReconnecting();
+
+      // Stop + Go Live again while the old backoff is still pending:
+      // the stale retry must not clear the *new* session's suppression.
+      await controller.stop();
+      await controller.goLive(
+        settingsWith(),
+        devices: [backCamera],
+        videoDeviceId: 'camera:back',
+        flags: flagsWith(),
+      );
+      bridge.onStateChanged(StateEvent(state: NativePipelineState.streaming));
+      await Future<void>.delayed(Duration.zero);
+      bridge.onStateChanged(
+        StateEvent(
+          state: NativePipelineState.error,
+          error: GazerErrorCode.rtmpConnectFailed,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.current, isA<ReconnectingState>());
+
+      // Resolve the *stale* backoff (index 0) -- it returns early on the
+      // epoch guard and must leave the fresh session's ReconnectingState
+      // intact.
+      sleeper.resolveNext();
+      await Future<void>.delayed(Duration.zero);
+      bridge.onStateChanged(StateEvent(state: NativePipelineState.ready));
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.current, isA<ReconnectingState>());
     });
   });
 }
