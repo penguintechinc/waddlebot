@@ -10,13 +10,26 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <uses-feature android:name="android.hardware.camera" android:required="true" />
+    <!-- camera.any, not camera: the bare feature means a *rear-facing* camera, which would hide
+         Gazer on Play from front-camera-only devices it streams from perfectly well. -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="true" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
+
+    <!-- Package visibility (Android 11+): without this, queryIntentActivities is filtered and
+         canLaunchUrl() returns false for the release page, so the update checker's "Open" action
+         can never launch a browser. Narrow on purpose - https VIEW only, nothing else. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
 
     <application
         android:label="Gazer"
         android:name="${applicationName}"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
@@ -36,9 +49,12 @@
             </intent-filter>
         </activity>
 
+        <!-- stopWithTask backs up StreamService.onTaskRemoved: swiping the app away must stop the
+             camera, mic and RTMP publish, never leave a started foreground service running on. -->
         <service
             android:name=".pipeline.StreamService"
             android:foregroundServiceType="camera|microphone"
+            android:stopWithTask="true"
             android:exported="false" />
 
         <meta-data
