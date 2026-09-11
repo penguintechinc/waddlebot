@@ -795,6 +795,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Close'**
   String get statusPanelCloseButtonLabel;
+
+  /// No description provided for @settingsDebugLogsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Debug logs'**
+  String get settingsDebugLogsLabel;
 }
 
 class _AppLocalizationsDelegate
