@@ -130,5 +130,6 @@
   "statusPanelForegroundServiceLabel": "Foreground Service",
   "statusPanelForegroundServiceActiveLabel": "Active",
   "statusPanelForegroundServiceInactiveLabel": "Inactive",
-  "statusPanelCloseButtonLabel": "Close"
+  "statusPanelCloseButtonLabel": "Close",
+  "goLiveFailedMessage": "Could not start the stream. Please try again."
 }
