@@ -396,4 +396,101 @@ void main() {
     expect(gate.callCount, 1);
     expect(hostApi.prepareCalls, hasLength(1));
   });
+
+  testWidgets(
+    'the permanently-denied dialog can be dismissed without opening settings',
+    (WidgetTester tester) async {
+      await pumpGazerApp(
+        tester,
+        overrides: overrides(
+          license: license(flagsSet: true),
+          permissionGate: FakePermissionGate(
+            PermissionOutcome.permanentlyDenied,
+          ),
+        ),
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Go Live'));
+      await tester.pumpAndSettle();
+      // The dialog previously relied on the barrier/back gesture alone.
+      expect(
+        find.byKey(const Key('permissionDialogDismissButton')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('permissionDialogDismissButton')));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+    },
+  );
+
+  testWidgets('the settings gear is announced once, not twice', (
+    WidgetTester tester,
+  ) async {
+    await pumpGazerApp(
+      tester,
+      overrides: overrides(license: license(flagsSet: true)),
+    );
+    // The IconButton's own `tooltip` already carries the accessible name.
+    final Semantics wrapper = tester.widget<Semantics>(
+      find
+          .ancestor(
+            of: find.byKey(const Key('settingsGearButton')),
+            matching: find.byType(Semantics),
+          )
+          .first,
+    );
+    expect(wrapper.excludeSemantics, isTrue);
+  });
+
+  group('orientation', () {
+    testWidgets('portrait viewport goes live with portrait output', (
+      WidgetTester tester,
+    ) async {
+      await pumpGazerApp(
+        tester,
+        overrides: overrides(license: license(flagsSet: true)),
+        size: const Size(390, 844),
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Go Live'));
+      await tester.pumpAndSettle();
+      expect(
+        hostApi.prepareCalls.single.orientation,
+        OutputOrientation.portrait,
+      );
+    });
+
+    testWidgets('landscape viewport goes live with landscape output', (
+      WidgetTester tester,
+    ) async {
+      // Only the controller-level mapping was covered before; HomeScreen's
+      // own MediaQuery.orientationOf -> OutputOrientation wiring was not.
+      await pumpGazerApp(
+        tester,
+        overrides: overrides(license: license(flagsSet: true)),
+        size: const Size(844, 390),
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Go Live'));
+      await tester.pumpAndSettle();
+      expect(
+        hostApi.prepareCalls.single.orientation,
+        OutputOrientation.landscape,
+      );
+    });
+  });
+
+  testWidgets('the source picker selection is what Go Live and the status '
+      'panel both read', (WidgetTester tester) async {
+    await pumpGazerApp(
+      tester,
+      overrides: overrides(license: license(flagsSet: true)),
+      size: const Size(1280, 800),
+    );
+    // Tablet width renders the persistent status pane, so one tap has to
+    // move both the prepare call and the panel's camera row.
+    await tester.tap(find.text('Front camera'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Go Live'));
+    await tester.pumpAndSettle();
+    expect(hostApi.prepareCalls.single.videoDeviceId, 'camera:front');
+    expect(find.text('On (Front Camera)'), findsOneWidget);
+  });
 }

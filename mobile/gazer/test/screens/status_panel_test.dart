@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 // this pin, so it must be imported explicitly (see helpers/pump_app.dart).
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gazer/l10n/app_localizations.dart';
 import 'package:gazer/models/gazer_settings.dart';
 import 'package:gazer/models/license_state.dart';
 import 'package:gazer/models/stream_target_settings.dart';
@@ -21,6 +22,7 @@ import 'package:gazer/providers/settings_provider.dart';
 import 'package:gazer/providers/telemetry_provider.dart';
 import 'package:gazer/providers/update_provider.dart';
 import 'package:gazer/screens/status_panel.dart';
+import 'package:gazer/services/license_client.dart';
 import 'package:gazer/services/pipeline_controller.dart';
 import 'package:gazer/services/reconnect_policy.dart';
 import 'package:gazer/telemetry/gazer_telemetry.dart';
@@ -41,6 +43,35 @@ import '../helpers/pump_app.dart';
 class _MockUrlLauncherPlatform extends Mock
     with MockPlatformInterfaceMixin
     implements UrlLauncherPlatform {}
+
+/// [LicenseClient] double that counts fetches and can fail the first N of
+/// them, so the panel's Retry affordance can be shown to actually re-run
+/// the fetch rather than merely rendering a button.
+class _CountingLicenseClient implements LicenseClient {
+  _CountingLicenseClient({required this.failures, required this.success});
+
+  /// How many leading calls resolve to a never-fetched (failed) state.
+  int failures;
+
+  /// The state every call after [failures] resolves to.
+  final LicenseState success;
+
+  /// Number of `validateAndFetchFlags` calls received.
+  int fetchCalls = 0;
+
+  @override
+  final String baseUrl = 'https://fake.license.invalid';
+
+  @override
+  Future<LicenseState> validateAndFetchFlags() async {
+    fetchCalls++;
+    if (fetchCalls <= failures) return LicenseState.initial('test-device');
+    return success;
+  }
+
+  @override
+  Future<void> keepalive() async {}
+}
 
 void main() {
   late FakeGazerHostApi hostApi;
@@ -244,7 +275,238 @@ void main() {
       overrides: overrides(),
       size: const Size(1280, 800),
     );
-    expect(find.text('Disabled (no endpoint configured)'), findsOneWidget);
+    // Shortened from "Disabled (no endpoint configured)", which the row's
+    // single-line ellipsis truncated mid-word at 360dp.
+    expect(find.text('Disabled (no endpoint)'), findsOneWidget);
+    final Text value = tester.widget<Text>(find.text('Disabled (no endpoint)'));
+    expect(value.overflow, TextOverflow.ellipsis);
+    expect(
+      value.data!.length,
+      lessThanOrEqualTo(26),
+      reason: 'the fixed telemetry string must fit the 360dp value column',
+    );
+  });
+
+  group('camera row', () {
+    setUp(() {
+      hostApi.videoDevices = <VideoDevice>[
+        VideoDevice(
+          id: 'camera:back',
+          kind: VideoDeviceKind.backCamera,
+          name: 'Back Camera',
+        ),
+        VideoDevice(
+          id: 'camera:front',
+          kind: VideoDeviceKind.frontCamera,
+          name: 'Front Camera',
+        ),
+      ];
+    });
+
+    testWidgets('reports the SELECTED device, not simply the first one', (
+      WidgetTester tester,
+    ) async {
+      await pumpGazerApp(
+        tester,
+        overrides: overrides(),
+        size: const Size(1280, 800),
+      );
+      // Pick the front camera through the same picker the user would, then
+      // drive the pipeline out of Idle so the camera row reports "On".
+      await tester.tap(find.text('Front camera'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+        () => hostApi.emitState(NativePipelineState.streaming),
+      );
+      await tester.pumpAndSettle();
+
+      // Before the fix this read "On (Back Camera)" -- devices.first.
+      expect(find.text('On (Front Camera)'), findsOneWidget);
+      expect(find.text('On (Back Camera)'), findsNothing);
+    });
+
+    testWidgets('falls back to Off while idle even with devices enumerated', (
+      WidgetTester tester,
+    ) async {
+      await pumpGazerApp(
+        tester,
+        overrides: overrides(),
+        size: const Size(1280, 800),
+      );
+      expect(find.text('Off'), findsOneWidget);
+    });
+  });
+
+  group('license fetch retry', () {
+    late _CountingLicenseClient client;
+
+    LicenseState valid() => LicenseState(
+      status: LicenseStatus.valid,
+      flags: const <String, bool>{'waddlebot.gazer.camera-stream': true},
+      lastFetched: DateTime.utc(2026, 9, 7),
+      deviceId: 'test-device',
+    );
+
+    List<Override> retryOverrides() => <Override>[
+      settingsRepositoryProvider.overrideWithValue(settingsRepo),
+      gazerHostApiProvider.overrideWithValue(hostApi),
+      licenseClientProvider.overrideWith((Ref ref) async => client),
+      isOnlineProvider.overrideWith((Ref ref) => Stream<bool>.value(true)),
+      updateCheckerProvider.overrideWith(
+        (Ref ref) async => FakeUpdateChecker(null),
+      ),
+      telemetryConfigProvider.overrideWith(
+        (Ref ref) async => const TelemetryConfig(
+          endpoint: '',
+          protocol: 'http/json',
+          headers: <String, String>{},
+          serviceName: 'gazer',
+          serviceVersion: '0.0.0',
+          deploymentEnvironment: 'test',
+        ),
+      ),
+    ];
+
+    testWidgets(
+      'a failed first fetch offers Retry, and Retry actually re-fetches',
+      (WidgetTester tester) async {
+        client = _CountingLicenseClient(failures: 1, success: valid());
+        await pumpGazerApp(
+          tester,
+          overrides: retryOverrides(),
+          size: const Size(1280, 800),
+        );
+
+        // Settled with no lastFetched == the fetch failed quietly
+        // (LicenseClient never throws); the panel used to claim it was
+        // still fetching, forever, with no way out but an app restart.
+        expect(
+          find.text('Could not fetch features — streaming stays disabled'),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('licenseRetryButton')), findsOneWidget);
+        expect(client.fetchCalls, 1);
+
+        await tester.tap(find.byKey(const Key('licenseRetryButton')));
+        await tester.pumpAndSettle();
+
+        expect(client.fetchCalls, 2);
+        expect(find.byKey(const Key('licenseRetryButton')), findsNothing);
+        expect(find.text('Valid'), findsOneWidget);
+      },
+    );
+
+    testWidgets('an in-flight fetch shows Retry only after a bounded wait', (
+      WidgetTester tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(body: LicenseFetchRow(fetching: true, onRetry: () {})),
+        ),
+      );
+      expect(
+        find.text('Fetching features… (required to stream)'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('licenseRetryButton')), findsNothing);
+
+      await tester.pump(kLicenseFetchRetryDelay + const Duration(seconds: 1));
+      expect(find.byKey(const Key('licenseRetryButton')), findsOneWidget);
+    });
+  });
+
+  testWidgets('the update link excludes its child semantics', (
+    WidgetTester tester,
+  ) async {
+    await pumpGazerApp(
+      tester,
+      overrides: overrides(
+        update: UpdateInfo(
+          latestVersion: '9.9.9',
+          currentVersion: '1.0.0',
+          releaseUrl: Uri.parse('https://example.invalid/releases'),
+        ),
+      ),
+      size: const Size(1280, 800),
+    );
+    final Semantics link = tester.widget<Semantics>(
+      find.byKey(const Key('updateLinkSemantics')),
+    );
+    expect(link.excludeSemantics, isTrue);
+  });
+
+  testWidgets('the phone bottom sheet has a real close control', (
+    WidgetTester tester,
+  ) async {
+    await pumpGazerApp(
+      tester,
+      overrides: overrides(),
+      size: const Size(390, 844),
+    );
+    await tester.tap(find.text('Idle'));
+    await tester.pumpAndSettle();
+    expect(find.byType(StatusPanel), findsOneWidget);
+
+    // Previously the sheet could only be dismissed by drag or scrim tap,
+    // and statusPanelCloseButtonLabel was defined but never referenced.
+    await tester.tap(find.byKey(const Key('statusPanelCloseButton')));
+    await tester.pumpAndSettle();
+    expect(find.byType(StatusPanel), findsNothing);
+  });
+
+  group('panel formatting', () {
+    test('timestamps drop the ISO separator and microseconds', () {
+      expect(
+        formatPanelTimestamp(DateTime(2026, 9, 11, 22, 29, 56, 203)),
+        'Sep 11, 2026 22:29',
+      );
+    });
+
+    test('durations read as h/m/s, never a bare seconds count', () {
+      expect(formatPanelDuration(Duration.zero), '0s');
+      expect(formatPanelDuration(const Duration(seconds: 9)), '9s');
+      expect(formatPanelDuration(const Duration(seconds: 69)), '1m 09s');
+      expect(
+        formatPanelDuration(const Duration(hours: 2, minutes: 5, seconds: 9)),
+        '2h 05m 09s',
+      );
+    });
+
+    testWidgets('the panel renders the formatted values, not raw ones', (
+      WidgetTester tester,
+    ) async {
+      await pumpGazerApp(
+        tester,
+        overrides: overrides(),
+        size: const Size(1280, 800),
+      );
+      // Exact wall-clock text depends on the runner's zone; what matters
+      // is that it is a formatted date, never the raw ISO-8601 string with
+      // its `T` separator and microseconds.
+      expect(find.textContaining('Last fetched: Sep'), findsOneWidget);
+      expect(find.textContaining('2026-09-07T'), findsNothing);
+      expect(find.textContaining('.203041'), findsNothing);
+      expect(find.text('Uptime: 0s'), findsOneWidget);
+    });
+  });
+
+  testWidgets('the stream key label and value are not run together', (
+    WidgetTester tester,
+  ) async {
+    await pumpGazerApp(
+      tester,
+      overrides: overrides(),
+      size: const Size(1280, 800),
+    );
+    // "Stream Key••••••••0001" in the shipped screenshots: the Wrap put the
+    // label and MaskedText flush against each other.
+    final double labelRight = tester
+        .getRect(find.text('Stream Key').last)
+        .right;
+    final double valueLeft = tester.getRect(find.text('•••••••••0001')).left;
+    expect(valueLeft - labelRight, greaterThanOrEqualTo(8.0));
   });
   testWidgets(
     'the telemetry row is live: a failing export flips it with no other rebuild',

@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../l10n/app_localizations.dart';
@@ -14,6 +17,7 @@ import '../providers/connectivity_provider.dart';
 import '../providers/devices_provider.dart';
 import '../providers/license_provider.dart';
 import '../providers/pipeline_provider.dart';
+import '../providers/selected_device_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/telemetry_provider.dart';
 import '../providers/update_provider.dart';
@@ -36,9 +40,45 @@ void showStatusPanel(BuildContext context) {
   showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    builder: (BuildContext context) =>
-        const FractionallySizedBox(heightFactor: 0.85, child: StatusPanel()),
+    builder: (BuildContext sheetContext) => FractionallySizedBox(
+      heightFactor: 0.85,
+      child: Column(
+        children: <Widget>[
+          Align(
+            alignment: Alignment.centerRight,
+            child: IconButton(
+              key: const Key('statusPanelCloseButton'),
+              // `tooltip` is what exposes the accessible name here; a
+              // wrapping Semantics would announce the same string twice.
+              tooltip: AppLocalizations.of(sheetContext)
+                  .statusPanelCloseButtonLabel,
+              icon: const Icon(Icons.close),
+              onPressed: () => Navigator.of(sheetContext).pop(),
+            ),
+          ),
+          const Expanded(child: StatusPanel()),
+        ],
+      ),
+    ),
   );
+}
+
+/// Formats [when] for display in the panel: local wall-clock time to the
+/// minute, never the raw ISO-8601 string (whose microseconds and `T`
+/// separator leaked into two shipped marketing screenshots).
+String formatPanelTimestamp(DateTime when) =>
+    DateFormat('MMM d, y HH:mm', 'en_US').format(when.toLocal());
+
+/// Formats [d] as a compact human-readable duration (`2h 05m 09s`,
+/// `5m 09s`, `9s`) rather than a bare seconds count.
+String formatPanelDuration(Duration d) {
+  String two(int n) => n.toString().padLeft(2, '0');
+  final int hours = d.inHours;
+  final int minutes = d.inMinutes.remainder(60);
+  final int seconds = d.inSeconds.remainder(60);
+  if (hours > 0) return '${hours}h ${two(minutes)}m ${two(seconds)}s';
+  if (minutes > 0) return '${minutes}m ${two(seconds)}s';
+  return '${seconds}s';
 }
 
 /// Full diagnostic panel: camera/UVC/stream state, connection details
@@ -51,6 +91,10 @@ void showStatusPanel(BuildContext context) {
 class StatusPanel extends ConsumerWidget {
   const StatusPanel({super.key});
 
+  /// Localized label for the panel's "Stream" row.
+  ///
+  /// Exhaustive over [PipelineState] with no `default:` arm, so adding a
+  /// state is a compile error rather than a silently unlabelled row.
   String _streamStateLabel(AppLocalizations l10n, PipelineState s) {
     return switch (s) {
       IdleState() => l10n.statusChipIdleLabel,
@@ -64,6 +108,8 @@ class StatusPanel extends ConsumerWidget {
     };
   }
 
+  /// Localized label for the panel's "License" row; a `null` status (no
+  /// state fetched yet) reads the same as an explicitly unknown one.
   String _licenseStatusLabel(AppLocalizations l10n, LicenseStatus? status) {
     return switch (status) {
       LicenseStatus.valid => l10n.statusPanelLicenseStatusValid,
@@ -94,10 +140,21 @@ class StatusPanel extends ConsumerWidget {
     // whose read is what applies the telemetry config in the first place.
     final TelemetryHealth telemetryHealth = ref.watch(telemetryHealthProvider);
 
+    final String? selectedDeviceId = ref.watch(selectedDeviceProvider);
+
     final bool cameraOn = state is! IdleState && state is! ErrorState;
-    final String? deviceLabel = cameraOn && devices.isNotEmpty
-        ? devices.first.name
-        : null;
+    // The device the user actually picked, not simply the first enumerated
+    // one: with the front camera selected the panel used to report "Back
+    // Camera". `firstWhere` has no null-returning overload without
+    // package:collection, so this is a plain loop.
+    VideoDevice? selectedDevice;
+    for (final VideoDevice d in devices) {
+      if (d.id == selectedDeviceId) {
+        selectedDevice = d;
+        break;
+      }
+    }
+    final String? deviceLabel = cameraOn ? selectedDevice?.name : null;
     final Uri? url = settings == null
         ? null
         : Uri.tryParse(settings.target.url);
@@ -162,6 +219,7 @@ class StatusPanel extends ConsumerWidget {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: <Widget>[
                   Text(l10n.statusPanelConnectionKeyLabel),
+                  const SizedBox(width: 8),
                   MaskedText(
                     value: settings.target.streamKey ?? '',
                     revealSemanticsLabel: l10n.revealStreamKeyLabel,
@@ -191,7 +249,7 @@ class StatusPanel extends ConsumerWidget {
               ),
             ),
             Text(
-              l10n.statusPanelUptimeLabel(stats.uptime.inSeconds.toString()),
+              l10n.statusPanelUptimeLabel(formatPanelDuration(stats.uptime)),
             ),
             Text(
               l10n.statusPanelReconnectCountLabel(
@@ -217,7 +275,10 @@ class StatusPanel extends ConsumerWidget {
               style: Theme.of(context).textTheme.titleMedium,
             ),
             if (!flags.hasFetchedOnce)
-              Text(l10n.statusPanelLicenseFetchingLabel)
+              LicenseFetchRow(
+                fetching: licenseAsync.isLoading,
+                onRetry: () => ref.invalidate(licenseProvider),
+              )
             else ...<Widget>[
               _row(
                 context,
@@ -227,7 +288,7 @@ class StatusPanel extends ConsumerWidget {
               if (licenseAsync.value?.lastFetched != null)
                 Text(
                   l10n.statusPanelLicenseLastFetchedLabel(
-                    licenseAsync.value!.lastFetched!.toIso8601String(),
+                    formatPanelTimestamp(licenseAsync.value!.lastFetched!),
                   ),
                 ),
             ],
@@ -236,7 +297,12 @@ class StatusPanel extends ConsumerWidget {
               Text(l10n.statusPanelUpdateNoneLabel)
             else
               Semantics(
+                key: const Key('updateLinkSemantics'),
                 link: true,
+                // Without this the wrapped Text's own semantics node is
+                // merged in alongside the explicit label, so TalkBack reads
+                // "Update available: v1.2.3" twice.
+                excludeSemantics: true,
                 label: l10n.statusPanelUpdateAvailableLabel(
                   update.latestVersion,
                 ),
@@ -333,5 +399,79 @@ class StatusPanel extends ConsumerWidget {
     if (!launched && context.mounted) {
       messenger.showSnackBar(SnackBar(content: Text(l10n.updateOpenFailed)));
     }
+  }
+}
+
+/// How long the "Fetching features…" row waits before also offering a
+/// Retry, so a fetch that is merely slow does not immediately look broken.
+const Duration kLicenseFetchRetryDelay = Duration(seconds: 10);
+
+/// The panel's first-launch license row: "Fetching features…" while the
+/// fetch is in flight, and a "could not fetch" message once it settles
+/// without ever succeeding.
+///
+/// Always reachable by a Retry action, because a failed first fetch leaves
+/// Go Live disabled for the whole session and `licenseProvider` is
+/// `keepAlive` — without this the only recovery was restarting the app.
+class LicenseFetchRow extends StatefulWidget {
+  const LicenseFetchRow({
+    super.key,
+    required this.fetching,
+    required this.onRetry,
+  });
+
+  /// Whether the license/flags fetch is still in flight.
+  final bool fetching;
+
+  /// Invoked by the Retry button; wired to `ref.invalidate(licenseProvider)`.
+  final VoidCallback onRetry;
+
+  @override
+  State<LicenseFetchRow> createState() => _LicenseFetchRowState();
+}
+
+/// Runs the [kLicenseFetchRetryDelay] timer that reveals Retry on a fetch
+/// that never settles; the timer is always cancelled in [dispose].
+class _LicenseFetchRowState extends State<LicenseFetchRow> {
+  Timer? _retryTimer;
+  bool _retryOffered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _retryTimer = Timer(kLicenseFetchRetryDelay, () {
+      if (mounted) setState(() => _retryOffered = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _retryTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final AppLocalizations l10n = AppLocalizations.of(context);
+    // A settled fetch that still has no `lastFetched` has failed, however
+    // quietly (LicenseClient never throws), so Retry appears at once; a
+    // fetch still in flight only offers it after the bounded wait.
+    final bool failed = !widget.fetching;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          failed
+              ? l10n.statusPanelLicenseFetchFailedLabel
+              : l10n.statusPanelLicenseFetchingLabel,
+        ),
+        if (failed || _retryOffered)
+          TextButton(
+            key: const Key('licenseRetryButton'),
+            onPressed: widget.onRetry,
+            child: Text(l10n.statusPanelLicenseRetryLabel),
+          ),
+      ],
+    );
   }
 }

@@ -13,8 +13,14 @@ import 'screens/settings_screen.dart';
 /// Route table for the app: `'/'` → [HomeScreen], `'/settings'` →
 /// [SettingsScreen]. Declared at file scope (rather than inside
 /// [GazerApp]) so [GazerApp] stays `const` and tests share one instance.
+///
+/// [GoRouter.errorBuilder] is set so an unknown route renders a localized
+/// screen with a way back, instead of go_router's own unlocalized default
+/// error page.
 final GoRouter gazerRouter = GoRouter(
   initialLocation: '/',
+  errorBuilder: (BuildContext context, GoRouterState state) =>
+      const _RouteNotFoundScreen(),
   routes: <RouteBase>[
     GoRoute(
       path: '/',
@@ -44,7 +50,9 @@ final GoRouter gazerRouter = GoRouter(
 class GazerApp extends ConsumerStatefulWidget {
   const GazerApp({super.key});
 
-  static ThemeData get _elderDarkTheme => ThemeData.dark().copyWith(
+  // `static final`, not a getter: a getter allocated a fresh ThemeData on
+  // every build of GazerApp, and the theme never varies.
+  static final ThemeData _elderDarkTheme = ThemeData.dark().copyWith(
     scaffoldBackgroundColor: ElderThemeData.dark.pageBackground,
     colorScheme: ThemeData.dark().colorScheme.copyWith(
       primary: ElderThemeData.dark.primaryButton,
@@ -72,6 +80,9 @@ class _GazerAppState extends ConsumerState<GazerApp>
     unawaited(_startKeepaliveAfterFirstFetch());
   }
 
+  /// Awaits the first [licenseProvider] resolution, then starts the
+  /// keepalive loop -- pinging before the first fetch settles would race
+  /// the device-id/cache setup [LicenseClient] performs on that call.
   Future<void> _startKeepaliveAfterFirstFetch() async {
     try {
       await ref.read(licenseProvider.future);
@@ -107,6 +118,35 @@ class _GazerAppState extends ConsumerState<GazerApp>
       routerConfig: gazerRouter,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
+    );
+  }
+}
+
+/// Fallback screen for an unmatched route: a localized message plus a
+/// button back to [HomeScreen], so a bad deep link never strands the user
+/// on go_router's untranslated default error page.
+class _RouteNotFoundScreen extends StatelessWidget {
+  const _RouteNotFoundScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    final AppLocalizations l10n = AppLocalizations.of(context);
+    return Scaffold(
+      appBar: AppBar(title: Text(l10n.routeNotFoundTitle)),
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Text(l10n.routeNotFoundMessage),
+            const SizedBox(height: 16),
+            FilledButton(
+              key: const Key('routeNotFoundHomeButton'),
+              onPressed: () => gazerRouter.go('/'),
+              child: Text(l10n.routeNotFoundHomeLabel),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -38,7 +38,10 @@ void main() {
     );
   });
 
-  List<Override> overrides({bool rtmpAuthEnabled = true}) => <Override>[
+  List<Override> overrides({
+    bool rtmpAuthEnabled = true,
+    bool adaptiveBitrateEnabled = true,
+  }) => <Override>[
     settingsRepositoryProvider.overrideWithValue(settingsRepo),
     gazerHostApiProvider.overrideWithValue(FakeGazerHostApi()),
     licenseClientProvider.overrideWith(
@@ -48,7 +51,7 @@ void main() {
           flags: <String, bool>{
             'waddlebot.gazer.camera-stream': true,
             'waddlebot.gazer.uvc-capture': true,
-            'waddlebot.gazer.adaptive-bitrate': true,
+            'waddlebot.gazer.adaptive-bitrate': adaptiveBitrateEnabled,
             'waddlebot.gazer.rtmp-auth': rtmpAuthEnabled,
           },
           lastFetched: DateTime.utc(2026, 9, 7),
@@ -86,14 +89,19 @@ void main() {
   Future<void> pumpSettings(
     WidgetTester tester, {
     bool rtmpAuthEnabled = true,
+    bool adaptiveBitrateEnabled = true,
+    Size size = const Size(800, 1600),
   }) async {
     // Default 800x600 test viewport is shorter than this form (Save ends
     // up off-screen, so a tap on it silently misses); a taller viewport
     // keeps every control reachable without extra `ensureVisible` calls.
     await pumpGazerApp(
       tester,
-      overrides: overrides(rtmpAuthEnabled: rtmpAuthEnabled),
-      size: const Size(800, 1600),
+      overrides: overrides(
+        rtmpAuthEnabled: rtmpAuthEnabled,
+        adaptiveBitrateEnabled: adaptiveBitrateEnabled,
+      ),
+      size: size,
     );
     await tester.tap(find.byIcon(Icons.settings));
     await tester.pumpAndSettle();
@@ -273,6 +281,21 @@ void main() {
       expect(forceSwitch.value, isFalse);
       forceSwitch.onChanged!(true);
       await tester.pump();
+      // Previously the result of this call was never asserted at all.
+      expect(
+        tester
+            .widget<SwitchListTile>(find.byKey(const Key('forceLibuvcSwitch')))
+            .value,
+        isTrue,
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'RTMP URL'),
+        'rtmp://example.com/live/mystream',
+      );
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.pumpAndSettle();
+      expect(settingsRepo.saved.last.forceLibuvc, isTrue);
     },
   );
 
@@ -353,7 +376,12 @@ void main() {
   );
 
   testWidgets(
-    'telemetry endpoint field is hidden until unlocked, then persists on save',
+    // Renamed: the endpoint override is written through SharedPreferencesAsync,
+    // which has no platform implementation under `flutter test`, so its
+    // persistence cannot be observed at this layer -- the old name promised
+    // an assertion the body never made. An in-memory shared_preferences fake
+    // in test/helpers/ would let this cover the write end to end.
+    'telemetry endpoint field is hidden until the version footer is long-pressed',
     (WidgetTester tester) async {
       await pumpSettings(tester);
       expect(find.byKey(const Key('telemetryEndpointField')), findsNothing);
@@ -374,7 +402,95 @@ void main() {
       await tester.tap(find.widgetWithText(FilledButton, 'Save'));
       await tester.pumpAndSettle();
 
-      expect(settingsRepo.saved, isNotEmpty);
+      // The old assertion was only `saved, isNotEmpty` — true even if the
+      // draft were empty. Pin the actual draft that was persisted and the
+      // endpoint the field is holding at save time.
+      expect(settingsRepo.saved, hasLength(1));
+      expect(
+        settingsRepo.saved.single.target.url,
+        'rtmp://example.com/live/mystream',
+      );
+      expect(
+        tester
+            .widget<TextField>(
+              find.descendant(
+                of: find.byKey(const Key('telemetryEndpointField')),
+                matching: find.byType(TextField),
+              ),
+            )
+            .controller!
+            .text,
+        'http://collector.example.com:4318',
+      );
+    },
+  );
+
+  testWidgets(
+    'the frame-rate control does not overflow at 360dp with 1.3x text scale',
+    (WidgetTester tester) async {
+      // Android's Largest font setting. The four-segment SegmentedButton
+      // already consumed the full 328dp content box at 1.0x, so any scale
+      // above 1.0x threw `RenderFlex overflowed` -- and no test rendered
+      // SettingsScreen at a phone width at all (every other one pins
+      // 800x1600 to keep Save on-screen).
+      tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+      await pumpSettings(tester, size: const Size(360, 640));
+
+      expect(find.byKey(const Key('frameRateField')), findsOneWidget);
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'no RenderFlex overflow at 360dp / 1.3x text scale',
+      );
+    },
+  );
+
+  testWidgets(
+    'the adaptive bitrate toggle is disabled and explained when its flag is off',
+    (WidgetTester tester) async {
+      await pumpSettings(tester, adaptiveBitrateEnabled: false);
+      final SwitchListTile tile = tester.widget<SwitchListTile>(
+        find.byKey(const Key('adaptiveBitrateSwitch')),
+      );
+      // PipelineController ignores adaptive bitrate without this flag, so
+      // an enabled, ON-looking switch was a promise the stream never kept.
+      expect(tile.onChanged, isNull);
+      expect(tile.value, isFalse);
+      expect(find.text('Not enabled for this license tier'), findsOneWidget);
+    },
+  );
+
+  testWidgets('the adaptive bitrate toggle is live when its flag is on', (
+    WidgetTester tester,
+  ) async {
+    await pumpSettings(tester);
+    final SwitchListTile tile = tester.widget<SwitchListTile>(
+      find.byKey(const Key('adaptiveBitrateSwitch')),
+    );
+    expect(tile.onChanged, isNotNull);
+    expect(tile.value, isTrue);
+    expect(find.text('Not enabled for this license tier'), findsNothing);
+  });
+
+  testWidgets(
+    'the username is masked like the password, with its own reveal toggle',
+    (WidgetTester tester) async {
+      await pumpSettings(tester);
+      TextField usernameField() => tester.widget<TextField>(
+        find.descendant(
+          of: find.byKey(const Key('usernameField')),
+          matching: find.byType(TextField),
+        ),
+      );
+      // Spec, Settings screen: "mask username/password in UI".
+      expect(usernameField().obscureText, isTrue);
+
+      await tester.enterText(find.byKey(const Key('usernameField')), 'alice');
+      await tester.tap(find.byKey(const Key('usernameRevealButton')));
+      await tester.pump();
+      expect(usernameField().obscureText, isFalse);
     },
   );
 }
