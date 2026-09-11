@@ -25,6 +25,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Implements the Pigeon GazerHostApi: binds/starts StreamService on prepare(), forwards every
@@ -42,11 +43,33 @@ class PigeonHostApiImpl(
     private val videoDevices: () -> List<VideoDevice>,
     private val audioDevices: () -> List<AudioDevice>,
     private val mainScope: CoroutineScope = CoroutineScope(Dispatchers.Main.immediate),
+    private val bindTimeoutMs: Long = DEFAULT_BIND_TIMEOUT_MS,
 ) : GazerHostApi,
     PipelineListener {
+    companion object {
+        /**
+         * How long [prepare] waits for StreamService's ServiceConnection after a successful
+         * bindService() before giving up and reporting SERVICE_START_DENIED. A local bind to an
+         * own-process service normally connects within a frame or two; anything near this budget
+         * means the service never came up (killed during onCreate, foreground start rejected,
+         * binder death), and Dart must be told rather than left suspended forever.
+         */
+        const val DEFAULT_BIND_TIMEOUT_MS = 5_000L
+
+        /** Single `detail` string for every "the service never became usable" prepare failure. */
+        private const val BIND_FAILED_DETAIL = "StreamService bind failed"
+    }
+
     /** Test/composition seam - `internal` so PigeonHostApiImplTest can inject a fake without a real ServiceConnection. */
     internal var host: PipelineHost? = null
-    private var hostDeferred: CompletableDeferred<PipelineHost>? = null
+    private var hostDeferred: CompletableDeferred<PipelineHost?>? = null
+
+    /**
+     * Test seam - `internal` so PigeonHostApiImplTest can wait for a `prepare()` to actually reach
+     * its suspension point before driving dispose()/onServiceConnected against it, instead of
+     * racing the coroutine.
+     */
+    internal val isAwaitingBind: Boolean get() = hostDeferred != null
 
     /**
      * Tracks whether this instance currently owns an active `bindService()` call that must be
@@ -95,8 +118,8 @@ class PigeonHostApiImpl(
     override suspend fun prepare(config: StreamConfig): PrepareResult {
         val currentHost = host ?: awaitBoundHost()
         if (currentHost == null) {
-            postState(NativePipelineState.ERROR, GazerErrorCode.SERVICE_START_DENIED, "bindService failed")
-            return PrepareResult(ok = false, error = GazerErrorCode.SERVICE_START_DENIED, detail = "bindService failed")
+            postState(NativePipelineState.ERROR, GazerErrorCode.SERVICE_START_DENIED, BIND_FAILED_DETAIL)
+            return PrepareResult(ok = false, error = GazerErrorCode.SERVICE_START_DENIED, detail = BIND_FAILED_DETAIL)
         }
         return currentHost.pipeline().prepare(config)
     }
@@ -118,22 +141,38 @@ class PigeonHostApiImpl(
 
     override fun getState(): NativePipelineState = host?.pipeline()?.state ?: NativePipelineState.IDLE
 
-    /** Binds StreamService and suspends until its ServiceConnection connects; null if bindService() itself refuses to even start binding. */
+    /**
+     * Binds StreamService and suspends until its ServiceConnection connects. Returns null when
+     * bindService() refuses to even start binding, and also when it started one that never
+     * connected within [bindTimeoutMs] - bindService() returning true only means binding *began*,
+     * so an unbounded await here hangs Dart's prepare() forever (silent UI stall in PreparingState)
+     * if onServiceConnected never fires: service killed during onCreate, foreground start rejected,
+     * or binder death before the connection. Both cases map to the same SERVICE_START_DENIED path.
+     */
     private suspend fun awaitBoundHost(): PipelineHost? {
-        val deferred = CompletableDeferred<PipelineHost>()
+        val deferred = CompletableDeferred<PipelineHost?>()
         hostDeferred = deferred
         val bound = bindService()
         if (!bound) {
             hostDeferred = null
             return null
         }
-        return deferred.await()
+        val boundHost = withTimeoutOrNull(bindTimeoutMs) { deferred.await() }
+        if (boundHost == null) {
+            hostDeferred = null
+            unbindIfBound()
+        }
+        return boundHost
     }
 
     private fun bindService(): Boolean {
         StreamService.start(context)
         val bound = context.bindService(Intent(context, StreamService::class.java), connection, Context.BIND_AUTO_CREATE)
         isBound = bound
+        // Per the Android contract, a bindService() that returns false still leaves the
+        // ServiceConnection registered and must be matched with unbindService(); skipping it leaks
+        // the connection (and logs a ServiceConnection leak warning) for the life of the process.
+        if (!bound) runCatching { context.unbindService(connection) }
         return bound
     }
 
@@ -152,6 +191,13 @@ class PigeonHostApiImpl(
     fun dispose() {
         unbindIfBound()
         host = null
+        // A prepare() still suspended on awaitBoundHost() belongs to Pigeon's own coroutine scope,
+        // not mainScope, so cancelling mainScope would leave it parked on a deferred nobody will
+        // ever complete. Complete it with null instead (never cancel(): a CancellationException out
+        // of await() would escape prepare() as a Pigeon PlatformException) - the suspended prepare()
+        // resumes, maps the null host to SERVICE_START_DENIED, and its coroutine finishes.
+        hostDeferred?.complete(null)
+        hostDeferred = null
         mainScope.cancel()
     }
 

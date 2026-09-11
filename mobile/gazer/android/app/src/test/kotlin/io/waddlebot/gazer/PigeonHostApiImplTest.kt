@@ -25,11 +25,15 @@ import io.waddlebot.gazer.pipeline.PipelineHost
 import io.waddlebot.gazer.pipeline.StreamService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.time.Duration
 
 /**
  * GazerHostApi's `@async` methods (`requestUsbPermission`/`prepare`/`start`/`stop`) are Pigeon
@@ -262,6 +266,87 @@ class PigeonHostApiImplTest {
 
             verify(exactly = 1) { context.unbindService(any()) }
         }
+
+    @Test
+    fun `prepare gives up with SERVICE_START_DENIED when a started bind never connects`() {
+        // bindService() returning true only means binding *began*. If onServiceConnected never
+        // fires (service killed during onCreate, foreground start rejected, binder death), an
+        // unbounded await here never returns and Dart's prepare() hangs forever with the UI stuck
+        // in PreparingState. assertTimeoutPreemptively is what turns that hang into a failure
+        // rather than a stalled build.
+        val hostApi =
+            PigeonHostApiImpl(
+                context = context,
+                flutterApi = flutterApi,
+                videoDevices = { listOf(videoDevice) },
+                audioDevices = { listOf(audioDevice) },
+                mainScope = CoroutineScope(Dispatchers.Unconfined),
+                bindTimeoutMs = 150L,
+            )
+        every { context.bindService(any<Intent>(), any<ServiceConnection>(), any<Int>()) } returns true
+
+        lateinit var result: PrepareResult
+        assertTimeoutPreemptively(Duration.ofSeconds(10)) {
+            result = runBlocking { hostApi.prepare(config) }
+        }
+
+        assertEquals(false, result.ok)
+        assertEquals(GazerErrorCode.SERVICE_START_DENIED, result.error)
+        verify { context.unbindService(hostApi.connection) }
+    }
+
+    @Test
+    fun `bindService returning false still unbinds, per the Android ServiceConnection contract`() =
+        runBlocking {
+            impl.host = null
+            every { context.bindService(any<Intent>(), any<ServiceConnection>(), any<Int>()) } returns false
+
+            impl.prepare(config)
+
+            verify { context.unbindService(impl.connection) }
+        }
+
+    @Test
+    fun `dispose releases a prepare still waiting on the bind instead of leaking it`() {
+        val hostApi =
+            PigeonHostApiImpl(
+                context = context,
+                flutterApi = flutterApi,
+                videoDevices = { listOf(videoDevice) },
+                audioDevices = { listOf(audioDevice) },
+                mainScope = CoroutineScope(Dispatchers.Unconfined),
+                bindTimeoutMs = 60_000L,
+            )
+        every { context.bindService(any<Intent>(), any<ServiceConnection>(), any<Int>()) } returns true
+
+        lateinit var result: PrepareResult
+        assertTimeoutPreemptively(Duration.ofSeconds(10)) {
+            result =
+                runBlocking {
+                    val prepare = async { hostApi.prepare(config) }
+                    // Let prepare() reach its suspension point before the channel is torn down.
+                    while (!hostApi.isAwaitingBind) yield()
+                    hostApi.dispose()
+                    prepare.await()
+                }
+        }
+
+        assertEquals(GazerErrorCode.SERVICE_START_DENIED, result.error)
+    }
+
+    @Test
+    fun `a PipelineListener callback after dispose never reaches the detached Flutter API`() {
+        val sample = StatsSample(bitrateKbps = 1L, fps = 1.0, droppedVideoFrames = 0L, sentBytes = 0L, congestionPercent = 0.0)
+        impl.dispose()
+
+        impl.onStats(sample)
+        impl.onAuthResult(true)
+        impl.onState(NativePipelineState.IDLE)
+
+        coVerify(exactly = 0) { flutterApi.onStats(any()) }
+        coVerify(exactly = 0) { flutterApi.onAuthResult(any()) }
+        coVerify(exactly = 0) { flutterApi.onStateChanged(any()) }
+    }
 
     @Test
     fun `stop never unbinds when the host was injected directly rather than through a real bind`() =
