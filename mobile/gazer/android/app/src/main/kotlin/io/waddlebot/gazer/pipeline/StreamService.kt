@@ -135,6 +135,8 @@ class StreamService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(stopReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
+            // Below API 33 the flag parameter does not exist; the branch above supplies
+            // RECEIVER_NOT_EXPORTED wherever the platform accepts it, so lint's warning is moot here.
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(stopReceiver, filter)
         }
