@@ -66,10 +66,17 @@ class LicenseClient {
   /// Success -> `valid` with fresh flags and `lastFetched = now()`.
   /// Network error with a cache fetched less than [kLicenseGracePeriod] ago
   /// -> `gracePeriod` with the cached flags. Network error with a stale or
-  /// absent cache -> `unknown`. A 4xx response -> `invalid`. Any other
-  /// failure — including a malformed response body, a device-id provider
-  /// failure, or a corrupted cache — is swallowed and degrades to a cached
-  /// or `unknown` result. This method never throws.
+  /// absent cache -> `unknown`. A 4xx response -> `invalid`. A `/validate`
+  /// body that does not say `valid: true` -> `invalid`, without fetching
+  /// features. Any other failure — including a malformed features
+  /// response, a device-id provider failure, or a corrupted cache — is
+  /// swallowed and degrades to a cached or `unknown` result. This method
+  /// never throws.
+  ///
+  /// Graceful degradation to cached values is for *network* failure only:
+  /// an answer that says the licence is not valid is an answer, and
+  /// falling back to a cached "valid" would make the server's verdict
+  /// unenforceable.
   Future<LicenseState> validateAndFetchFlags() async {
     String? deviceId;
     try {
@@ -95,7 +102,13 @@ class LicenseClient {
     }
 
     try {
-      await _dio.post<dynamic>('$baseUrl/validate', data: _payload(deviceId));
+      final validateResponse = await _dio.post<dynamic>(
+        '$baseUrl/validate',
+        data: _payload(deviceId),
+      );
+      if (!_isValidated(validateResponse.data)) {
+        return await _invalid(cached, deviceId);
+      }
       final response = await _dio.post<dynamic>(
         '$baseUrl/features',
         data: _payload(deviceId),
@@ -116,24 +129,43 @@ class LicenseClient {
     } on DioException catch (e) {
       final statusCode = e.response?.statusCode;
       if (statusCode != null && statusCode >= 400 && statusCode < 500) {
-        // Cached even though invalid: lastFetched is deliberately left as
-        // whatever it was before this call (not reset to `now()`), so
-        // `_offlineFallback`'s grace-period math still grades off the last
-        // *successful* fetch, not off this invalid response.
-        final invalid = LicenseState(
-          status: LicenseStatus.invalid,
-          flags: cached?.flags ?? const {},
-          lastFetched: cached?.lastFetched,
-          deviceId: deviceId,
-        );
-        await _cache.write(invalid);
-        _logFetchOutcome(invalid, deviceId);
-        return invalid;
+        return await _invalid(cached, deviceId);
       }
       return _offlineFallback(cached, deviceId);
     } catch (_) {
       return _offlineFallback(cached, deviceId);
     }
+  }
+
+  /// Whether a `/validate` response body affirms the licence.
+  ///
+  /// Only an explicit boolean `valid: true` counts. A body that is not a
+  /// JSON object, or whose `valid` field is missing or not a bool, is
+  /// treated as *not* validated: an unreadable answer is not evidence of
+  /// entitlement, and the previous code discarded this body entirely, so
+  /// a server replying `200 {"valid": false}` was graded fully valid.
+  static bool _isValidated(Object? body) {
+    if (body is! Map) return false;
+    final Object? valid = body['valid'];
+    return valid is bool && valid;
+  }
+
+  /// Builds, caches, logs, and returns the `invalid` result.
+  ///
+  /// `lastFetched` is deliberately left as whatever it was before this
+  /// call (not reset to `now()`), so [_offlineFallback]'s grace-period
+  /// math still grades off the last *successful* fetch rather than off
+  /// this rejection.
+  Future<LicenseState> _invalid(LicenseState? cached, String deviceId) async {
+    final invalid = LicenseState(
+      status: LicenseStatus.invalid,
+      flags: cached?.flags ?? const {},
+      lastFetched: cached?.lastFetched,
+      deviceId: deviceId,
+    );
+    await _cache.write(invalid);
+    _logFetchOutcome(invalid, deviceId);
+    return invalid;
   }
 
   /// Logs the fetch outcome (status, flag count) — never the device id
