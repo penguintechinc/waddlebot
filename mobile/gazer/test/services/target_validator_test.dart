@@ -18,11 +18,28 @@ void main() {
             ),
             expected: const [],
           ),
-          'valid rtmps': (
+          // R40: RootEncoder 2.8.1 validates the certificate chain but
+          // never verifies the hostname, so rtmps:// is refused in M1.
+          'rtmps rejected until host verification exists': (
             target: const StreamTargetSettings(
               url: 'rtmps://ingest-b.example.com/app',
             ),
-            expected: const [],
+            expected: const [
+              ValidationIssue(
+                field: 'url',
+                messageKey: 'errorUrlSchemeRtmpsUnsupported',
+              ),
+            ],
+          ),
+          'rtmps reports its other url problems too': (
+            target: const StreamTargetSettings(url: 'rtmps://host.example.com'),
+            expected: const [
+              ValidationIssue(
+                field: 'url',
+                messageKey: 'errorUrlSchemeRtmpsUnsupported',
+              ),
+              ValidationIssue(field: 'url', messageKey: 'errorUrlPath'),
+            ],
           ),
           'missing scheme': (
             target: const StreamTargetSettings(url: 'ingest.example.com/live'),
