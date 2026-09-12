@@ -116,10 +116,33 @@ void main() {
       'http://bad',
     );
     await tester.pump();
+    expect(find.text('URL must start with rtmp://'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pump();
+    expect(settingsRepo.saved, isEmpty);
+  });
+
+  // R40: the validator rejects rtmps:// because RootEncoder's GenericStream
+  // cannot enable TLS hostname verification. The screen's _messageFor switch
+  // must carry an arm for that key, or the user is told "This field is
+  // invalid" and never learns to use rtmp://.
+  testWidgets('an rtmps:// URL explains that the scheme is unsupported', (
+    WidgetTester tester,
+  ) async {
+    await pumpSettings(tester);
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'RTMP URL'),
+      'rtmps://live.example.com/app',
+    );
+    await tester.pump();
     expect(
-      find.text('URL must start with rtmp:// or rtmps://'),
+      find.text(
+        'rtmps:// is not supported in this release - TLS host '
+        'verification is unavailable. Use rtmp:// instead.',
+      ),
       findsOneWidget,
     );
+    expect(find.text('This field is invalid'), findsNothing);
     await tester.tap(find.widgetWithText(FilledButton, 'Save'));
     await tester.pump();
     expect(settingsRepo.saved, isEmpty);

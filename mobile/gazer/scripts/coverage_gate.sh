@@ -20,9 +20,11 @@
 # I7 (final-review-platform.md): `flutter test --coverage` only reports libraries a test
 # actually loads, so a hand-written lib/ file that no test imports (even transitively)
 # contributes ZERO SF: records -- invisible to the raw percentage, not just under-covered.
-# When lib-root is given (lcov mode only), the gate additionally counts every on-disk
-# non-generated .dart file under it and requires the filtered SF_COUNT to be at least that
-# many, failing loudly if any hand-written file is completely absent from the report.
+# When lib-root is given (lcov mode only), the gate additionally compares the set of on-disk
+# non-generated .dart files under it against the set of SF: records, failing loudly and by name
+# if any hand-written file is completely absent from the report. The sole exemption is
+# COMPLETENESS_ALLOWLIST below (R43): files with zero executable statements, which can never
+# receive a record. The threshold percentage check is unaffected by that allowlist.
 set -euo pipefail
 
 THRESHOLD="${1:?usage: coverage_gate.sh <threshold-percent> [report-path] [lcov|jacoco] [lib-root]}"
@@ -66,24 +68,106 @@ filter_generated_lcov_records() {
   '
 }
 
-# I7 (final-review-platform.md): counts on-disk, non-generated .dart files under lib-root.
-# Always prints a number and exits 0 (never relies on grep's "no match -> exit 1" behavior, which
-# would wrongly abort a `set -o pipefail` pipeline if every remaining file after one exclusion
-# pass happened to be filtered by the next) -- find's own exit status is the only thing that can
-# fail this function, and a readable directory never does.
-count_on_disk_handwritten_dart_files() {
-  local lib_root="$1"
-  find "${lib_root}" -type f -name '*.dart' | awk '
-    function is_generated(path) {
-      if (path ~ /\.g\.dart$/)                    return 1
-      if (path ~ /\.freezed\.dart$/)               return 1
-      if (path ~ /(^|\/)pigeon\//)                 return 1
-      if (path ~ /(^|\/)l10n\/app_localizations[^\/]*\.dart$/) return 1
-      return 0
+# R43 (integration #10): a hand-written lib/ file with ZERO executable statements can never
+# receive an lcov SF: record, no matter what tests exist -- `flutter test --coverage` only emits
+# records for libraries that contribute runtime code. Each entry below is such a file, matched as
+# a path suffix, and each carries the reason it can never be covered. This list is the ONLY
+# permitted omission: any other absent file still fails the completeness check below.
+#   lib/config/constants.dart        -- const-only library: compile-time values, no runtime code
+#                                       (test/config/constants_test.dart exercises them anyway)
+#   lib/models/validation_issue.dart -- bare @freezed declaration; the whole implementation is
+#                                       generated into validation_issue.freezed.dart, which the
+#                                       generated-record filter above already excludes
+COMPLETENESS_ALLOWLIST="lib/config/constants.dart lib/models/validation_issue.dart"
+
+# I7 (final-review-platform.md) + R43: compares the SET of hand-written .dart files on disk under
+# lib-root against the SET of SF: records in the filtered report, rather than only their counts --
+# equal counts can still hide a swap (one file gains a record while another loses one). Prints the
+# denominator and every offending path, and exits non-zero when any non-allowlisted file is absent.
+report_missing_coverage_records() {
+  local lib_root="$1" filtered_report="$2" allowlist="$3"
+  python3 - "${lib_root}" "${filtered_report}" "${allowlist}" <<'COMPLETENESS_PY'
+import os
+import re
+import sys
+
+lib_root, report_path, allowlist_raw = sys.argv[1], sys.argv[2], sys.argv[3]
+allowlist = [entry for entry in allowlist_raw.split() if entry]
+
+GENERATED = (
+    re.compile(r"\.g\.dart$"),
+    re.compile(r"\.freezed\.dart$"),
+    re.compile(r"(^|/)pigeon/"),
+    re.compile(r"(^|/)l10n/app_localizations[^/]*\.dart$"),
+)
+
+
+def is_generated(path):
+    """True when path matches one of the never-hand-tested generated-code shapes."""
+    return any(pattern.search(path) for pattern in GENERATED)
+
+
+def canonical(path):
+    """Absolute, symlink-free path, so a relative SF: record and an on-disk walk compare equal."""
+    return os.path.realpath(os.path.abspath(path))
+
+
+def display(path):
+    """Path as the reader would type it: relative under cwd, absolute anywhere else."""
+    cwd = canonical(os.getcwd())
+    return os.path.relpath(path, cwd) if path.startswith(cwd + os.sep) else path
+
+
+on_disk = sorted(
+    canonical(os.path.join(dirpath, name))
+    for dirpath, _dirnames, filenames in os.walk(lib_root)
+    for name in filenames
+    if name.endswith(".dart") and not is_generated(os.path.join(dirpath, name))
+)
+
+with open(report_path) as handle:
+    reported = {
+        canonical(line[len("SF:"):].strip())
+        for line in handle
+        if line.startswith("SF:")
     }
-    { if (!is_generated($0)) count++ }
-    END { print count + 0 }
-  '
+
+missing = [path for path in on_disk if path not in reported]
+allowed = [p for p in missing if any(p.endswith("/" + entry) for entry in allowlist)]
+offending = [p for p in missing if p not in allowed]
+
+# A zero denominator means the walk found nothing -- a scanner pointed at the wrong root
+# reports clean, so treat it as a failure rather than a silent pass.
+if not on_disk:
+    print(
+        "coverage_gate: on-disk completeness check FAILED -- zero hand-written .dart file(s) "
+        "found under %s/; a scan that examines nothing is a failure, not a pass" % lib_root,
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+for path in allowed:
+    print(
+        "coverage_gate: allowlisted (no executable statements, R43): %s" % display(path)
+    )
+
+if offending:
+    print(
+        "coverage_gate: on-disk completeness check FAILED -- %d hand-written .dart file(s) "
+        "under %s/, %d of them never loaded by any test (not merely under-covered):"
+        % (len(on_disk), lib_root, len(offending)),
+        file=sys.stderr,
+    )
+    for path in offending:
+        print("  %s" % display(path), file=sys.stderr)
+    sys.exit(1)
+
+print(
+    "coverage_gate: on-disk completeness check OK -- %d of %d hand-written .dart file(s) under "
+    "%s/ appear in the coverage report, %d allowlisted as statement-free"
+    % (len(on_disk) - len(allowed), len(on_disk), lib_root, len(allowed))
+)
+COMPLETENESS_PY
 }
 
 if [[ "${REPORT_TYPE}" == "jacoco" ]]; then
@@ -140,12 +224,7 @@ else
     if [[ ! -d "${LIB_ROOT}" ]]; then
       echo "coverage_gate: lib-root '${LIB_ROOT}' not found -- skipping on-disk completeness check" >&2
     else
-      ON_DISK_COUNT=$(count_on_disk_handwritten_dart_files "${LIB_ROOT}")
-      if [[ "${SF_COUNT}" -lt "${ON_DISK_COUNT}" ]]; then
-        echo "coverage_gate: on-disk completeness check FAILED -- ${ON_DISK_COUNT} hand-written .dart file(s) under ${LIB_ROOT}/, but only ${SF_COUNT} appear in the (filtered) coverage report; at least $((ON_DISK_COUNT - SF_COUNT)) file(s) are never loaded by any test, not just under-covered" >&2
-        exit 1
-      fi
-      echo "coverage_gate: on-disk completeness check OK -- ${SF_COUNT} of ${ON_DISK_COUNT} hand-written .dart file(s) under ${LIB_ROOT}/ appear in the coverage report"
+      report_missing_coverage_records "${LIB_ROOT}" "${REPORT_PATH}" "${COMPLETENESS_ALLOWLIST}"
     fi
   fi
 

@@ -10,7 +10,7 @@ void main() {
     expect(mockTargets[0].streamKey, 'demo-key-0001');
     expect(mockTargets[0].username, isNull);
 
-    expect(mockTargets[1].url, 'rtmps://ingest-b.example.com/app');
+    expect(mockTargets[1].url, 'rtmp://ingest-b.example.com/app');
     expect(mockTargets[1].streamKey, 'demo-key-0002');
     expect(mockTargets[1].username, 'demo');
     expect(mockTargets[1].password, isNotNull);
@@ -19,6 +19,20 @@ void main() {
     expect(mockTargets[2].streamKey, isNull);
 
     expect(mockTargets[3].url, 'http://bad.example.com');
+  });
+
+  // R40: M1's validator rejects rtmps:// outright (RootEncoder cannot verify
+  // the TLS hostname). Seed data advertising it would be a target the app
+  // refuses to stream to, so pin the absence rather than trusting review.
+  test('no seeded target uses the rtmps scheme M1 rejects', () {
+    expect(mockTargets, isNotEmpty);
+    for (final target in mockTargets) {
+      expect(
+        Uri.parse(target.url).scheme,
+        isNot('rtmps'),
+        reason: '${target.url} is seeded demo data the validator would reject',
+      );
+    }
   });
 
   test(

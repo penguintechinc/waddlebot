@@ -5,6 +5,7 @@ import 'package:gazer/models/gazer_settings.dart';
 import 'package:gazer/models/quality.dart';
 import 'package:gazer/models/stream_target_settings.dart';
 import 'package:gazer/services/settings_repository.dart';
+import 'package:gazer/services/target_validator.dart';
 
 import '../fixtures/mock_targets.dart' as fixtures;
 
@@ -43,6 +44,18 @@ void main() {
         expect(result.target, fixtures.mockTargets.first);
         expect(result.quality, QualitySettings.defaults());
       }
+    });
+
+    // R40 made rtmps:// invalid, which silently turned one seeded preset into
+    // a target the app refuses. Seeding is only useful if what it writes is
+    // something the user can actually press Go Live on.
+    test('the seeded target passes the M1 validator', () {
+      expect(fixtures.mockTargets, hasLength(4));
+      expect(fixtures.mockQualityPresets, hasLength(2));
+      expect(
+        const TargetValidator().validate(fixtures.mockTargets.first),
+        isEmpty,
+      );
     });
 
     test('never overwrites a repository with non-default settings, even when GAZER_SEED=true', () async {

@@ -26,13 +26,20 @@ final StreamTargetSettings mockTargetPlainRtmp = const StreamTargetSettings(
   streamKey: 'demo-key-0001',
 );
 
-/// Target 2: RTMPS with username/password auth.
-final StreamTargetSettings mockTargetRtmpsAuth = const StreamTargetSettings(
-  url: 'rtmps://ingest-b.example.com/app',
-  streamKey: 'demo-key-0002',
-  username: 'demo',
-  password: 'demo-password-0002',
-);
+/// Target 2: plain RTMP with username/password auth.
+///
+/// Was `rtmps://` until ruling R40: RootEncoder 2.8.1 cannot verify the TLS
+/// hostname, so [TargetValidator] rejects that scheme in M1 and seeding it
+/// here would hand the demo user a target the app refuses to stream to.
+/// The auth half — which is what this preset exists to exercise — is
+/// unchanged. Restore the `rtmps` scheme when TLS host verification lands.
+final StreamTargetSettings mockTargetAuthenticatedRtmp =
+    const StreamTargetSettings(
+      url: 'rtmp://ingest-b.example.com/app',
+      streamKey: 'demo-key-0002',
+      username: 'demo',
+      password: 'demo-password-0002',
+    );
 
 /// Target 3: emulator host loopback — nothing listens here. Used by the
 /// go-live-unreachable integration test and offline-behaviour widget tests.
@@ -48,7 +55,7 @@ final StreamTargetSettings mockTargetInvalidScheme = const StreamTargetSettings(
 /// All 4 mock targets, in spec order.
 final List<StreamTargetSettings> mockTargets = <StreamTargetSettings>[
   mockTargetPlainRtmp,
-  mockTargetRtmpsAuth,
+  mockTargetAuthenticatedRtmp,
   mockTargetEmulatorLoopback,
   mockTargetInvalidScheme,
 ];

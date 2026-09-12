@@ -559,7 +559,7 @@ abstract class AppLocalizations {
   /// No description provided for @validationUrlSchemeError.
   ///
   /// In en, this message translates to:
-  /// **'URL must start with rtmp:// or rtmps://'**
+  /// **'URL must start with rtmp://'**
   String get validationUrlSchemeError;
 
   /// No description provided for @validationUrlSchemeRtmpsUnsupportedError.

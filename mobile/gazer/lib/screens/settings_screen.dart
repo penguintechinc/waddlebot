@@ -82,6 +82,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       // Keys match TargetValidator.validate()'s literal messageKey strings
       // exactly — 'error'-prefixed, not the bare 'urlScheme' etc.
       'errorUrlScheme' => l10n.validationUrlSchemeError,
+      'errorUrlSchemeRtmpsUnsupported' =>
+        l10n.validationUrlSchemeRtmpsUnsupportedError,
       'errorUrlHost' => l10n.validationUrlHostError,
       'errorUrlPath' => l10n.validationUrlPathError,
       'errorAuthBothOrNeither' => l10n.validationAuthBothOrNeitherError,

@@ -1,9 +1,13 @@
 # Gazer (mobile/gazer)
 
 Live-streaming client for Android phones and tablets. Streams the device's
-back or front camera to any RTMP/RTMPS endpoint (H.264 + AAC, adaptive
-bitrate, automatic reconnect). Standalone — no WaddleBot login; you supply
-the RTMP URL/key/auth. M1 scope: phone camera only (no USB capture card yet
+back or front camera to an RTMP endpoint (H.264 + AAC, adaptive bitrate,
+automatic reconnect). Standalone — no WaddleBot login; you supply the RTMP
+URL/key/auth. **`rtmps://` targets are rejected in M1** — the encoder
+library validates the server's certificate chain but cannot verify its TLS
+hostname, so an `rtmps://` publish would accept any chain-valid certificate
+for any name; use `rtmp://`, with RTMPS planned for a later milestone.
+M1 scope: phone camera only (no USB capture card yet
 — see M2/M3 in `docs/superpowers/specs/2026-09-07-gazer-mobile-v2-design.md`),
 and **no on-screen camera preview in M1** — the stream is verified from the
 RTMP target and the app's own StatusPanel, not a live viewfinder.

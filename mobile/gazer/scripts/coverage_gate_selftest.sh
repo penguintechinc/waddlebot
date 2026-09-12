@@ -10,6 +10,10 @@
 #       (lib-root 4th arg) fails when a hand-written .dart file on disk has
 #       no SF: record at all, and passes when every on-disk hand-written
 #       file is represented.
+#   (d) R43 (integration #10): COMPLETENESS_ALLOWLIST exempts a statement-free
+#       file that can never receive a record, and -- critically -- does NOT
+#       blanket-disable the check: a non-allowlisted absentee alongside an
+#       allowlisted one still fails, and is named in the failure output.
 #
 # This never touches the real coverage/lcov.info or the real mobile/gazer/lib
 # -- it is pure fixture data written to a scratch directory, cleaned up on
@@ -178,6 +182,68 @@ if [[ "${COMPLETE_STATUS}" -ne 0 ]]; then
 fi
 if ! grep -q "on-disk completeness check OK" "${COMPLETE_OUTPUT}"; then
   echo "SELFTEST FAIL (c2): expected the on-disk completeness OK message" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+
+# --- Fixture (d): the R43 allowlist exempts, but never blanket-disables ---
+# `lib/config/constants.dart` is on coverage_gate.sh's COMPLETENESS_ALLOWLIST (zero executable
+# statements -> can never get an SF: record). d1 proves it is skipped; d2 proves that skipping it
+# does not stop a DIFFERENT absent file from failing the same run. Without d2 the allowlist could
+# silently grow into an off switch -- a gate that cannot fail is not a gate.
+ALLOW_LIB_ROOT="${WORKDIR}/fixture_allow/lib"
+mkdir -p "${ALLOW_LIB_ROOT}/config"
+echo '// hand-written, present in the report' > "${ALLOW_LIB_ROOT}/present.dart"
+echo 'const int kThing = 1;' > "${ALLOW_LIB_ROOT}/config/constants.dart"
+
+ALLOW_LCOV="${WORKDIR}/allow.info"
+cat > "${ALLOW_LCOV}" <<EOF
+SF:${ALLOW_LIB_ROOT}/present.dart
+DA:1,1
+LF:1
+LH:1
+end_of_record
+EOF
+
+ALLOW_OUTPUT="$(mktemp "${WORKDIR}/allow_output.XXXXXX")"
+ALLOW_STATUS=0
+"${GATE}" 90 "${ALLOW_LCOV}" lcov "${ALLOW_LIB_ROOT}" > "${ALLOW_OUTPUT}" 2>&1 || ALLOW_STATUS=$?
+
+echo "--- fixture (d1): allowlisted statement-free file absent from the report ---"
+cat "${ALLOW_OUTPUT}"
+
+if [[ "${ALLOW_STATUS}" -ne 0 ]]; then
+  echo "SELFTEST FAIL (d1): expected exit 0 (the only absentee is allowlisted), got ${ALLOW_STATUS}" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+if ! grep -q "allowlisted (no executable statements, R43): .*config/constants.dart" "${ALLOW_OUTPUT}"; then
+  echo "SELFTEST FAIL (d1): expected the allowlisted file to be named in the output, not silently skipped" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+if ! grep -q "1 allowlisted as statement-free" "${ALLOW_OUTPUT}"; then
+  echo "SELFTEST FAIL (d1): expected the OK line to report the allowlisted count" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+
+# d2: same tree plus a non-allowlisted file that is also absent -- must still FAIL, by name.
+echo '// hand-written, MISSING and NOT allowlisted' > "${ALLOW_LIB_ROOT}/uncovered.dart"
+
+ALLOW_FAIL_OUTPUT="$(mktemp "${WORKDIR}/allow_fail_output.XXXXXX")"
+ALLOW_FAIL_STATUS=0
+"${GATE}" 90 "${ALLOW_LCOV}" lcov "${ALLOW_LIB_ROOT}" > "${ALLOW_FAIL_OUTPUT}" 2>&1 || ALLOW_FAIL_STATUS=$?
+
+echo "--- fixture (d2): allowlist must not hide a non-allowlisted absentee ---"
+cat "${ALLOW_FAIL_OUTPUT}"
+
+if [[ "${ALLOW_FAIL_STATUS}" -eq 0 ]]; then
+  echo "SELFTEST FAIL (d2): expected non-zero exit (uncovered.dart is absent and not allowlisted), got 0" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+if ! grep -q "on-disk completeness check FAILED" "${ALLOW_FAIL_OUTPUT}"; then
+  echo "SELFTEST FAIL (d2): expected the on-disk completeness failure message" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+if ! grep -q "uncovered.dart" "${ALLOW_FAIL_OUTPUT}"; then
+  echo "SELFTEST FAIL (d2): expected the failure to name the offending file" >&2
   FAILURES=$((FAILURES + 1))
 fi
 

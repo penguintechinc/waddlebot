@@ -268,8 +268,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsSavedMessage => 'Settings saved';
 
   @override
-  String get validationUrlSchemeError =>
-      'URL must start with rtmp:// or rtmps://';
+  String get validationUrlSchemeError => 'URL must start with rtmp://';
 
   @override
   String get validationUrlSchemeRtmpsUnsupportedError =>
