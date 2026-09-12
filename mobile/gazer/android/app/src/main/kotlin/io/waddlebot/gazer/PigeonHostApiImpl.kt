@@ -20,6 +20,7 @@ import io.waddlebot.gazer.pipeline.GazerPipeline
 import io.waddlebot.gazer.pipeline.PipelineHost
 import io.waddlebot.gazer.pipeline.PipelineListener
 import io.waddlebot.gazer.pipeline.StreamService
+import io.waddlebot.gazer.pipeline.isForegroundStartRefusal
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -60,9 +61,23 @@ class PigeonHostApiImpl(
         private const val BIND_FAILED_DETAIL = "StreamService bind failed"
     }
 
-    /** Test/composition seam - `internal` so PigeonHostApiImplTest can inject a fake without a real ServiceConnection. */
+    /**
+     * Test/composition seam - `internal` so PigeonHostApiImplTest can inject a fake without a real
+     * ServiceConnection. `@Volatile` because [onServiceReleased] clears it from whichever thread
+     * StreamService's idle-release timer runs on, while Pigeon reads it from the main thread.
+     */
+    @Volatile
     internal var host: PipelineHost? = null
     private var hostDeferred: CompletableDeferred<PipelineHost?>? = null
+
+    /**
+     * Serialises the bind/unbind transitions - [bindService], [unbindIfBound], [onServiceReleased],
+     * [stop] and [dispose] - so a `prepare()` binding cannot interleave with a release unbinding
+     * and leave `isBound` disagreeing with the real ServiceConnection state. Held only across those
+     * non-blocking Context calls and field writes, never across a suspension point or a pipeline
+     * call, per the R28 discipline used in GazerPipeline and StatsSampler.
+     */
+    private val bindLock = Any()
 
     /**
      * Test seam - `internal` so PigeonHostApiImplTest can wait for a `prepare()` to actually reach
@@ -130,9 +145,11 @@ class PigeonHostApiImpl(
 
     override suspend fun stop() {
         host?.pipeline()?.stop()
-        unbindIfBound()
+        synchronized(bindLock) {
+            unbindIfBound()
+            host = null
+        }
         StreamService.stop(context)
-        host = null
     }
 
     override fun setVideoBitrate(kbps: Long) {
@@ -151,8 +168,14 @@ class PigeonHostApiImpl(
      */
     private suspend fun awaitBoundHost(): PipelineHost? {
         val deferred = CompletableDeferred<PipelineHost?>()
-        hostDeferred = deferred
-        val bound = bindService()
+        // The bind itself happens under the lock so a concurrent onServiceReleased() cannot unbind
+        // between StreamService.start() and bindService(); the await below is deliberately outside
+        // it - a monitor must never be held across a suspension point.
+        val bound =
+            synchronized(bindLock) {
+                hostDeferred = deferred
+                bindService()
+            }
         if (!bound) {
             hostDeferred = null
             return null
@@ -166,7 +189,17 @@ class PigeonHostApiImpl(
     }
 
     private fun bindService(): Boolean {
-        StreamService.start(context)
+        // startForegroundService is the client side of the same refusal startForegroundOrReportDenied
+        // handles inside the service: Android 12+ rejects it from the background and Android 14+
+        // rejects it without CAMERA/RECORD_AUDIO. Dart's goLive has no catch around _host.prepare,
+        // so an escaping throw here would surface as a PlatformException rather than an error state
+        // - the same defect I4 fixed inside the pipeline. A refusal returns false and prepare() maps
+        // it to SERVICE_START_DENIED; anything else is a bug of ours and still propagates.
+        val startRefusal = runCatching { StreamService.start(context) }.exceptionOrNull()
+        if (startRefusal != null) {
+            if (!isForegroundStartRefusal(startRefusal)) throw startRefusal
+            return false
+        }
         val bound = context.bindService(Intent(context, StreamService::class.java), connection, Context.BIND_AUTO_CREATE)
         isBound = bound
         // Per the Android contract, a bindService() that returns false still leaves the
@@ -189,8 +222,10 @@ class PigeonHostApiImpl(
      * no further PipelineListener callback can reach a detached GazerFlutterApi/BinaryMessenger.
      */
     fun dispose() {
-        unbindIfBound()
-        host = null
+        synchronized(bindLock) {
+            unbindIfBound()
+            host = null
+        }
         // A prepare() still suspended on awaitBoundHost() belongs to Pigeon's own coroutine scope,
         // not mainScope, so cancelling mainScope would leave it parked on a deferred nobody will
         // ever complete. Complete it with null instead (never cancel(): a CancellationException out
@@ -219,6 +254,26 @@ class PigeonHostApiImpl(
 
     override fun onAuthResult(ok: Boolean) {
         mainScope.launch { flutterApi.onAuthResult(ok) }
+    }
+
+    /**
+     * StreamService has dropped its foreground claim and called stopSelf() after an idle failure
+     * window; let go of it so the next [prepare] takes the full bind path again.
+     *
+     * Without this the binding keeps the stopSelf()'d service alive (a `BIND_AUTO_CREATE` client
+     * suppresses destruction and never sees `onServiceDisconnected`), so `host` would stay non-null,
+     * [prepare]'s `host ?:` would short-circuit past [bindService], `onStartCommand` would never run
+     * again, and a manual Go Live from Dart's ErrorState would stream from a service that is no
+     * longer in the foreground - no notification, no camera|microphone type, camera and mic cut as
+     * soon as the app is backgrounded. Re-binding on the next prepare() re-runs
+     * StreamService.start(), which is then a user-initiated foreground start and allowed on
+     * Android 12+.
+     */
+    override fun onServiceReleased() {
+        synchronized(bindLock) {
+            unbindIfBound()
+            host = null
+        }
     }
 
     private fun postState(

@@ -55,6 +55,10 @@ class RelayPipelineListener : PipelineListener {
     override fun onAuthResult(ok: Boolean) {
         listeners.forEach { it.onAuthResult(ok) }
     }
+
+    override fun onServiceReleased() {
+        listeners.forEach { it.onServiceReleased() }
+    }
 }
 
 /**
@@ -127,6 +131,7 @@ class StreamService : Service() {
             dropForegroundNotification = { stopForeground(STOP_FOREGROUND_REMOVE) },
             stopService = { stopSelf() },
             releaseWakeLock = ::releaseWakeLock,
+            releaseBoundClients = { listenerRelay.onServiceReleased() },
             delayedRunner = delayedRunner,
             idleReleaseMs = ServiceTeardownController.DEFAULT_IDLE_RELEASE_MS,
         )
