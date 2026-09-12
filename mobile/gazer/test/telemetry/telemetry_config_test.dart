@@ -5,6 +5,8 @@ import 'package:gazer/telemetry/telemetry_config.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../helpers/fake_shared_preferences.dart';
+
 class _MockPrefs extends Mock implements SharedPreferencesAsync {}
 
 class _MockSecureStorage extends Mock implements FlutterSecureStorage {}
@@ -121,6 +123,55 @@ void main() {
 
       expect(config.endpoint, 'http://collector.example.com:4318');
       expect(config.headers, {'authorization': 'Bearer abc'});
+    });
+  });
+
+  group('telemetry endpoint persistence (real shared_preferences store)', () {
+    late SharedPreferencesAsync prefs;
+    late _MockSecureStorage secure;
+
+    setUp(() {
+      // The platform instance is global; re-installing per test keeps one
+      // test's writes out of the next one.
+      prefs = useFakeSharedPreferences();
+      secure = _MockSecureStorage();
+      when(() => secure.read(key: any(named: 'key')))
+          .thenAnswer((_) async => null);
+    });
+
+    test('a saved endpoint round-trips back out of load()', () async {
+      await TelemetryConfig.saveEndpointOverride(
+        prefs,
+        'http://collector.example.com:4318',
+      );
+
+      final TelemetryConfig config = await TelemetryConfig.load(
+        prefs: prefs,
+        secure: secure,
+        serviceVersion: '1.2.3',
+      );
+
+      expect(config.endpoint, 'http://collector.example.com:4318');
+    });
+
+    test('saving an empty endpoint clears the override', () async {
+      await TelemetryConfig.saveEndpointOverride(prefs, 'http://old:4318');
+      await TelemetryConfig.saveEndpointOverride(prefs, '');
+
+      final TelemetryConfig config = await TelemetryConfig.load(
+        prefs: prefs,
+        secure: secure,
+        serviceVersion: '1.2.3',
+      );
+
+      // Back to the --dart-define default, which is empty in a test build.
+      expect(config.endpoint, isEmpty);
+    });
+
+    test('the endpoint is stored under the documented key', () async {
+      await TelemetryConfig.saveEndpointOverride(prefs, 'http://c:4318');
+
+      expect(await prefs.getString(kTelemetryEndpointKey), 'http://c:4318');
     });
   });
 }

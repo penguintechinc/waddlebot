@@ -37,3 +37,26 @@ Future<TelemetryConfig> telemetryConfig(Ref ref) async {
   ref.onDispose(GazerTelemetry.shutdown);
   return config;
 }
+
+/// Live telemetry export health for the status panel.
+///
+/// Bridges `GazerTelemetry.health` -- a [ValueListenable] on a static
+/// facade -- into the provider graph, so a widget watches a provider
+/// instead of reading mutable statics during `build()` and actually
+/// rebuilds when export health changes.
+///
+/// Watching [telemetryConfigProvider] is load-bearing, not incidental:
+/// reading it is what resolves and applies the config, and therefore what
+/// decides whether health starts out `disabled`. A widget watching this
+/// notifier gets that side effect transitively.
+@Riverpod(keepAlive: true)
+class TelemetryHealthNotifier extends _$TelemetryHealthNotifier {
+  @override
+  TelemetryHealth build() {
+    ref.watch(telemetryConfigProvider);
+    void onChanged() => state = GazerTelemetry.health.value;
+    GazerTelemetry.health.addListener(onChanged);
+    ref.onDispose(() => GazerTelemetry.health.removeListener(onChanged));
+    return GazerTelemetry.health.value;
+  }
+}
