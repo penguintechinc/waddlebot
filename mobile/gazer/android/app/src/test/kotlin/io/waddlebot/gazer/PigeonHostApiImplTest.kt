@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import io.mockk.clearMocks
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -30,6 +31,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -346,6 +348,76 @@ class PigeonHostApiImplTest {
         coVerify(exactly = 0) { flutterApi.onStats(any()) }
         coVerify(exactly = 0) { flutterApi.onAuthResult(any()) }
         coVerify(exactly = 0) { flutterApi.onStateChanged(any()) }
+    }
+
+    @Test
+    fun `a released service is let go of, so the next prepare re-binds and re-starts it`() =
+        runBlocking {
+            // NB1: stopSelf() on a service this client still holds with BIND_AUTO_CREATE does not
+            // destroy it and never fires onServiceDisconnected, so `host` stayed non-null after the
+            // idle-release timer fired - and a manual Go Live from Dart's ErrorState then
+            // short-circuited past bindService()/StreamService.start(), streaming from a service
+            // with no foreground claim, no notification and no camera|microphone type.
+            impl.host = null
+            every { pipeline.prepare(config) } returns PrepareResult(ok = true)
+            val localBinder = StreamService.LocalBinder(pipelineProvider = { pipeline }, attachListener = {})
+            every { context.bindService(any<Intent>(), any<ServiceConnection>(), any<Int>()) } answers {
+                impl.connection.onServiceConnected(null, localBinder)
+                true
+            }
+            impl.prepare(config)
+            verify(exactly = 1) { context.startForegroundService(any()) }
+
+            impl.onServiceReleased()
+
+            assertNull(impl.host, "the released service must be let go of")
+            verify(exactly = 1) { context.unbindService(impl.connection) }
+
+            impl.prepare(config)
+
+            verify(exactly = 2) { context.bindService(any<Intent>(), any<ServiceConnection>(), any<Int>()) }
+            verify(exactly = 2) { context.startForegroundService(any()) }
+        }
+
+    @Test
+    fun `onServiceReleased is a no-op when nothing is bound`() {
+        impl.host = null
+
+        impl.onServiceReleased()
+
+        assertNull(impl.host)
+        verify(exactly = 0) { context.unbindService(any()) }
+    }
+
+    @Test
+    fun `an OS refusal of the foreground service start becomes serviceStartDenied, never a throw`() =
+        runBlocking {
+            // Android 12+ refuses startForegroundService from the background with
+            // ForegroundServiceStartNotAllowedException (an IllegalStateException) and Android 14+
+            // with SecurityException. Dart's goLive has no catch around _host.prepare, so an
+            // escaping throw would reach the UI as a PlatformException instead of an error state.
+            listOf(IllegalStateException("not allowed to start foreground service"), SecurityException("no permission"))
+                .forEach { refusal ->
+                    impl.host = null
+                    clearMocks(context, answers = false)
+                    every { context.startForegroundService(any()) } throws refusal
+
+                    val result = impl.prepare(config)
+
+                    assertEquals(false, result.ok)
+                    assertEquals(GazerErrorCode.SERVICE_START_DENIED, result.error)
+                    verify(exactly = 0) { context.bindService(any<Intent>(), any<ServiceConnection>(), any<Int>()) }
+                }
+        }
+
+    @Test
+    fun `a non-refusal throwable out of the service start still propagates`() {
+        // Same shape as startForegroundOrReportDenied's own contract: an OS refusal is expected and
+        // mapped, anything else is a bug of ours and must not be swallowed into a generic error.
+        impl.host = null
+        every { context.startForegroundService(any()) } throws RuntimeException("bug")
+
+        assertThrows(RuntimeException::class.java) { runBlocking { impl.prepare(config) } }
     }
 
     @Test

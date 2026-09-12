@@ -40,6 +40,12 @@ private class ScheduledTask(
     fun fire() {
         if (!cancelled) task()
     }
+
+    /**
+     * Runs the task even though it was cancelled, as `Handler.removeCallbacks` cannot prevent for
+     * a runnable the looper has already dequeued.
+     */
+    fun fireEvenIfCancelled() = task()
 }
 
 /**
@@ -191,6 +197,7 @@ class StreamServicePoliciesTest {
         dropForegroundNotification = { calls.add("notification") },
         stopService = { calls.add("service") },
         releaseWakeLock = { calls.add("wakelock") },
+        releaseBoundClients = { calls.add("clients") },
         delayedRunner = runner,
         idleReleaseMs = idleReleaseMs,
     )
@@ -277,8 +284,30 @@ class StreamServicePoliciesTest {
         runner.scheduled.single().fire()
 
         // The engine was already released when the ERROR was reported, so the pipeline is not
-        // re-entered - only the foreground claim, the service and the wake lock go.
-        assertEquals(listOf("notification", "service", "wakelock"), calls)
+        // re-entered. The bound clients are released last (NB1): stopSelf() on a service a
+        // BIND_AUTO_CREATE client still holds does not destroy it and never fires
+        // onServiceDisconnected, so without this the client keeps a handle on a service that is no
+        // longer in the foreground and its next prepare() skips StreamService.start() entirely.
+        assertEquals(listOf("notification", "service", "wakelock", "clients"), calls)
+    }
+
+    @Test
+    fun `a timer that expires after being superseded does nothing`() {
+        // removeCallbacks cannot stop a runnable the looper has already dequeued, so an expiring
+        // task must re-check that it is still the pending one: otherwise a reconnect's PREPARING
+        // arriving during dispatch loses the foreground service anyway, and an ERROR re-arming
+        // during dispatch has its fresh timer cancelled by the expiring one.
+        val calls = mutableListOf<String>()
+        val runner = FakeDelayedRunner()
+        val controller = teardownController(calls, runner)
+        controller.onState(NativePipelineState.ERROR)
+        val dequeued = runner.scheduled.single()
+        controller.onState(NativePipelineState.ERROR)
+
+        dequeued.fireEvenIfCancelled()
+
+        assertTrue(calls.isEmpty(), "a superseded timer must not tear anything down: $calls")
+        assertFalse(runner.scheduled[1].cancelled, "the current timer must survive its predecessor's late dispatch")
     }
 
     @Test

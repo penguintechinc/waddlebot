@@ -82,7 +82,9 @@ fun interface DelayedRunner {
  * first blip would lose it, and the camera|microphone service type with it, for the rest of the
  * session (and on Android 12+ a background re-start would be refused anyway). Instead an ERROR
  * arms a bounded timer: if a prepare/start follows within [idleReleaseMs] the timer is cancelled
- * and nothing was lost; if nothing follows, the session really is over and everything is released.
+ * and nothing was lost; if nothing follows, the session really is over and everything is released -
+ * including the binding itself, so the next prepare() rebuilds the foreground service from scratch
+ * rather than reusing a stopped one (see [onIdleReleaseExpired]).
  *
  * Thread safety: [onState] arrives on RootEncoder's callback thread while [stopEverything] can
  * arrive on the main thread, so the pending-timer field is guarded by a monitor held only across
@@ -93,6 +95,7 @@ class ServiceTeardownController(
     private val dropForegroundNotification: () -> Unit,
     private val stopService: () -> Unit,
     private val releaseWakeLock: () -> Unit,
+    private val releaseBoundClients: () -> Unit,
     private val delayedRunner: DelayedRunner,
     private val idleReleaseMs: Long,
 ) {
@@ -110,6 +113,14 @@ class ServiceTeardownController(
     private var pendingRelease: Cancellation? = null
 
     /**
+     * Identifies the currently-armed timer. `removeCallbacks` cannot stop a runnable the looper
+     * has already dequeued, so an expiring task compares this token before acting: without it a
+     * reconnect's PREPARING arriving during dispatch would lose the foreground service anyway, and
+     * an ERROR re-arming during dispatch would have its fresh timer cancelled by the expiring one.
+     */
+    private var pendingToken: Any? = null
+
+    /**
      * Full stop, for the notification's Stop action and for task removal (app swiped away): cancel
      * any pending idle release, then stop the pipeline first so the camera, mic and RTMP socket are
      * released and IDLE reaches Dart while the service is still alive, then drop the notification
@@ -123,23 +134,33 @@ class ServiceTeardownController(
     }
 
     /**
-     * Drops the foreground claim and the wake lock without touching the pipeline - used when the
-     * OS refuses `startForeground` (there is nothing streaming to stop, and re-entering the
-     * pipeline would emit STOPPING/IDLE over the ERROR just reported, as well as lazily
-     * constructing a pipeline purely to stop it) and when the idle-release timer expires (the
-     * engine was already released when the ERROR was reported).
+     * Drops the foreground claim and the wake lock without touching the pipeline, for when the OS
+     * refuses `startForeground`: there is nothing streaming to stop, and re-entering the pipeline
+     * would emit STOPPING/IDLE over the ERROR just reported as well as lazily constructing a
+     * pipeline purely to stop it. The bound clients are deliberately left alone here - unlike
+     * [onIdleReleaseExpired] - because the `prepare()` that triggered this start is still in
+     * flight and owns the binding; it learns of the failure from the ERROR it just relayed.
      */
     fun releaseForegroundOnly() {
         cancelIdleRelease()
-        dropForegroundNotification()
-        stopService()
-        releaseWakeLock()
+        dropForeground()
     }
 
     /** Un-schedules a pending idle release, if any. Safe to call repeatedly; call from onDestroy. */
     fun cancelIdleRelease() {
-        val pending = synchronized(lock) { pendingRelease.also { pendingRelease = null } }
+        val pending =
+            synchronized(lock) {
+                pendingToken = null
+                pendingRelease.also { pendingRelease = null }
+            }
         pending?.cancel()
+    }
+
+    /** The foreground teardown itself, shared by [releaseForegroundOnly] and the timer expiry. */
+    private fun dropForeground() {
+        dropForegroundNotification()
+        stopService()
+        releaseWakeLock()
     }
 
     /**
@@ -151,13 +172,47 @@ class ServiceTeardownController(
         if (state == NativePipelineState.ERROR) armIdleRelease() else cancelIdleRelease()
     }
 
+    /** (Re-)arms the idle-release timer, cancelling and replacing any predecessor. */
     private fun armIdleRelease() {
         val previous: Cancellation?
+        val token = Any()
         synchronized(lock) {
             previous = pendingRelease
-            pendingRelease = delayedRunner.runAfter(idleReleaseMs) { releaseForegroundOnly() }
+            pendingToken = token
+            pendingRelease = delayedRunner.runAfter(idleReleaseMs) { onIdleReleaseExpired(token) }
         }
         previous?.cancel()
+    }
+
+    /**
+     * The window closed with nothing after the ERROR, so the session really is over: drop the
+     * foreground claim, and tell whoever is still bound to let go.
+     *
+     * Releasing the bound clients is what actually finishes the job. `stopService()` is
+     * `stopSelf()`, and a client holding the service with `BIND_AUTO_CREATE` keeps it alive
+     * through that without ever seeing `onServiceDisconnected` - so PigeonHostApiImpl's `host`
+     * would stay non-null, its `prepare()` would keep short-circuiting past `bindService()`, and a
+     * later manual Go Live from Dart's ErrorState would stream from a service that is no longer in
+     * the foreground: no notification, no camera|microphone type, camera and mic cut the moment the
+     * app is backgrounded. Dropping the binding forces the next `prepare()` back through the full
+     * bind + `StreamService.start()` path - which is a user-initiated foreground start, and so
+     * allowed on Android 12+.
+     *
+     * [token] guards the dispatch race: see [pendingToken].
+     */
+    private fun onIdleReleaseExpired(token: Any) {
+        val stillPending =
+            synchronized(lock) {
+                (pendingToken === token).also {
+                    if (it) {
+                        pendingToken = null
+                        pendingRelease = null
+                    }
+                }
+            }
+        if (!stillPending) return
+        dropForeground()
+        releaseBoundClients()
     }
 }
 
@@ -175,17 +230,24 @@ class ServiceTeardownController(
 internal fun startForegroundOrReportDenied(
     startForeground: () -> Unit,
     reportDenied: (GazerErrorCode, String) -> Unit,
-): Boolean =
-    try {
-        startForeground()
-        true
-    } catch (e: IllegalStateException) {
-        reportDenied(GazerErrorCode.SERVICE_START_DENIED, "startForeground refused: ${e::class.java.simpleName}")
-        false
-    } catch (e: SecurityException) {
-        reportDenied(GazerErrorCode.SERVICE_START_DENIED, "startForeground refused: ${e::class.java.simpleName}")
-        false
-    }
+): Boolean {
+    val refusal = runCatching { startForeground() }.exceptionOrNull() ?: return true
+    if (!isForegroundStartRefusal(refusal)) throw refusal
+    reportDenied(GazerErrorCode.SERVICE_START_DENIED, "startForeground refused: ${refusal::class.java.simpleName}")
+    return false
+}
+
+/**
+ * True when [throwable] is the OS refusing a foreground-service start rather than a bug of ours.
+ *
+ * Android 12+ throws `ForegroundServiceStartNotAllowedException` (an `IllegalStateException`) when
+ * a foreground start is not permitted, and Android 14+ throws `SecurityException` when
+ * CAMERA/RECORD_AUDIO is not held at start time. Shared by the two sides of the same call:
+ * [startForegroundOrReportDenied] for `Service.startForeground`, and PigeonHostApiImpl's
+ * `bindService()` for `Context.startForegroundService`, so both classify a refusal identically and
+ * both still let a genuine programming error through.
+ */
+internal fun isForegroundStartRefusal(throwable: Throwable): Boolean = throwable is IllegalStateException || throwable is SecurityException
 
 /**
  * Resolves the FOREGROUND_SERVICE_TYPE flags StreamService must declare to startForeground() on

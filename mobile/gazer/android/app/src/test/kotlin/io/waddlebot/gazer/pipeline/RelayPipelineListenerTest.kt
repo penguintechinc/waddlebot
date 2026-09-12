@@ -123,4 +123,37 @@ class RelayPipelineListenerTest {
         relay.onState(NativePipelineState.IDLE, null, null)
         assertEquals(listOf(NativePipelineState.IDLE), lateJoiner.states)
     }
+
+    @Test
+    fun `onServiceReleased reaches every attached listener`() {
+        val released = mutableListOf<String>()
+        val relay = RelayPipelineListener()
+        relay.attach(namedListener("a", released))
+        relay.attach(namedListener("b", released))
+
+        relay.onServiceReleased()
+
+        assertEquals(listOf("a", "b"), released)
+    }
+
+    /** A listener that records only its own [name] when the service is released. */
+    private fun namedListener(
+        name: String,
+        released: MutableList<String>,
+    ): PipelineListener =
+        object : PipelineListener {
+            override fun onState(
+                state: NativePipelineState,
+                error: GazerErrorCode?,
+                detail: String?,
+            ) = Unit
+
+            override fun onStats(sample: StatsSample) = Unit
+
+            override fun onAuthResult(ok: Boolean) = Unit
+
+            override fun onServiceReleased() {
+                released.add(name)
+            }
+        }
 }
