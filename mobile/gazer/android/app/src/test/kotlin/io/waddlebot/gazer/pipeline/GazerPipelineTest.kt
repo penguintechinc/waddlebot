@@ -601,14 +601,18 @@ class GazerPipelineTest {
 
         pipeline.stop()
         assertEquals(NativePipelineState.IDLE, pipeline.state)
-        clearMocks(listener, answers = false)
+        clearMocks(listener, statsSampler, answers = false)
 
-        // RootEncoder delivers onDisconnect as it tears the socket down, after stop() already
-        // reported IDLE. Keyed on state alone this pushed an ERROR on top of a finished session.
+        // RootEncoder delivers onDisconnect as it tears the socket down, after stop() has already
+        // reported IDLE. Without a generation bump in stop() this callback still passes isCurrent
+        // and re-reports IDLE for a session that is already over - a spurious event Dart has to
+        // absorb, and one that becomes an ERROR after IDLE as soon as the timing shifts.
         checkers.single().onDisconnect()
 
         assertEquals(NativePipelineState.IDLE, pipeline.state)
+        verify(exactly = 0) { listener.onState(NativePipelineState.IDLE) }
         verify(exactly = 0) { listener.onState(NativePipelineState.ERROR, any(), any()) }
+        verify(exactly = 0) { statsSampler.stop() }
     }
 
     @Test

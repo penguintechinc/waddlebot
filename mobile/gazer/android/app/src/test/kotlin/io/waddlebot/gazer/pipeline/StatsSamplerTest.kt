@@ -7,18 +7,36 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+
+/** One [TickerHandle] handed out by [FakeTicker], remembering whether it was ever cancelled. */
+private class FakeHandle : TickerHandle {
+    /** Atomic because the start/stop threads write it while the test thread reads it. */
+    private val cancelledFlag = AtomicBoolean(false)
+    val cancelled: Boolean get() = cancelledFlag.get()
+
+    override fun cancel() {
+        cancelledFlag.set(true)
+    }
+}
 
 private class FakeTicker : Ticker {
     var scheduledTask: (() -> Unit)? = null
-    var cancelled = false
     var closed = false
+    val handles = CopyOnWriteArrayList<FakeHandle>()
+
+    /** True once any handle this ticker ever issued has been cancelled. */
+    val cancelled: Boolean get() = handles.any { it.cancelled }
 
     /** Latched inside [schedule] so a test can park a start() mid-flight and race a stop() with it. */
     var scheduleGate: CountDownLatch? = null
-    val scheduleEntered = CountDownLatch(1)
+
+    /** Counted down on every [schedule] entry; reassign it to wait for a specific one. */
+    var scheduleEntered = CountDownLatch(1)
 
     override fun schedule(
         periodMs: Long,
@@ -27,11 +45,7 @@ private class FakeTicker : Ticker {
         scheduleEntered.countDown()
         scheduleGate?.await(5, TimeUnit.SECONDS)
         scheduledTask = task
-        return object : TickerHandle {
-            override fun cancel() {
-                cancelled = true
-            }
-        }
+        return FakeHandle().also { handles.add(it) }
     }
 
     override fun close() {
@@ -146,36 +160,52 @@ class StatsSamplerTest {
     }
 
     @Test
-    fun `a stop racing an in-flight start still cancels the ticker`() {
+    fun `a stop that begins during an in-flight start still cancels the ticker it installs`() {
         // start() and stop() run on different threads in production: start() from the Pigeon caller
-        // thread (GazerPipeline.start) and stop() from RootEncoder's callback thread
-        // (onConnectionFailed/onDisconnect/onAuthError). With unguarded fields, a stop() that lands
-        // while start() is still inside ticker.schedule() reads a null handle, cancels nothing, and
-        // is then overwritten by start()'s own assignment - leaving the ticker running forever
-        // against a released engine. Parking schedule() on a latch makes that interleaving exact
-        // rather than a coin flip.
+        // thread (GazerPipeline.start), stop() from RootEncoder's callback thread
+        // (onConnectionFailed/onDisconnect/onAuthError). Unguarded, a stop() landing while start()
+        // is still inside ticker.schedule() cancels only the *previous* handle and is then
+        // overwritten by start()'s own assignment - the ticker start() installs is never cancelled
+        // and keeps sampling a released engine forever.
+        //
+        // Determinism: start() is parked inside schedule() on a gate, and the gate is released only
+        // after stop() has demonstrably run to completion (unguarded) or demonstrably blocked on
+        // the monitor (guarded), so the interleaving under test is the one that actually happened.
         val ticker = FakeTicker()
+        val sampler = StatsSampler(engine = { null }, ticker = ticker) { }
+        sampler.start()
+        val firstHandle = ticker.handles.single()
+
         val gate = CountDownLatch(1)
         ticker.scheduleGate = gate
-        val sampler = StatsSampler(engine = { null }, ticker = ticker) { }
-
+        ticker.scheduleEntered = CountDownLatch(1)
         val startThread = Thread { sampler.start() }
         startThread.start()
-        assertTrue(ticker.scheduleEntered.await(5, TimeUnit.SECONDS), "start() never reached ticker.schedule()")
+        assertTrue(ticker.scheduleEntered.await(5, TimeUnit.SECONDS), "the second start() never reached ticker.schedule()")
+        assertTrue(firstHandle.cancelled, "start() must cancel the handle it replaces")
 
+        val stopEntered = CountDownLatch(1)
         val stopCompleted = CountDownLatch(1)
         val stopThread =
             Thread {
+                stopEntered.countDown()
                 sampler.stop()
                 stopCompleted.countDown()
             }
         stopThread.start()
+        assertTrue(stopEntered.await(5, TimeUnit.SECONDS), "the stop thread never started")
+        // Unguarded, stop() returns immediately here (it finds only the already-cancelled first
+        // handle); guarded, it blocks on the monitor until the gate below lets start() finish.
+        val stopFinishedBeforeStart = stopCompleted.await(2, TimeUnit.SECONDS)
         gate.countDown()
-        assertTrue(stopCompleted.await(5, TimeUnit.SECONDS), "stop() never completed")
         startThread.join(5_000)
         stopThread.join(5_000)
+        assertTrue(stopCompleted.await(5, TimeUnit.SECONDS), "stop() never completed")
 
-        assertTrue(ticker.cancelled, "the ticker survived a stop() that raced start() - sampling would never end")
+        assertTrue(
+            ticker.handles.last().cancelled,
+            "stop() left the ticker start() installed running (stop finished ahead of start: $stopFinishedBeforeStart)",
+        )
     }
 }
 
