@@ -30,5 +30,10 @@ Future<TelemetryConfig> telemetryConfig(Ref ref) async {
     serviceVersion: packageInfo.version,
   );
   GazerTelemetry.init(config);
+  // The flush scheduler is a Timer owned by a static; without this the
+  // only thing that ever cancels it is `resetForTest`, so a disposed
+  // container leaves it running -- one leaked periodic timer per
+  // `pumpGazerApp` in widget tests, and one per container in production.
+  ref.onDispose(GazerTelemetry.shutdown);
   return config;
 }

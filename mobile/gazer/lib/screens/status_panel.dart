@@ -20,7 +20,6 @@ import '../providers/update_provider.dart';
 import '../services/feature_flags.dart';
 import '../services/pipeline_controller.dart';
 import '../telemetry/gazer_telemetry.dart';
-import '../telemetry/telemetry_config.dart';
 import '../widgets/masked_text.dart';
 
 /// Width, in logical pixels, at which [HomeScreen] switches from a single
@@ -90,9 +89,11 @@ class StatusPanel extends ConsumerWidget {
     final List<VideoDevice> devices =
         ref.watch(videoDevicesProvider).value ?? const <VideoDevice>[];
     final GazerSettings? settings = ref.watch(settingsProvider).value;
-    final AsyncValue<TelemetryConfig> telemetryConfig = ref.watch(
-      telemetryConfigProvider,
-    );
+    // Watched for its side effect, not its value: reading this provider is
+    // what resolves the telemetry config and applies it via
+    // `GazerTelemetry.init`. The row below renders `GazerTelemetry.health`
+    // instead, which is live rather than a build-time snapshot.
+    ref.watch(telemetryConfigProvider);
 
     final bool cameraOn = state is! IdleState && state is! ErrorState;
     final String? deviceLabel = cameraOn && devices.isNotEmpty
@@ -260,15 +261,28 @@ class StatusPanel extends ConsumerWidget {
                   : l10n.statusPanelForegroundServiceInactiveLabel,
             ),
             const Divider(),
-            _row(
-              context,
-              l10n.statusPanelTelemetryLabel,
-              (telemetryConfig.value?.endpoint.isNotEmpty ?? false)
-                  ? (GazerTelemetry.exportFailures > 0 &&
-                            GazerTelemetry.exportSuccesses == 0
-                        ? l10n.statusPanelTelemetryFailedLabel
-                        : l10n.statusPanelTelemetryExportingLabel)
-                  : l10n.statusPanelTelemetryDisabledLabel,
+            // Bound to GazerTelemetry.health rather than reading its
+            // counters during build(): the counters are mutable statics, so
+            // nothing rebuilt this row when they changed, and combining
+            // them here got the common cases wrong (a collector that
+            // succeeded once and then died read as "Exporting", and
+            // encode-dropped batches surfaced nowhere).
+            ValueListenableBuilder<TelemetryHealth>(
+              valueListenable: GazerTelemetry.health,
+              builder:
+                  (BuildContext context, TelemetryHealth health, Widget? _) =>
+                      _row(
+                        context,
+                        l10n.statusPanelTelemetryLabel,
+                        switch (health.status) {
+                          TelemetryHealthStatus.disabled =>
+                            l10n.statusPanelTelemetryDisabledLabel,
+                          TelemetryHealthStatus.ok =>
+                            l10n.statusPanelTelemetryExportingLabel,
+                          TelemetryHealthStatus.degraded =>
+                            l10n.statusPanelTelemetryFailedLabel,
+                        },
+                      ),
             ),
           ],
         ),

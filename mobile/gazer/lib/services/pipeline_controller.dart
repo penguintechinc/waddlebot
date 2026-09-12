@@ -232,7 +232,12 @@ class PipelineController {
       _emit(const ReadyState());
       _emit(const ConnectingState());
       _connectingStartedAt = DateTime.now();
-      final Span startSpan = GazerTelemetry.startSpan('gazer.pipeline.start');
+      // Child of the prepare span: both halves of one Go Live attempt
+      // belong to a single trace, not two unrelated single-span traces.
+      final Span startSpan = GazerTelemetry.startSpan(
+        'gazer.pipeline.start',
+        parent: prepareSpan,
+      );
       final GazerError? startError;
       try {
         startError = await _guardedCall('start', () => _host.start(target));
@@ -473,7 +478,10 @@ class PipelineController {
       _connectingStartedAt = DateTime.now();
       _emit(const ConnectingState());
       final StreamTarget retryTarget = _pendingTarget!;
-      final Span retrySpan = GazerTelemetry.startSpan('gazer.pipeline.start');
+      final Span retrySpan = GazerTelemetry.startSpan(
+        'gazer.pipeline.start',
+        parent: prepareSpan,
+      );
       final GazerError? retryError;
       try {
         retryError = await _guardedCall(

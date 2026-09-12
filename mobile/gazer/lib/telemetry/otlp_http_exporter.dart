@@ -21,8 +21,16 @@ typedef OtlpMetricPoint = ({
 });
 
 /// One completed OTLP span awaiting export.
+///
+/// [traceId] (16 bytes) and [spanId] (8 bytes) are lowercase hex and are
+/// not optional: OTLP requires both on every span, and collectors and
+/// backends (Tempo, Jaeger, Datadog) drop a span whose ids are absent or
+/// all-zero. [parentSpanId] is `null` for a trace root.
 typedef OtlpSpanRecord = ({
   String name,
+  String traceId,
+  String spanId,
+  String? parentSpanId,
   DateTime start,
   DateTime end,
   Map<String, Object?> attributes,
@@ -72,7 +80,20 @@ class OtlpHttpExporter {
        // ignore: prefer_initializing_formals
        _endpoint = endpoint,
        // ignore: prefer_initializing_formals
-       _headers = headers;
+       _headers = headers {
+    // Bounded here rather than on the per-request [Options] because Dio
+    // exposes `connectTimeout` on [BaseOptions] only. Left at Dio's default
+    // (`null`) the connect phase waits out the OS TCP timeout -- around two
+    // minutes on Android -- so a black-holed collector holds a POST open far
+    // past the 10s flush interval, which is exactly how overlapping flushes
+    // started.
+    _dio.options.connectTimeout = connectTimeout;
+  }
+
+  /// Ceiling on the TCP connect phase of every export POST, matched to the
+  /// send/receive timeouts so no single phase can outlive a flush interval
+  /// by more than a few seconds.
+  static const Duration connectTimeout = Duration(seconds: 5);
 
   final Dio _dio;
   final String _endpoint;
@@ -228,6 +249,11 @@ class OtlpHttpExporter {
             'dataPoints': <Map<String, Object?>>[
               for (final OtlpMetricPoint p in group)
                 <String, Object?>{
+                  // Required alongside timeUnixNano under DELTA
+                  // temporality: the point describes the interval it
+                  // covers, and each observation here is its own
+                  // zero-width interval.
+                  'startTimeUnixNano': _nanos(p.time),
                   'timeUnixNano': _nanos(p.time),
                   'count': '1',
                   'sum': p.value,
@@ -266,6 +292,9 @@ class OtlpHttpExporter {
     return <Map<String, Object?>>[
       for (final OtlpMetricPoint p in group)
         <String, Object?>{
+          // See the histogram branch: a DELTA sum needs its interval
+          // start; a gauge accepts it harmlessly.
+          'startTimeUnixNano': _nanos(p.time),
           'timeUnixNano': _nanos(p.time),
           'asDouble': p.value,
           'attributes': <Map<String, Object?>>[
@@ -290,7 +319,13 @@ class OtlpHttpExporter {
               'spans': <Map<String, Object?>>[
                 for (final OtlpSpanRecord s in spans)
                   <String, Object?>{
+                    'traceId': s.traceId,
+                    'spanId': s.spanId,
+                    if (s.parentSpanId != null) 'parentSpanId': s.parentSpanId,
                     'name': s.name,
+                    // SPAN_KIND_INTERNAL: every span this app emits covers
+                    // work inside the process, never an inbound request.
+                    'kind': 1,
                     'startTimeUnixNano': _nanos(s.start),
                     'endTimeUnixNano': _nanos(s.end),
                     'attributes': <Map<String, Object?>>[
