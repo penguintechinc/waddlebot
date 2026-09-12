@@ -59,18 +59,39 @@ String _$connectivityHash() => r'e66720f09edf1a8b09e450e1eaedd51da9443f0e';
 
 /// Online/offline indicator shown in the status panel: true whenever the
 /// device reports any connectivity result other than [ConnectivityResult.none].
+///
+/// Seeded from [Connectivity.checkConnectivity] before following the change
+/// stream: `onConnectivityChanged` only fires when connectivity *changes*,
+/// so on a device whose state is stable from launch the indicator had no
+/// value at all until something moved. A failing seed is swallowed -- the
+/// change stream still supplies a value later, and an indicator is never
+/// worth an error state.
 
 @ProviderFor(isOnline)
 final isOnlineProvider = IsOnlineProvider._();
 
 /// Online/offline indicator shown in the status panel: true whenever the
 /// device reports any connectivity result other than [ConnectivityResult.none].
+///
+/// Seeded from [Connectivity.checkConnectivity] before following the change
+/// stream: `onConnectivityChanged` only fires when connectivity *changes*,
+/// so on a device whose state is stable from launch the indicator had no
+/// value at all until something moved. A failing seed is swallowed -- the
+/// change stream still supplies a value later, and an indicator is never
+/// worth an error state.
 
 final class IsOnlineProvider
     extends $FunctionalProvider<AsyncValue<bool>, bool, Stream<bool>>
     with $FutureModifier<bool>, $StreamProvider<bool> {
   /// Online/offline indicator shown in the status panel: true whenever the
   /// device reports any connectivity result other than [ConnectivityResult.none].
+  ///
+  /// Seeded from [Connectivity.checkConnectivity] before following the change
+  /// stream: `onConnectivityChanged` only fires when connectivity *changes*,
+  /// so on a device whose state is stable from launch the indicator had no
+  /// value at all until something moved. A failing seed is swallowed -- the
+  /// change stream still supplies a value later, and an indicator is never
+  /// worth an error state.
   IsOnlineProvider._()
     : super(
         from: null,
@@ -96,4 +117,4 @@ final class IsOnlineProvider
   }
 }
 
-String _$isOnlineHash() => r'd07808dac4410e2e99b15055d872f72aa3807547';
+String _$isOnlineHash() => r'95a87eb2fcbce0b26a6158b74654a72f5613dc9c';

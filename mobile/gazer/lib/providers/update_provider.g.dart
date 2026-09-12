@@ -68,7 +68,7 @@ final class UpdateCheckerProvider
   }
 }
 
-String _$updateCheckerHash() => r'5bb6d8058fc2f09aa42db041ad278579d19d0719';
+String _$updateCheckerHash() => r'0f67f5744193203d34769d39d43e52296980e278';
 
 /// Startup, non-blocking update check surfaced in the status panel.
 

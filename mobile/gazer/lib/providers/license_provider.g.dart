@@ -53,7 +53,7 @@ final class LicenseClientProvider
   }
 }
 
-String _$licenseClientHash() => r'b08af60b52b979d9229e7a75ff9c2ea3a02f9332';
+String _$licenseClientHash() => r'64c779bf801aa1e0720ce552d7b341faa8fb86c5';
 
 /// Validates the license and fetches feature flags once at startup.
 ///
