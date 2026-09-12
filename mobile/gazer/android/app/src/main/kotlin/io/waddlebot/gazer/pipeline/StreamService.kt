@@ -9,7 +9,9 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Binder
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import io.waddlebot.gazer.pigeon.GazerErrorCode
@@ -108,11 +110,25 @@ class StreamService : Service() {
 
     private val wakeLockController = WakeLockController(acquire = ::acquireWakeLock, release = ::releaseWakeLock)
 
+    /** Lazy so constructing a StreamService on the JVM unit-test target never touches a Looper. */
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+
+    /** Main-thread [DelayedRunner] backing [ServiceTeardownController]'s idle-release timer. */
+    private val delayedRunner =
+        DelayedRunner { delayMs, task ->
+            val runnable = Runnable { task() }
+            mainHandler.postDelayed(runnable, delayMs)
+            Cancellation { mainHandler.removeCallbacks(runnable) }
+        }
+
     private val teardownController =
         ServiceTeardownController(
             stopPipeline = { pipeline.stop() },
             dropForegroundNotification = { stopForeground(STOP_FOREGROUND_REMOVE) },
             stopService = { stopSelf() },
+            releaseWakeLock = ::releaseWakeLock,
+            delayedRunner = delayedRunner,
+            idleReleaseMs = ServiceTeardownController.DEFAULT_IDLE_RELEASE_MS,
         )
 
     private val stopReceiver =
@@ -176,7 +192,12 @@ class StreamService : Service() {
                 },
                 reportDenied = { error, detail -> listenerRelay.onState(NativePipelineState.ERROR, error, detail) },
             )
-        if (!started) teardownController.stopEverything()
+        // One teardown, not two, and never through the pipeline: reportDenied above already
+        // relayed the ERROR (which arms the idle-release timer), and stopEverything() here would
+        // both repeat the foreground teardown and touch the `by lazy` pipeline - constructing it,
+        // camera service and all, purely to stop it - emitting STOPPING/IDLE over the ERROR that
+        // should be the last thing Dart hears.
+        if (!started) teardownController.releaseForegroundOnly()
         return START_NOT_STICKY
     }
 
@@ -187,6 +208,13 @@ class StreamService : Service() {
      * the stream would keep running against the camera, mic and RTMP socket with MainActivity and
      * the Flutter engine already gone - reachable only through the notification's Stop action. The
      * spec's Foreground Service section requires "App killed: stream stops cleanly".
+     *
+     * The manifest must NOT declare `android:stopWithTask="true"` alongside this: per the
+     * `Service.onTaskRemoved` contract, setting FLAG_STOP_WITH_TASK means this callback is not
+     * delivered and the service is simply stopped - which would skip the ordered teardown below
+     * (pipeline first, so camera/mic/socket are released and IDLE reaches Dart while the service
+     * is still alive) and leave the only tested swipe-away path dead. ManifestContentTest asserts
+     * the attribute's absence.
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
         teardownController.stopEverything()
@@ -194,6 +222,7 @@ class StreamService : Service() {
     }
 
     override fun onDestroy() {
+        teardownController.cancelIdleRelease()
         pipeline.dispose()
         releaseWakeLock()
         runCatching { unregisterReceiver(stopReceiver) }
