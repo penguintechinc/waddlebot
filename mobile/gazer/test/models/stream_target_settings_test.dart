@@ -81,6 +81,30 @@ void main() {
       expect(rendered, isNot(contains('token=abc')));
     });
 
+    test('a stream key pasted into the url is masked, not printed', () {
+      // The spec supports pasting a complete rtmp://host/app/KEY URL, and
+      // _redactedUrl used to return the whole path -- printing the very
+      // secret this toString override exists to hide.
+      const settings = StreamTargetSettings(
+        url: 'rtmp://ingest-a.example.com/live/$secretStreamKey',
+      );
+      final rendered = settings.toString();
+      expect(rendered, isNot(contains(secretStreamKey)));
+      expect(rendered, contains('ingest-a.example.com'));
+      expect(rendered, contains('/live/'));
+      expect(rendered, contains('****0001'));
+    });
+
+    test('credentials embedded in the url userinfo are dropped', () {
+      const settings = StreamTargetSettings(
+        url: 'rtmp://demo-user:$secretPassword@ingest-a.example.com/live/key1',
+      );
+      final rendered = settings.toString();
+      expect(rendered, isNot(contains(secretPassword)));
+      expect(rendered, isNot(contains('demo-user')));
+      expect(rendered, contains('ingest-a.example.com'));
+    });
+
     test('null username/password/streamKey print as null, not redacted', () {
       const settings = StreamTargetSettings(url: 'rtmp://a.example.com/live');
       final rendered = settings.toString();

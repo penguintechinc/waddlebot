@@ -65,6 +65,29 @@ void main() {
     });
   });
 
+  group('maskUrlLastSegment', () {
+    test('drops userinfo so embedded credentials never reach a log line', () {
+      final masked = GazerLog.maskUrlLastSegment(
+        'rtmp://demo-user:hunter2-secret@ingest.example.com/live/mystream',
+      );
+      expect(masked, isNot(contains('hunter2-secret')));
+      expect(masked, isNot(contains('demo-user')));
+      expect(masked, isNot(contains('mystream')));
+      expect(masked, startsWith('rtmp://ingest.example.com/live/'));
+    });
+
+    test('drops a query string, which can carry a token', () {
+      final masked = GazerLog.maskUrlLastSegment(
+        'rtmps://ingest.example.com/app/path?token=abc',
+      );
+      expect(masked, isNot(contains('token=abc')));
+    });
+
+    test('a value that will not parse as a URI redacts wholesale', () {
+      expect(GazerLog.maskUrlLastSegment('rtmp://[not a uri'), '<redacted>');
+    });
+  });
+
   group('emission', () {
     test('info emits one JSON line with ts/level/event/fields', () {
       final lines = <String>[];

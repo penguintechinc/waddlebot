@@ -94,21 +94,38 @@ class GazerLog {
         case 'username':
           return MapEntry(key, maskSecret(value));
         case 'url':
-          return MapEntry(key, _maskUrlLastSegment(value));
+          return MapEntry(key, maskUrlLastSegment(value));
         default:
           return MapEntry(key, value);
       }
     });
   }
 
-  /// Masks only the last path segment of [url] via [maskSecret], preserving
-  /// scheme/host/earlier segments; returns [url] unchanged if it can't be
-  /// parsed or has no path segments to mask.
-  static String _maskUrlLastSegment(String url) {
-    final uri = Uri.tryParse(url);
-    if (uri == null || uri.pathSegments.isEmpty) return url;
-    final segments = List<String>.from(uri.pathSegments);
-    segments[segments.length - 1] = maskSecret(segments.last);
-    return uri.replace(pathSegments: segments).toString();
+  /// Masks only the last path segment of [url] via [maskSecret], keeping
+  /// scheme, host, port, and earlier segments.
+  ///
+  /// `userInfo`, query, and fragment are dropped rather than preserved: a
+  /// RTMP(S) URL can carry credentials or a token in any of the three
+  /// (`rtmp://user:pass@host/...`, `?token=...`), and this helper is the
+  /// defence-in-depth control that keeps them out of logs and out of
+  /// [StreamTargetSettings.toString]. Returns `'<redacted>'` for a string
+  /// that will not parse as a URI at all -- an unparseable value is not
+  /// evidence that it holds no secret.
+  ///
+  /// Shared with `StreamTargetSettings`: one implementation, so the model's
+  /// redaction and the log sanitizer cannot drift apart.
+  static String maskUrlLastSegment(String url) {
+    final Uri? uri = Uri.tryParse(url);
+    if (uri == null) return '<redacted>';
+    final List<String> segments = List<String>.from(uri.pathSegments);
+    if (segments.isNotEmpty) {
+      segments[segments.length - 1] = maskSecret(segments.last);
+    }
+    return Uri(
+      scheme: uri.scheme.isEmpty ? null : uri.scheme,
+      host: uri.host.isEmpty ? null : uri.host,
+      port: uri.hasPort ? uri.port : null,
+      pathSegments: segments,
+    ).toString();
   }
 }
