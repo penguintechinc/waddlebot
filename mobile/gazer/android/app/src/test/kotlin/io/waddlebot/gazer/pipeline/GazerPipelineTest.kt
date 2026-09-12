@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
@@ -545,35 +546,44 @@ class GazerPipelineTest {
         // RootEncoder embeds the target URL - and therefore the stream key - in its exception
         // messages, and `detail` is relayed to Dart and rendered in the UI.
         val details = mutableListOf<String?>()
-        val recording =
-            object : PipelineListener {
-                override fun onState(
-                    state: NativePipelineState,
-                    error: GazerErrorCode?,
-                    detail: String?,
-                ) {
-                    details.add(detail)
-                }
-
-                override fun onStats(sample: StatsSample) = Unit
-
-                override fun onAuthResult(ok: Boolean) = Unit
-            }
         every { engine.startStream(any()) } throws RuntimeException("failed publishing to rtmp://host/live/SUPERSECRETKEY")
-        val recordingPipeline =
-            GazerPipeline(
-                engineFactory = { _, _, _ -> engine },
-                videoSources = videoSources,
-                audioSources = audioSources,
-                listener = recording,
-                statsSampler = statsSampler,
-            )
+        val recordingPipeline = pipelineWith(listener = recordingListener(details)) { _, _, _ -> engine }
         recordingPipeline.prepare(validConfig)
 
         recordingPipeline.start(StreamTarget(url = "rtmp://example.com/live/key"))
 
         assertTrue(details.isNotEmpty())
         details.forEach { assertFalse(it.orEmpty().contains("SUPERSECRETKEY")) }
+    }
+
+    @Test
+    fun `a stats sampler that rejects start reports ERROR instead of escaping to Pigeon`() {
+        // shutdown() makes ScheduledExecutorTicker.schedule able to throw RejectedExecutionException
+        // on a shut-down executor, so a start() after a dispose() - reachable if the service is
+        // destroyed while PigeonHostApiImpl.host still points at a stale binder - would escape to
+        // Pigeon as a PlatformException, which is exactly what the start() guards exist to prevent.
+        every { statsSampler.start() } throws RejectedExecutionException("executor shut down")
+        pipeline.prepare(validConfig)
+
+        pipeline.start(StreamTarget(url = "rtmp://example.com/live/key"))
+
+        assertEquals(NativePipelineState.ERROR, pipeline.state)
+        verify { listener.onState(NativePipelineState.ERROR, GazerErrorCode.RTMP_CONNECT_FAILED, any()) }
+        verify(exactly = 0) { engine.startStream(any()) }
+        verify(exactly = 1) { engine.release() }
+    }
+
+    @Test
+    fun `a start failure names the stage that actually failed`() {
+        val details = mutableListOf<String?>()
+        val recording = recordingListener(details)
+        every { engine.setAuthorization(any(), any()) } throws RuntimeException("boom")
+        val recordingPipeline = pipelineWith(listener = recording) { _, _, _ -> engine }
+        recordingPipeline.prepare(validConfig)
+
+        recordingPipeline.start(StreamTarget(url = "rtmp://example.com/live/key", username = "u", password = "p"))
+
+        assertTrue(details.any { it.orEmpty().startsWith("setAuthorization failed") }, "actual details: $details")
     }
 
     @Test
@@ -627,8 +637,14 @@ class GazerPipelineTest {
         verify { statsSampler.shutdown() }
     }
 
-    /** Rebuilds [pipeline] with [engineFactory], keeping every other collaborator from [setUp]. */
-    private fun pipelineWith(engineFactory: (ConnectChecker, VideoSource, AudioSource) -> StreamEngine): GazerPipeline =
+    /**
+     * Rebuilds [pipeline] with [engineFactory] and optionally a different [listener], keeping
+     * every other collaborator from [setUp].
+     */
+    private fun pipelineWith(
+        listener: PipelineListener = this.listener,
+        engineFactory: (ConnectChecker, VideoSource, AudioSource) -> StreamEngine,
+    ): GazerPipeline =
         GazerPipeline(
             engineFactory = engineFactory,
             videoSources = videoSources,
@@ -636,4 +652,23 @@ class GazerPipelineTest {
             listener = listener,
             statsSampler = statsSampler,
         )
+
+    /**
+     * A real [PipelineListener] appending every reported `detail` to [details] - used where a
+     * test must assert on the actual strings that reach Dart rather than on a mock's arguments.
+     */
+    private fun recordingListener(details: MutableList<String?>): PipelineListener =
+        object : PipelineListener {
+            override fun onState(
+                state: NativePipelineState,
+                error: GazerErrorCode?,
+                detail: String?,
+            ) {
+                details.add(detail)
+            }
+
+            override fun onStats(sample: StatsSample) = Unit
+
+            override fun onAuthResult(ok: Boolean) = Unit
+        }
 }
