@@ -1,6 +1,8 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/gazer_log.dart';
+
 /// shared_preferences key for the user-configurable OTLP endpoint override
 /// (Settings > Developer > Telemetry endpoint). Non-secret: an endpoint URL
 /// alone carries no credentials.
@@ -9,6 +11,11 @@ const String kTelemetryEndpointKey = 'gazer.telemetry.endpoint';
 /// flutter_secure_storage key for the user-configurable OTLP headers
 /// override -- secure storage because a header commonly carries an auth
 /// token (e.g. `authorization: Bearer ...`).
+///
+/// A release build should take headers from this key only. The
+/// `OTEL_EXPORTER_OTLP_HEADERS` `--dart-define` below is a development
+/// convenience: a define is compiled into the binary, so passing an auth
+/// header that way would bake the token into a shipped APK.
 const String kTelemetryHeadersKey = 'gazer.telemetry.headers';
 
 /// Resolved OpenTelemetry export configuration.
@@ -94,20 +101,48 @@ class TelemetryConfig {
   /// Reads the persisted Settings > Developer overrides (a missing key
   /// means "not set") and resolves the effective config -- the one call
   /// site both `main.dart` and `telemetryConfigProvider` use.
+  ///
+  /// Never throws. Each store is read independently and a failure degrades
+  /// that field to "not set", falling back to the `--dart-define` default:
+  /// `flutter_secure_storage` raises a `PlatformException` on Android when
+  /// its keystore entry is corrupt, and telemetry configuration is not
+  /// worth failing a startup over. Matches the never-throw contract
+  /// `LicenseClient`, `UpdateChecker`, and `PermissionHandlerGate` already
+  /// honour.
   static Future<TelemetryConfig> load({
     required SharedPreferencesAsync prefs,
     required FlutterSecureStorage secure,
     required String serviceVersion,
   }) async {
-    final String settingsEndpoint =
-        await prefs.getString(kTelemetryEndpointKey) ?? '';
-    final String settingsHeaders =
-        await secure.read(key: kTelemetryHeadersKey) ?? '';
     return TelemetryConfig.resolve(
-      settingsEndpoint: settingsEndpoint,
-      settingsHeadersJson: settingsHeaders,
+      settingsEndpoint: await _readOrEmpty(
+        'endpoint',
+        () => prefs.getString(kTelemetryEndpointKey),
+      ),
+      settingsHeadersJson: await _readOrEmpty(
+        'headers',
+        () => secure.read(key: kTelemetryHeadersKey),
+      ),
       serviceVersion: serviceVersion,
     );
+  }
+
+  /// One persisted override, or `''` if it is absent or unreadable. Logs
+  /// the failing [field] and the error's *type* only -- never the value or
+  /// the exception message, since this path handles the OTLP auth header.
+  static Future<String> _readOrEmpty(
+    String field,
+    Future<String?> Function() read,
+  ) async {
+    try {
+      return await read() ?? '';
+    } catch (error) {
+      GazerLog.warn('telemetry.configReadFailed', <String, Object?>{
+        'field': field,
+        'reason': error.runtimeType.toString(),
+      });
+      return '';
+    }
   }
 
   /// Persists a new endpoint override; `''` clears it back to the
