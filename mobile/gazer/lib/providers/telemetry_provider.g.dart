@@ -86,4 +86,4 @@ final class TelemetryConfigProvider
   }
 }
 
-String _$telemetryConfigHash() => r'fabef078cbde242c177b35bf87ccf15a477d3d0f';
+String _$telemetryConfigHash() => r'bf0da4b6ad449a7b0344af21a1ca490c9d3890c4';
