@@ -80,6 +80,7 @@
   "saveButtonSemanticsLabel": "Save settings",
   "settingsSavedMessage": "Settings saved",
   "validationUrlSchemeError": "URL must start with rtmp:// or rtmps://",
+  "validationUrlSchemeRtmpsUnsupportedError": "rtmps:// is not supported in this release - TLS host verification is unavailable. Use rtmp:// instead.",
   "validationUrlHostError": "URL must include a host",
   "validationUrlPathError": "URL must include a path, e.g. /live",
   "validationAuthBothOrNeitherError": "Enter both username and password, or leave both blank",

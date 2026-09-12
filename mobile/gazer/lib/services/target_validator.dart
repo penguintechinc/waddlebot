@@ -13,9 +13,21 @@ class TargetValidator {
 
   /// Returns the list of validation problems with [t]; empty means valid.
   ///
-  /// Checks, in order: the URL parses with an `rtmp`/`rtmps` scheme, a
-  /// non-empty host, at least one non-empty path segment, and that
-  /// username/password are both present or both absent.
+  /// Checks, in order: the URL parses with an `rtmp`/`rtmps` scheme, that
+  /// the scheme is not `rtmps` (see below), a non-empty host, at least one
+  /// non-empty path segment, and that username/password are both present
+  /// or both absent.
+  ///
+  /// **`rtmps://` is rejected in M1** (ruling R40). RootEncoder 2.8.1's
+  /// `GenericStream` validates the server's certificate chain but never
+  /// verifies its hostname -- `RtmpClient` leaves `tlsHostVerification`
+  /// false and the switch is unreachable through `GenericStreamClient` --
+  /// so an `rtmps://` connection is open to an active MITM holding any
+  /// chain-valid certificate. Advertising TLS that does not authenticate
+  /// the peer is worse than not offering it, so the scheme is refused
+  /// with its own messageKey until the native side can verify the host.
+  /// `errorUrlScheme` continues to cover everything that is neither
+  /// `rtmp` nor `rtmps`.
   List<ValidationIssue> validate(StreamTargetSettings t) {
     final issues = <ValidationIssue>[];
     final uri = Uri.tryParse(t.url);
@@ -25,6 +37,14 @@ class TargetValidator {
         const ValidationIssue(field: 'url', messageKey: 'errorUrlScheme'),
       );
     } else {
+      if (uri.scheme == 'rtmps') {
+        issues.add(
+          const ValidationIssue(
+            field: 'url',
+            messageKey: 'errorUrlSchemeRtmpsUnsupported',
+          ),
+        );
+      }
       if (uri.host.isEmpty) {
         issues.add(
           const ValidationIssue(field: 'url', messageKey: 'errorUrlHost'),

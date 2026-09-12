@@ -263,6 +263,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'URL must start with rtmp:// or rtmps://';
 
   @override
+  String get validationUrlSchemeRtmpsUnsupportedError =>
+      'rtmps:// is not supported in this release - TLS host verification is unavailable. Use rtmp:// instead.';
+
+  @override
   String get validationUrlHostError => 'URL must include a host';
 
   @override

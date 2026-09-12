@@ -544,6 +544,12 @@ abstract class AppLocalizations {
   /// **'URL must start with rtmp:// or rtmps://'**
   String get validationUrlSchemeError;
 
+  /// No description provided for @validationUrlSchemeRtmpsUnsupportedError.
+  ///
+  /// In en, this message translates to:
+  /// **'rtmps:// is not supported in this release - TLS host verification is unavailable. Use rtmp:// instead.'**
+  String get validationUrlSchemeRtmpsUnsupportedError;
+
   /// No description provided for @validationUrlHostError.
   ///
   /// In en, this message translates to:
