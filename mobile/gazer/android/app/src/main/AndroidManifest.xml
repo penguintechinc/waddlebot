@@ -49,12 +49,15 @@
             </intent-filter>
         </activity>
 
-        <!-- stopWithTask backs up StreamService.onTaskRemoved: swiping the app away must stop the
-             camera, mic and RTMP publish, never leave a started foreground service running on. -->
+        <!-- Deliberately NO android:stopWithTask: per the Service.onTaskRemoved contract, setting
+             FLAG_STOP_WITH_TASK means onTaskRemoved is *not* delivered and the service is simply
+             stopped - which would skip StreamService.onTaskRemoved's ordered teardown (pipeline
+             first, so camera/mic/socket are released and IDLE reaches Dart while the service is
+             still alive). The override is the deterministic, tested path; ManifestContentTest
+             asserts this attribute stays absent. -->
         <service
             android:name=".pipeline.StreamService"
             android:foregroundServiceType="camera|microphone"
-            android:stopWithTask="true"
             android:exported="false" />
 
         <meta-data

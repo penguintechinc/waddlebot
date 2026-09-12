@@ -104,13 +104,15 @@ class ManifestContentTest {
     }
 
     @Test
-    fun `StreamService stops with the task so swiping the app away ends the stream`() {
-        // A started foreground service survives task removal, so without this the stream keeps
-        // running against the camera, mic and RTMP socket after a swipe-away, reachable only
-        // through the notification's Stop action. Backs up StreamService.onTaskRemoved.
+    fun `StreamService does not declare stopWithTask, which would suppress onTaskRemoved`() {
+        // Per the Service.onTaskRemoved contract, setting FLAG_STOP_WITH_TASK means the callback
+        // is not delivered and the service is simply stopped - so declaring this attribute would
+        // silently disable StreamService.onTaskRemoved's ordered teardown (pipeline first, so
+        // camera/mic/socket are released and IDLE reaches Dart while the service is still alive),
+        // leaving the only tested swipe-away path dead. The override is the deterministic one.
         val streamService = elementNamed("service", ".pipeline.StreamService")
         requireNotNull(streamService) { "StreamService not declared in AndroidManifest.xml" }
-        assertTrue(streamService.getAttribute("android:stopWithTask").toBoolean())
+        assertFalse(streamService.hasAttribute("android:stopWithTask"))
     }
 
     @Test
