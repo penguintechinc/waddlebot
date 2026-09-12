@@ -26,8 +26,19 @@ class FakeSettingsRepository implements SettingsRepository {
   /// storage backend.
   Object? saveError;
 
+  /// When set, [load] throws this instead of returning the current
+  /// settings -- the read half of [saveError], for callers whose
+  /// never-throw contract has to survive an unreadable store.
+  Object? loadError;
+
   @override
-  Future<GazerSettings> load() async => _current;
+  Future<GazerSettings> load() async {
+    final Object? error = loadError;
+    if (error != null) {
+      throw error;
+    }
+    return _current;
+  }
 
   @override
   Future<void> save(GazerSettings s) async {
