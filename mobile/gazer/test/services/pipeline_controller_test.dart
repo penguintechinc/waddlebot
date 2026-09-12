@@ -913,5 +913,50 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(controller.current, isA<ReconnectingState>());
     });
+
+    test(
+      'a stale retry that THROWS as it unwinds leaves the fresh session alone',
+      () async {
+        await reachReconnecting();
+
+        await controller.stop();
+        await controller.goLive(
+          settingsWith(),
+          devices: [backCamera],
+          videoDeviceId: 'camera:back',
+          flags: flagsWith(),
+        );
+        bridge.onStateChanged(StateEvent(state: NativePipelineState.streaming));
+        await Future<void>.delayed(Duration.zero);
+        bridge.onStateChanged(
+          StateEvent(
+            state: NativePipelineState.error,
+            error: GazerErrorCode.rtmpConnectFailed,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.current, isA<ReconnectingState>());
+        expect(sleeper.pendingCount, 2);
+
+        // Fail the *stale* backoff (index 0). Its catch arm must respect the
+        // epoch the way the finally already does -- unguarded it repaints the
+        // live session as ErrorState, cancelling a reconnect that is still
+        // legitimately counting down.
+        sleeper.failNext(StateError('backoff timer torn down'));
+        await Future<void>.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
+
+        expect(controller.current, isA<ReconnectingState>());
+
+        // The fresh session's own suppression is still intact and still
+        // clears normally when its retry runs.
+        sleeper.resolveNext();
+        await Future<void>.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
+        bridge.onStateChanged(StateEvent(state: NativePipelineState.ready));
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.current, isA<ReadyState>());
+      },
+    );
   });
 }

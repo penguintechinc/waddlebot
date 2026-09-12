@@ -512,7 +512,15 @@ class PipelineController {
       // fires. Every host call is already guarded, so only the injected
       // sleeper can reach this arm; it still ends the session in
       // [ErrorState] rather than silently.
-      _emit(ErrorState(_mapHostFailure('reconnect', error)));
+      //
+      // Guarded on the same triple every other resumption point in this
+      // method uses: a *stale* retry throwing as it unwinds must not paint
+      // an error over a session the user has since stopped or restarted.
+      // (`_emit` already drops writes after dispose; `_cancelled` and the
+      // epoch are what it cannot know.)
+      if (!_isDisposed && !_cancelled && epoch == _sessionEpoch) {
+        _emit(ErrorState(_mapHostFailure('reconnect', error)));
+      }
     } finally {
       // Backstop for [_reconnecting]: the happy path clears it above,
       // before ConnectingState is emitted, but every early return and any
