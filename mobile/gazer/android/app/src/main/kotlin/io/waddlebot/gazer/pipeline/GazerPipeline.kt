@@ -224,29 +224,35 @@ class GazerPipeline(
             listener.onState(NativePipelineState.ERROR, GazerErrorCode.UNKNOWN, "start() called from state=$snapshotState")
             return
         }
-        // setAuthorization and startStream both reach into RootEncoder's own stack (socket setup,
-        // MediaCodec start) and can throw. An escaping exception becomes a Pigeon PlatformException
-        // while this pipeline sits at CONNECTING with a leaked engine and a running stats sampler:
-        // Dart's UI sticks in ConnectingState, where canGoLive is false. Report ERROR + release
-        // instead, so the failure is recoverable by tapping Go Live again.
+        // Every call from here on can throw: setAuthorization and startStream reach into
+        // RootEncoder's own stack (socket setup, MediaCodec start), and statsSampler.start() hits
+        // a ScheduledExecutorService that dispose() may already have shut down, which answers with
+        // RejectedExecutionException. An escaping exception becomes a Pigeon PlatformException
+        // while this pipeline sits at CONNECTING with a leaked engine and a possibly-running stats
+        // sampler: Dart's UI sticks in ConnectingState, where canGoLive is false. Report ERROR +
+        // release instead, so the failure is recoverable by tapping Go Live again.
         runCatching { engineToUse.setAuthorization(target.username, target.password) }
-            .onFailure { return failStart(it) }
+            .onFailure { return failStart("setAuthorization", it) }
         listener.onState(NativePipelineState.CONNECTING)
-        statsSampler.start()
+        runCatching { statsSampler.start() }
+            .onFailure { return failStart("stats sampling", it) }
         runCatching { engineToUse.startStream(target.url) }
-            .onFailure { return failStart(it) }
+            .onFailure { return failStart("startStream", it) }
     }
 
     /**
-     * Reports a throw out of an engine call made by [start]: stops sampling, releases the engine,
-     * and moves to ERROR. Mirrors the terminal ConnectChecker callbacks so Dart sees exactly the
-     * shape of failure it already handles.
+     * Reports a throw out of a call made by [start]: stops sampling, releases the engine, and
+     * moves to ERROR, naming the [stage] that failed. Mirrors the terminal ConnectChecker
+     * callbacks so Dart sees exactly the shape of failure it already handles.
      */
-    private fun failStart(cause: Throwable) {
+    private fun failStart(
+        stage: String,
+        cause: Throwable,
+    ) {
         val engineToRelease = captureEngineForErrorRelease()
-        statsSampler.stop()
+        runCatching { statsSampler.stop() }
         runCatching { engineToRelease?.release() }
-        listener.onState(NativePipelineState.ERROR, GazerErrorCode.RTMP_CONNECT_FAILED, "startStream failed: ${cause.describe()}")
+        listener.onState(NativePipelineState.ERROR, GazerErrorCode.RTMP_CONNECT_FAILED, "$stage failed: ${cause.describe()}")
     }
 
     /** Stops streaming from any state, releasing the engine and returning to idle. */
