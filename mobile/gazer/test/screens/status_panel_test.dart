@@ -1,3 +1,6 @@
+import 'dart:typed_data';
+
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 // `Override` (the type `ProviderScope.overrides` needs) is not part of
@@ -20,6 +23,7 @@ import 'package:gazer/providers/update_provider.dart';
 import 'package:gazer/screens/status_panel.dart';
 import 'package:gazer/services/pipeline_controller.dart';
 import 'package:gazer/services/reconnect_policy.dart';
+import 'package:gazer/telemetry/gazer_telemetry.dart';
 import 'package:gazer/telemetry/telemetry_config.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
@@ -54,49 +58,51 @@ void main() {
     );
   });
 
-  List<Override> overrides({UpdateInfo? update}) => <Override>[
-    settingsRepositoryProvider.overrideWithValue(settingsRepo),
-    gazerHostApiProvider.overrideWithValue(hostApi),
-    // Wires hostApi.bridge into the controller under test so
-    // hostApi.emitStats(...) below actually reaches streamStatsProvider
-    // — see Task 11's FakeGazerHostApi doc.
-    pipelineControllerProvider.overrideWithValue(
-      PipelineController(
-        host: hostApi,
-        events: hostApi.bridge,
-        policy: ReconnectPolicy(),
-      ),
-    ),
-    licenseClientProvider.overrideWith(
-      (Ref ref) async => FakeLicenseClient(
-        LicenseState(
-          status: LicenseStatus.valid,
-          flags: const <String, bool>{
-            'waddlebot.gazer.camera-stream': true,
-            'waddlebot.gazer.uvc-capture': true,
-            'waddlebot.gazer.adaptive-bitrate': true,
-            'waddlebot.gazer.rtmp-auth': true,
-          },
-          lastFetched: DateTime.utc(2026, 9, 7),
-          deviceId: 'test-device',
+  List<Override> overrides({UpdateInfo? update, Override? telemetry}) =>
+      <Override>[
+        settingsRepositoryProvider.overrideWithValue(settingsRepo),
+        gazerHostApiProvider.overrideWithValue(hostApi),
+        // Wires hostApi.bridge into the controller under test so
+        // hostApi.emitStats(...) below actually reaches streamStatsProvider
+        // — see Task 11's FakeGazerHostApi doc.
+        pipelineControllerProvider.overrideWithValue(
+          PipelineController(
+            host: hostApi,
+            events: hostApi.bridge,
+            policy: ReconnectPolicy(),
+          ),
         ),
-      ),
-    ),
-    isOnlineProvider.overrideWith((Ref ref) => Stream<bool>.value(true)),
-    updateCheckerProvider.overrideWith(
-      (Ref ref) async => FakeUpdateChecker(update),
-    ),
-    telemetryConfigProvider.overrideWith(
-      (Ref ref) async => const TelemetryConfig(
-        endpoint: '',
-        protocol: 'http/json',
-        headers: <String, String>{},
-        serviceName: 'gazer',
-        serviceVersion: '0.0.0',
-        deploymentEnvironment: 'test',
-      ),
-    ),
-  ];
+        licenseClientProvider.overrideWith(
+          (Ref ref) async => FakeLicenseClient(
+            LicenseState(
+              status: LicenseStatus.valid,
+              flags: const <String, bool>{
+                'waddlebot.gazer.camera-stream': true,
+                'waddlebot.gazer.uvc-capture': true,
+                'waddlebot.gazer.adaptive-bitrate': true,
+                'waddlebot.gazer.rtmp-auth': true,
+              },
+              lastFetched: DateTime.utc(2026, 9, 7),
+              deviceId: 'test-device',
+            ),
+          ),
+        ),
+        isOnlineProvider.overrideWith((Ref ref) => Stream<bool>.value(true)),
+        updateCheckerProvider.overrideWith(
+          (Ref ref) async => FakeUpdateChecker(update),
+        ),
+        telemetry ??
+            telemetryConfigProvider.overrideWith(
+              (Ref ref) async => const TelemetryConfig(
+                endpoint: '',
+                protocol: 'http/json',
+                headers: <String, String>{},
+                serviceName: 'gazer',
+                serviceVersion: '0.0.0',
+                deploymentEnvironment: 'test',
+              ),
+            ),
+      ];
 
   testWidgets('phone layout shows the chip and opens a bottom sheet', (
     WidgetTester tester,
@@ -240,4 +246,68 @@ void main() {
     );
     expect(find.text('Disabled (no endpoint configured)'), findsOneWidget);
   });
+  testWidgets(
+    'the telemetry row is live: a failing export flips it with no other rebuild',
+    (WidgetTester tester) async {
+      // A Dio whose adapter always fails stands in for an unreachable
+      // collector: no real socket, so this stays inside the widget
+      // tester's fake-async zone.
+      final Dio dio = Dio()..httpClientAdapter = _UnreachableAdapter();
+      const TelemetryConfig config = TelemetryConfig(
+        endpoint: 'http://collector.invalid:4318',
+        protocol: 'http/json',
+        headers: <String, String>{},
+        serviceName: 'gazer',
+        serviceVersion: '0.0.0',
+        deploymentEnvironment: 'test',
+      );
+      addTearDown(GazerTelemetry.resetForTest);
+
+      await pumpGazerApp(
+        tester,
+        overrides: overrides(
+          telemetry: telemetryConfigProvider.overrideWith((Ref ref) async {
+            GazerTelemetry.init(config, dio: dio);
+            return config;
+          }),
+        ),
+        size: const Size(1280, 800),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Exporting'), findsOneWidget);
+
+      // Nothing about the widget tree changes here -- only the telemetry
+      // counters do. The row used to read those counters during build(),
+      // so it never noticed.
+      // runAsync: the export goes through Dio, which needs real timers --
+      // inside the widget tester's fake-async zone the flush never
+      // completes.
+      await tester.runAsync(() async {
+        GazerTelemetry.recordLog('info', 'test.log', const <String, Object?>{});
+        await GazerTelemetry.flush();
+      });
+      await tester.pump();
+      // Stop the flush scheduler before the tester's pending-timer
+      // invariant check: `GazerTelemetry.init` starts a Timer.periodic, and
+      // the provider's own `onDispose` teardown runs after that check.
+      GazerTelemetry.shutdown();
+
+      expect(find.text('Last export failed'), findsOneWidget);
+      expect(find.text('Exporting'), findsNothing);
+    },
+  );
+}
+
+/// Dio adapter that fails every request, standing in for an unreachable
+/// OTLP collector without opening a socket.
+class _UnreachableAdapter implements HttpClientAdapter {
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async => throw StateError('collector unreachable');
 }

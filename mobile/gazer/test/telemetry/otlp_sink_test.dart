@@ -25,6 +25,7 @@ void main() {
     int metricDataPoints = 0;
     int histogramDataPoints = 0;
     int spans = 0;
+    final List<Map<String, dynamic>> spanPayloads = <Map<String, dynamic>>[];
 
     final HttpServer server = await HttpServer.bind(
       InternetAddress.loopbackIPv4,
@@ -60,7 +61,12 @@ void main() {
       } else if (request.uri.path == '/v1/traces') {
         for (final rs in decoded['resourceSpans'] as List) {
           for (final ss in (rs as Map<String, dynamic>)['scopeSpans'] as List) {
-            spans += ((ss as Map<String, dynamic>)['spans'] as List).length;
+            final List<dynamic> batch =
+                (ss as Map<String, dynamic>)['spans'] as List;
+            spans += batch.length;
+            for (final span in batch) {
+              spanPayloads.add(span as Map<String, dynamic>);
+            }
           }
         }
       }
@@ -89,7 +95,9 @@ void main() {
     });
     GazerTelemetry.counter('test.counter');
     GazerTelemetry.histogram('test.histogram', 42);
-    GazerTelemetry.startSpan('test.span').end();
+    final Span parentSpan = GazerTelemetry.startSpan('test.span');
+    GazerTelemetry.startSpan('test.span.child', parent: parentSpan).end();
+    parentSpan.end();
 
     await GazerTelemetry.flush();
     // Give the server's async request handler a moment to finish decoding
@@ -111,6 +119,42 @@ void main() {
     expect(metricDataPoints, greaterThanOrEqualTo(1));
     expect(histogramDataPoints, greaterThanOrEqualTo(1));
     expect(spans, greaterThanOrEqualTo(1));
+
+    // OTLP requires a 16-byte traceId and an 8-byte spanId on every span,
+    // hex-encoded; a collector silently drops a span whose ids are missing
+    // or all-zero, so `spans >= 1` alone passed on a payload no real
+    // backend would accept. Asserted here rather than in
+    // `mobile-telemetry-check`'s grep, since that script is platform-owned.
+    final RegExp traceIdHex = RegExp(r'^[0-9a-f]{32}$');
+    final RegExp spanIdHex = RegExp(r'^[0-9a-f]{16}$');
+    for (final Map<String, dynamic> span in spanPayloads) {
+      expect(
+        span['traceId'],
+        matches(traceIdHex),
+        reason: 'span ${span['name']}',
+      );
+      expect(
+        span['spanId'],
+        matches(spanIdHex),
+        reason: 'span ${span['name']}',
+      );
+      expect(span['traceId'], isNot('0' * 32));
+      expect(span['spanId'], isNot('0' * 16));
+      expect(span['kind'], 1);
+    }
+
+    // prepare->start style nesting: the child joins the parent's trace and
+    // names it as its parent, so the pair reads as one trace.
+    final Map<String, dynamic> parent = spanPayloads.firstWhere(
+      (Map<String, dynamic> s) => s['name'] == 'test.span',
+    );
+    final Map<String, dynamic> child = spanPayloads.firstWhere(
+      (Map<String, dynamic> s) => s['name'] == 'test.span.child',
+    );
+    expect(child['traceId'], parent['traceId']);
+    expect(child['parentSpanId'], parent['spanId']);
+    expect(parent.containsKey('parentSpanId'), isFalse);
+    expect(child['spanId'], isNot(parent['spanId']));
   });
 
   test('a dead endpoint (connection refused) never throws and increments exportFailures', () async {
