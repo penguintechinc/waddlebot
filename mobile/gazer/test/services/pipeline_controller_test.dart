@@ -14,6 +14,7 @@ import 'package:gazer/services/feature_flags.dart';
 import 'package:gazer/services/native_event_bridge.dart';
 import 'package:gazer/services/pipeline_controller.dart';
 import 'package:gazer/services/reconnect_policy.dart';
+import 'package:gazer/telemetry/gazer_telemetry.dart';
 
 import '../helpers/fake_host_api.dart';
 
@@ -92,6 +93,9 @@ void main() {
   tearDown(() {
     controller.dispose();
     bridge.dispose();
+    // The controller emits spans/metrics through GazerTelemetry's statics;
+    // without this they accumulate across every test in the isolate.
+    GazerTelemetry.resetForTest();
   });
 
   group('goLive validation', () {

@@ -24,7 +24,9 @@ Future<LicenseClient> licenseClient(Ref ref) async {
     packageInfo: packageInfo,
   );
   return LicenseClient(
-    dio: Dio(),
+    dio: Dio(
+      BaseOptions(connectTimeout: kHttpTimeout, receiveTimeout: kHttpTimeout),
+    ),
     cache: LicenseCache(SharedPreferencesAsync()),
     deviceIdProvider: deviceIdProvider,
     now: DateTime.now,

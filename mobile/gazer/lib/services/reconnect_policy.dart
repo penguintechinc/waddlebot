@@ -87,12 +87,18 @@ class ReconnectPolicy {
       return null;
     }
 
-    // Exponential backoff: base * 2^(attempt-1)
-    final exponential =
-        base.inMilliseconds * (1 << (attempt - 1)); // 2^(attempt-1)
+    // Exponential backoff: base * 2^(attempt-1).
+    //
+    // The shift is clamped at 62 because `1 << 63` overflows a signed
+    // 64-bit int and comes back negative, which would turn a long backoff
+    // into an immediate (or negative) one. The default maxAttempts is 10,
+    // so the clamp only matters for a deliberately absurd configuration --
+    // but a silently negative delay is a worse failure than a capped one.
+    final int shift = attempt - 1 > 62 ? 62 : attempt - 1;
+    final exponential = base.inMilliseconds * (1 << shift);
 
     // Cap at maximum delay
-    final capped = exponential > cap.inMilliseconds
+    final capped = exponential > cap.inMilliseconds || exponential < 0
         ? cap.inMilliseconds
         : exponential;
 

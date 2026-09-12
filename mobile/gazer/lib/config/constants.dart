@@ -18,3 +18,9 @@ const Duration kLicenseKeepaliveInterval = Duration(minutes: 5);
 /// Offline grace period: a cached license result stays usable this long
 /// after the last successful fetch, even if the server is unreachable.
 const Duration kLicenseGracePeriod = Duration(days: 7);
+
+/// Connect/receive ceiling for the app's outbound HTTP calls (licence
+/// server, GitHub releases). Dio's default is `null`, i.e. wait out the
+/// OS TCP timeout -- roughly two minutes on Android -- which for a
+/// non-blocking background check means a socket left hanging that long.
+const Duration kHttpTimeout = Duration(seconds: 10);

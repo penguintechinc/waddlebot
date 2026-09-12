@@ -9,6 +9,8 @@ class _MockConnectivity extends Mock implements Connectivity {}
 void main() {
   test('isOnlineProvider is true when any result is not none', () async {
     final connectivity = _MockConnectivity();
+    when(() => connectivity.checkConnectivity())
+        .thenAnswer((_) async => [ConnectivityResult.wifi]);
     when(() => connectivity.onConnectivityChanged)
         .thenAnswer((_) => Stream.value([ConnectivityResult.wifi]));
     final container = ProviderContainer(
@@ -33,6 +35,8 @@ void main() {
 
   test('isOnlineProvider is false when the only result is none', () async {
     final connectivity = _MockConnectivity();
+    when(() => connectivity.checkConnectivity())
+        .thenAnswer((_) async => [ConnectivityResult.none]);
     when(() => connectivity.onConnectivityChanged)
         .thenAnswer((_) => Stream.value([ConnectivityResult.none]));
     final container = ProviderContainer(
@@ -45,5 +49,38 @@ void main() {
     final result = await container.read(isOnlineProvider.future);
 
     expect(result, isFalse);
+  });
+
+  test('seeds from checkConnectivity before the stream ever fires', () async {
+    // onConnectivityChanged only fires on a *change*, so on a device whose
+    // state is stable from launch the indicator previously had no value at
+    // all until something moved.
+    final connectivity = _MockConnectivity();
+    when(() => connectivity.checkConnectivity())
+        .thenAnswer((_) async => [ConnectivityResult.mobile]);
+    when(() => connectivity.onConnectivityChanged)
+        .thenAnswer((_) => const Stream<List<ConnectivityResult>>.empty());
+    final container = ProviderContainer(
+      overrides: [connectivityProvider.overrideWithValue(connectivity)],
+    );
+    addTearDown(container.dispose);
+    container.listen(isOnlineProvider, (_, _) {});
+
+    expect(await container.read(isOnlineProvider.future), isTrue);
+  });
+
+  test('a failing checkConnectivity still yields the stream value', () async {
+    final connectivity = _MockConnectivity();
+    when(() => connectivity.checkConnectivity())
+        .thenThrow(StateError('connectivity plugin unavailable'));
+    when(() => connectivity.onConnectivityChanged)
+        .thenAnswer((_) => Stream.value([ConnectivityResult.wifi]));
+    final container = ProviderContainer(
+      overrides: [connectivityProvider.overrideWithValue(connectivity)],
+    );
+    addTearDown(container.dispose);
+    container.listen(isOnlineProvider, (_, _) {});
+
+    expect(await container.read(isOnlineProvider.future), isTrue);
   });
 }

@@ -87,24 +87,52 @@ void main() {
   });
 
   group('secrets never written to prefs', () {
-    test('no shared_preferences key contains "target"', () async {
-      final original = GazerSettings(
-        target: const StreamTargetSettings(
-          url: 'rtmp://ingest-a.example.com/live',
-          streamKey: 'demo-key-0001',
-          username: 'demo',
-          password: 's3cret',
-        ),
-        quality: QualitySettings.defaults(),
-        audio: AudioSourceChoice.auto,
-        forceLibuvc: false,
-        debugLogs: false,
-      );
+    test(
+      'no shared_preferences key or value carries a target secret',
+      () async {
+        const secrets = <String>[
+          'rtmp://ingest-a.example.com/live',
+          'demo-key-0001',
+          'demo-user',
+          's3cret',
+        ];
+        final original = GazerSettings(
+          target: const StreamTargetSettings(
+            url: 'rtmp://ingest-a.example.com/live',
+            streamKey: 'demo-key-0001',
+            username: 'demo-user',
+            password: 's3cret',
+          ),
+          quality: QualitySettings.defaults(),
+          audio: AudioSourceChoice.auto,
+          forceLibuvc: false,
+          debugLogs: false,
+        );
 
-      await repository.save(original);
+        await repository.save(original);
 
-      final prefsKeys = await prefs.getKeys();
-      expect(prefsKeys.any((key) => key.contains('target')), isFalse);
-    });
+        final prefsKeys = await prefs.getKeys();
+        expect(prefsKeys.any((key) => key.contains('target')), isFalse);
+
+        // Checking key *names* alone proves nothing about where the values
+        // went: assert by value, over every stored entry, in the store this
+        // invariant is about.
+        final Map<String, Object?> stored = await prefs.getAll();
+        for (final MapEntry<String, Object?> entry in stored.entries) {
+          for (final String secret in secrets) {
+            expect(
+              entry.value.toString(),
+              isNot(contains(secret)),
+              reason: 'prefs["\${entry.key}"] leaked a target secret',
+            );
+          }
+        }
+
+        // ...and assert the positive half too: all four landed in secure
+        // storage, so "not in prefs" cannot be satisfied by dropping them.
+        expect(secureStore.values, containsAll(secrets));
+        expect(secureStore.keys, hasLength(4));
+      },
+    );
   });
 }
