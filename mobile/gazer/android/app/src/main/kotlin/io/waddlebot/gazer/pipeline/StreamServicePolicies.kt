@@ -32,59 +32,132 @@ class WakeLockController(
     private val release: () -> Unit,
 ) {
     /**
-     * Applies the wake-lock decision for [state]: acquire while streaming, release on every state
-     * that means the stream is over - IDLE, STOPPING and ERROR alike - and no-op otherwise.
+     * Applies the wake-lock decision for [state]: acquire while streaming, release once the
+     * session is deliberately over (IDLE, STOPPING), no-op otherwise.
      *
-     * ERROR is load-bearing, not symmetry: when Dart exhausts its reconnect budget it settles on
-     * ErrorState without driving the pipeline back to IDLE, so releasing only on IDLE leaves the
-     * PARTIAL_WAKE_LOCK held until its 4-hour timeout with nothing streaming behind it.
+     * ERROR deliberately does **not** release. Kotlin cannot tell a transient ERROR - the first
+     * blip of a Dart-driven reconnect, which sleeps through a backoff and then re-prepares - from
+     * a terminal one, and releasing here let the device sleep through that backoff and stall the
+     * retry. The "held forever after a terminal failure" half of that problem is handled by
+     * [ServiceTeardownController]'s bounded idle-release timer instead, which releases the wake
+     * lock along with the rest only once nothing has happened for
+     * [ServiceTeardownController.DEFAULT_IDLE_RELEASE_MS].
      */
     fun onState(state: NativePipelineState) {
         when (state) {
             NativePipelineState.STREAMING -> acquire()
-            NativePipelineState.IDLE, NativePipelineState.STOPPING, NativePipelineState.ERROR -> release()
+            NativePipelineState.IDLE, NativePipelineState.STOPPING -> release()
             else -> Unit
         }
     }
 }
 
+/** Cancels a one-shot task scheduled through [DelayedRunner]. */
+fun interface Cancellation {
+    fun cancel()
+}
+
 /**
- * Owns StreamService's two teardown sequences, with each Service-framework action injected as a
- * lambda so the ordering - which is the only real decision here - is unit-testable without
- * Robolectric/instrumentation.
+ * Schedules one-shot delayed work. Indirected behind an interface so
+ * [ServiceTeardownController]'s idle-release timer is unit-testable on the JVM, with no Looper
+ * and no real waiting; StreamService supplies a main-thread Handler implementation.
+ */
+fun interface DelayedRunner {
+    /** Runs [task] after [delayMs]; the returned [Cancellation] un-schedules it if it has not run. */
+    fun runAfter(
+        delayMs: Long,
+        task: () -> Unit,
+    ): Cancellation
+}
+
+/**
+ * Owns StreamService's teardown sequences and its idle-release timer, with each
+ * Service-framework action injected as a lambda so the ordering and the timing - the only real
+ * decisions here - are unit-testable without Robolectric/instrumentation.
+ *
+ * The foreground service, its notification and the wake lock are deliberately **kept** across an
+ * ERROR. Dart owns the reconnect decision, and its `_retryAfter` re-prepares on the same bound
+ * host without ever calling `stop()`, so `PigeonHostApiImpl.prepare` short-circuits on a non-null
+ * `host` and `StreamService.start()` is never called again - dropping the foreground claim on the
+ * first blip would lose it, and the camera|microphone service type with it, for the rest of the
+ * session (and on Android 12+ a background re-start would be refused anyway). Instead an ERROR
+ * arms a bounded timer: if a prepare/start follows within [idleReleaseMs] the timer is cancelled
+ * and nothing was lost; if nothing follows, the session really is over and everything is released.
+ *
+ * Thread safety: [onState] arrives on RootEncoder's callback thread while [stopEverything] can
+ * arrive on the main thread, so the pending-timer field is guarded by a monitor held only across
+ * the runner's own non-blocking schedule/cancel calls, never across a teardown action.
  */
 class ServiceTeardownController(
     private val stopPipeline: () -> Unit,
     private val dropForegroundNotification: () -> Unit,
     private val stopService: () -> Unit,
+    private val releaseWakeLock: () -> Unit,
+    private val delayedRunner: DelayedRunner,
+    private val idleReleaseMs: Long,
 ) {
+    companion object {
+        /**
+         * How long a failed session keeps its foreground service before it is torn down anyway.
+         * Must exceed Dart's worst-case gap between an ERROR and the next prepare: the reconnect
+         * policy's 30 s maximum backoff times its 1.2 jitter ceiling (36 s) plus the prepare
+         * itself. 60 s leaves headroom without leaving a dead notification up for long.
+         */
+        const val DEFAULT_IDLE_RELEASE_MS = 60_000L
+    }
+
+    private val lock = Any()
+    private var pendingRelease: Cancellation? = null
+
     /**
-     * Full stop, for the notification's Stop action and for task removal (app swiped away): stop
-     * the pipeline first so the camera, mic and RTMP socket are released and IDLE reaches Dart
-     * while the service is still alive, then drop the notification and the service itself.
+     * Full stop, for the notification's Stop action and for task removal (app swiped away): cancel
+     * any pending idle release, then stop the pipeline first so the camera, mic and RTMP socket are
+     * released and IDLE reaches Dart while the service is still alive, then drop the notification
+     * and the service itself.
      */
     fun stopEverything() {
+        cancelIdleRelease()
         stopPipeline()
         dropForegroundNotification()
         stopService()
     }
 
     /**
-     * Terminal-failure teardown. The pipeline has already released its engine by the time it
-     * reports ERROR, so nothing here touches it - re-entering stop() would emit STOPPING/IDLE over
-     * the failure Dart has already turned into ReconnectingState. Only the foreground claim goes:
-     * the "Gazer is live" notification stops lying, and the started-state is dropped. A bound
-     * client (PigeonHostApiImpl holds BIND_AUTO_CREATE until its own stop()) keeps the service and
-     * its pipeline alive, so a Dart-driven reconnect can re-prepare and re-foreground normally.
+     * Drops the foreground claim and the wake lock without touching the pipeline - used when the
+     * OS refuses `startForeground` (there is nothing streaming to stop, and re-entering the
+     * pipeline would emit STOPPING/IDLE over the ERROR just reported, as well as lazily
+     * constructing a pipeline purely to stop it) and when the idle-release timer expires (the
+     * engine was already released when the ERROR was reported).
      */
     fun releaseForegroundOnly() {
+        cancelIdleRelease()
         dropForegroundNotification()
         stopService()
+        releaseWakeLock()
     }
 
-    /** PipelineListener hook: ERROR is terminal for the foreground claim, every other state is not. */
+    /** Un-schedules a pending idle release, if any. Safe to call repeatedly; call from onDestroy. */
+    fun cancelIdleRelease() {
+        val pending = synchronized(lock) { pendingRelease.also { pendingRelease = null } }
+        pending?.cancel()
+    }
+
+    /**
+     * PipelineListener hook: an ERROR arms the idle-release timer, and any other state - PREPARING
+     * from a reconnect's re-prepare, CONNECTING, STREAMING, or the IDLE/STOPPING of a deliberate
+     * stop - means the session is alive again (or already being torn down elsewhere) and cancels it.
+     */
     fun onState(state: NativePipelineState) {
-        if (state == NativePipelineState.ERROR) releaseForegroundOnly()
+        if (state == NativePipelineState.ERROR) armIdleRelease() else cancelIdleRelease()
+    }
+
+    private fun armIdleRelease() {
+        val previous: Cancellation?
+        synchronized(lock) {
+            previous = pendingRelease
+            pendingRelease = delayedRunner.runAfter(idleReleaseMs) { releaseForegroundOnly() }
+        }
+        previous?.cancel()
     }
 }
 

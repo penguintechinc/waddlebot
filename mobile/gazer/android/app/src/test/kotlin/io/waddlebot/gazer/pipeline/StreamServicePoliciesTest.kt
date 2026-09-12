@@ -24,6 +24,37 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
+/** One task handed to [FakeDelayedRunner], firable and cancellable by hand from a test. */
+private class ScheduledTask(
+    val delayMs: Long,
+    private val task: () -> Unit,
+) : Cancellation {
+    var cancelled = false
+        private set
+
+    override fun cancel() {
+        cancelled = true
+    }
+
+    /** Runs the task as the real runner would once [delayMs] elapsed - unless it was cancelled. */
+    fun fire() {
+        if (!cancelled) task()
+    }
+}
+
+/**
+ * [DelayedRunner] that records what was scheduled instead of posting it, so the idle-release
+ * timer's arm/cancel/expire behaviour is asserted deterministically with no Looper and no waiting.
+ */
+private class FakeDelayedRunner : DelayedRunner {
+    val scheduled = mutableListOf<ScheduledTask>()
+
+    override fun runAfter(
+        delayMs: Long,
+        task: () -> Unit,
+    ): Cancellation = ScheduledTask(delayMs, task).also { scheduled.add(it) }
+}
+
 /**
  * foregroundServiceType/isStopAction/notification-building are the pure decision points and
  * Android-API-call wrappers StreamService's onCreate/onStartCommand/stopReceiver delegate to -
@@ -146,17 +177,30 @@ class StreamServicePoliciesTest {
         }
     }
 
+    /**
+     * Builds a controller over [calls] with a [FakeDelayedRunner], so every test below shares one
+     * call vocabulary ("pipeline", "notification", "service", "wakelock") and can drive the
+     * idle-release timer by hand instead of waiting on a real clock.
+     */
+    private fun teardownController(
+        calls: MutableList<String>,
+        runner: FakeDelayedRunner,
+        idleReleaseMs: Long = 60_000L,
+    ) = ServiceTeardownController(
+        stopPipeline = { calls.add("pipeline") },
+        dropForegroundNotification = { calls.add("notification") },
+        stopService = { calls.add("service") },
+        releaseWakeLock = { calls.add("wakelock") },
+        delayedRunner = runner,
+        idleReleaseMs = idleReleaseMs,
+    )
+
     @Test
     fun `stopEverything stops the pipeline before dropping the notification and the service`() {
         // Ordering is the decision: stopping the pipeline first releases the camera, mic and RTMP
         // socket and lets IDLE reach Dart while the service is still alive to relay it.
         val calls = mutableListOf<String>()
-        val controller =
-            ServiceTeardownController(
-                stopPipeline = { calls.add("pipeline") },
-                dropForegroundNotification = { calls.add("notification") },
-                stopService = { calls.add("service") },
-            )
+        val controller = teardownController(calls, FakeDelayedRunner())
 
         controller.stopEverything()
 
@@ -165,38 +209,128 @@ class StreamServicePoliciesTest {
 
     @Test
     fun `releaseForegroundOnly never re-enters the pipeline`() {
-        // The pipeline has already released its engine by the time it reports ERROR; calling stop()
-        // again would emit STOPPING/IDLE over the failure Dart has turned into ReconnectingState.
+        // Used when the OS refuses startForeground (nothing is streaming, and re-entering the
+        // pipeline would emit STOPPING/IDLE over the ERROR just reported - as well as lazily
+        // constructing a pipeline purely to stop it) and when the idle-release timer expires.
         val calls = mutableListOf<String>()
-        val controller =
-            ServiceTeardownController(
-                stopPipeline = { calls.add("pipeline") },
-                dropForegroundNotification = { calls.add("notification") },
-                stopService = { calls.add("service") },
-            )
+        val controller = teardownController(calls, FakeDelayedRunner())
 
         controller.releaseForegroundOnly()
 
-        assertEquals(listOf("notification", "service"), calls)
+        assertEquals(listOf("notification", "service", "wakelock"), calls)
     }
 
     @Test
-    fun `a terminal ERROR drops the foreground claim, every other state leaves it alone`() {
-        // Without this the service stays foregrounded with a notification still claiming
-        // "Gazer is live" after Dart has exhausted its reconnect budget and settled on ErrorState.
+    fun `an ERROR arms the idle-release timer rather than tearing the service down at once`() {
+        // N1: dropping the foreground claim on every ERROR permanently de-foregrounded any session
+        // that reconnected - Dart's _retryAfter re-prepares on the same bound host and never calls
+        // stop(), so PigeonHostApiImpl.prepare short-circuits on a non-null host and
+        // StreamService.start() - and therefore startForeground - never runs again.
         val calls = mutableListOf<String>()
-        val controller =
-            ServiceTeardownController(
-                stopPipeline = { calls.add("pipeline") },
-                dropForegroundNotification = { calls.add("notification") },
-                stopService = { calls.add("service") },
-            )
-
-        NativePipelineState.entries.filter { it != NativePipelineState.ERROR }.forEach { controller.onState(it) }
-        assertTrue(calls.isEmpty(), "non-terminal states must not tear the service down: $calls")
+        val runner = FakeDelayedRunner()
+        val controller = teardownController(calls, runner)
 
         controller.onState(NativePipelineState.ERROR)
 
-        assertEquals(listOf("notification", "service"), calls)
+        assertTrue(calls.isEmpty(), "ERROR must keep the FGS, the notification and the wake lock: $calls")
+        assertEquals(1, runner.scheduled.size, "ERROR must arm exactly one idle-release timer")
+        assertEquals(60_000L, runner.scheduled.single().delayMs)
+    }
+
+    @Test
+    fun `an ERROR followed by a reconnect's prepare inside the window keeps the foreground service`() {
+        val calls = mutableListOf<String>()
+        val runner = FakeDelayedRunner()
+        val controller = teardownController(calls, runner)
+        controller.onState(NativePipelineState.ERROR)
+        val armed = runner.scheduled.single()
+
+        controller.onState(NativePipelineState.PREPARING)
+
+        assertTrue(armed.cancelled, "a re-prepare must cancel the pending idle release")
+        armed.fire()
+        assertTrue(calls.isEmpty(), "a cancelled timer must not tear anything down: $calls")
+    }
+
+    @Test
+    fun `every state other than ERROR cancels a pending idle release`() {
+        NativePipelineState.entries.filter { it != NativePipelineState.ERROR }.forEach { state ->
+            val calls = mutableListOf<String>()
+            val runner = FakeDelayedRunner()
+            val controller = teardownController(calls, runner)
+            controller.onState(NativePipelineState.ERROR)
+
+            controller.onState(state)
+
+            assertTrue(runner.scheduled.single().cancelled, "$state must cancel the pending idle release")
+            assertTrue(calls.isEmpty(), "$state must not tear anything down: $calls")
+        }
+    }
+
+    @Test
+    fun `an ERROR with nothing after it releases the foreground service once the window expires`() {
+        val calls = mutableListOf<String>()
+        val runner = FakeDelayedRunner()
+        val controller = teardownController(calls, runner)
+        controller.onState(NativePipelineState.ERROR)
+
+        runner.scheduled.single().fire()
+
+        // The engine was already released when the ERROR was reported, so the pipeline is not
+        // re-entered - only the foreground claim, the service and the wake lock go.
+        assertEquals(listOf("notification", "service", "wakelock"), calls)
+    }
+
+    @Test
+    fun `a stop during the idle window releases immediately and cancels the timer`() {
+        val calls = mutableListOf<String>()
+        val runner = FakeDelayedRunner()
+        val controller = teardownController(calls, runner)
+        controller.onState(NativePipelineState.ERROR)
+        val armed = runner.scheduled.single()
+
+        controller.stopEverything()
+
+        assertEquals(listOf("pipeline", "notification", "service"), calls)
+        assertTrue(armed.cancelled, "stopEverything must cancel the pending idle release")
+        armed.fire()
+        assertEquals(listOf("pipeline", "notification", "service"), calls, "a cancelled timer must not fire a second teardown")
+    }
+
+    @Test
+    fun `a second ERROR replaces the pending idle release rather than stacking timers`() {
+        val calls = mutableListOf<String>()
+        val runner = FakeDelayedRunner()
+        val controller = teardownController(calls, runner)
+
+        controller.onState(NativePipelineState.ERROR)
+        controller.onState(NativePipelineState.ERROR)
+
+        assertEquals(2, runner.scheduled.size)
+        assertTrue(runner.scheduled[0].cancelled, "the first timer must be cancelled when a second ERROR re-arms")
+        assertFalse(runner.scheduled[1].cancelled)
+    }
+
+    @Test
+    fun `cancelIdleRelease is safe with nothing pending and clears what is pending`() {
+        val calls = mutableListOf<String>()
+        val runner = FakeDelayedRunner()
+        val controller = teardownController(calls, runner)
+
+        controller.cancelIdleRelease()
+        assertTrue(runner.scheduled.isEmpty())
+
+        controller.onState(NativePipelineState.ERROR)
+        controller.cancelIdleRelease()
+
+        assertTrue(runner.scheduled.single().cancelled)
+        assertTrue(calls.isEmpty())
+    }
+
+    @Test
+    fun `the idle-release window outlasts Dart's worst-case reconnect gap`() {
+        // 30 s maximum backoff x the 1.2 jitter ceiling = 36 s, plus the prepare that follows it.
+        assertEquals(60_000L, ServiceTeardownController.DEFAULT_IDLE_RELEASE_MS)
+        assertTrue(ServiceTeardownController.DEFAULT_IDLE_RELEASE_MS >= 36_000L)
     }
 }
