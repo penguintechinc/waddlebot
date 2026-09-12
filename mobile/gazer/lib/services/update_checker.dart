@@ -73,6 +73,8 @@ class UpdateChecker {
     }
   }
 
+  /// Parses the leading `major.minor.patch` of [v] (a `v` prefix and any
+  /// pre-release/build suffix are tolerated), or `null` if it has none.
   List<int>? _parseSemver(String v) {
     final match = _semverPrefix.firstMatch(v);
     if (match == null) return null;
@@ -83,6 +85,8 @@ class UpdateChecker {
     ];
   }
 
+  /// Compares two `[major, minor, patch]` triples in the usual ordering:
+  /// negative if [a] precedes [b], zero if equal, positive otherwise.
   int _compare(List<int> a, List<int> b) {
     for (var i = 0; i < 3; i++) {
       if (a[i] != b[i]) return a[i].compareTo(b[i]);

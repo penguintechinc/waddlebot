@@ -65,6 +65,43 @@ void main() {
     });
   });
 
+  group('sanitize recurses', () {
+    test('a secret nested inside a map is masked', () {
+      final result = GazerLog.sanitize(<String, Object?>{
+        'target': <String, Object?>{
+          'password': 's3cretpass',
+          'host': 'ingest.example.com',
+        },
+      });
+
+      final nested = result['target']! as Map<String, Object?>;
+      expect(nested['password'], '****pass');
+      expect(nested['host'], 'ingest.example.com');
+    });
+
+    test('secrets inside a list under a secret key are masked', () {
+      final result = GazerLog.sanitize(<String, Object?>{
+        'streamKey': <String>['demo-key-0001', 'demo-key-0002'],
+      });
+
+      expect(result['streamKey'], <String>['****0001', '****0002']);
+    });
+
+    test('a deeply nested url is masked, not passed through', () {
+      final result = GazerLog.sanitize(<String, Object?>{
+        'outer': <String, Object?>{
+          'inner': <String, Object?>{
+            'url': 'rtmp://ingest.example.com/live/mystream',
+          },
+        },
+      });
+
+      final outer = result['outer']! as Map<String, Object?>;
+      final inner = outer['inner']! as Map<String, Object?>;
+      expect(inner['url'], isNot(contains('mystream')));
+    });
+  });
+
   group('maskUrlLastSegment', () {
     test('drops userinfo so embedded credentials never reach a log line', () {
       final masked = GazerLog.maskUrlLastSegment(

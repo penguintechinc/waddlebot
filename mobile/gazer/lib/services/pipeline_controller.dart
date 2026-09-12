@@ -135,6 +135,7 @@ class PipelineController {
     required FeatureFlags flags,
     OutputOrientation orientation = OutputOrientation.landscape,
   }) async {
+    if (_isDisposed) return;
     if (_goingLive) {
       throw StateError('goLive() is already in progress');
     }
@@ -173,6 +174,7 @@ class PipelineController {
       _cancelled = false;
       _reconnecting = false;
       _sessionEpoch += 1;
+      final int epoch = _sessionEpoch;
       _reconnectAttempt = 0;
       _streamStartedAt = null;
       _bitrateSampleSum = 0;
@@ -229,6 +231,11 @@ class PipelineController {
         );
         return;
       }
+      // Same post-prepare re-check _retryAfter does: unreachable in M1
+      // (Stop is not rendered in PreparingState, so nothing can cancel
+      // during the prepare round trip), but the asymmetry becomes a bug
+      // the first time the UI offers a way out of Preparing.
+      if (_isDisposed || _cancelled || epoch != _sessionEpoch) return;
       _emit(const ReadyState());
       _emit(const ConnectingState());
       _connectingStartedAt = DateTime.now();
@@ -395,6 +402,12 @@ class PipelineController {
       return;
     }
     if (_policy.shouldRetry(code)) {
+      // One retry in flight per session: a second retryable ERROR arriving
+      // while a backoff is already pending would otherwise schedule a
+      // duplicate _retryAfter on the same epoch, and both would re-prepare.
+      // GazerPipeline's `alreadyFailed` guard makes that unreachable today;
+      // this makes it impossible.
+      if (_reconnecting) return;
       _reconnectAttempt += 1;
       final delay = _policy.delayFor(_reconnectAttempt);
       if (delay == null) {

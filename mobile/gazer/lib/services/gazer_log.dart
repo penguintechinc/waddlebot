@@ -85,20 +85,42 @@ class GazerLog {
   /// [maskSecret]; a field named `url` keeps its scheme/host but masks
   /// only its last path segment, since the full path/query may embed the
   /// stream key.
+  ///
+  /// Recurses into nested maps and lists: matching on key name alone is
+  /// only a control if every key in the structure is actually visited, and
+  /// a `{'target': {'password': ...}}` shape would otherwise pass through
+  /// untouched.
   static Map<String, Object?> sanitize(Map<String, Object?> fields) {
-    return fields.map((String key, Object? value) {
-      if (value is! String) return MapEntry(key, value);
-      switch (key) {
-        case 'password':
-        case 'streamKey':
-        case 'username':
-          return MapEntry(key, maskSecret(value));
-        case 'url':
-          return MapEntry(key, maskUrlLastSegment(value));
-        default:
-          return MapEntry(key, value);
-      }
-    });
+    return fields.map(
+      (String key, Object? value) => MapEntry(key, _sanitizeValue(key, value)),
+    );
+  }
+
+  /// Sanitizes one field: secrets by key name, containers by recursion,
+  /// anything else unchanged.
+  static Object? _sanitizeValue(String key, Object? value) {
+    if (value is Map) {
+      return <String, Object?>{
+        for (final MapEntry<Object?, Object?> e in value.entries)
+          e.key.toString(): _sanitizeValue(e.key.toString(), e.value),
+      };
+    }
+    if (value is List) {
+      // The element keeps the enclosing key's name: a list under
+      // `password` is a list of passwords.
+      return <Object?>[for (final Object? e in value) _sanitizeValue(key, e)];
+    }
+    if (value is! String) return value;
+    switch (key) {
+      case 'password':
+      case 'streamKey':
+      case 'username':
+        return maskSecret(value);
+      case 'url':
+        return maskUrlLastSegment(value);
+      default:
+        return value;
+    }
   }
 
   /// Masks only the last path segment of [url] via [maskSecret], keeping

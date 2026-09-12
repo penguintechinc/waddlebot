@@ -19,7 +19,9 @@ part 'update_provider.g.dart';
 Future<UpdateChecker> updateChecker(Ref ref) async {
   final packageInfo = await PackageInfo.fromPlatform();
   return UpdateChecker(
-    dio: Dio(),
+    dio: Dio(
+      BaseOptions(connectTimeout: kHttpTimeout, receiveTimeout: kHttpTimeout),
+    ),
     currentVersion: packageInfo.version,
     releasesUrl: kGithubReleasesUrl,
   );
