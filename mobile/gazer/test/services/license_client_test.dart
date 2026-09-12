@@ -73,7 +73,7 @@ void main() {
                 return Response(
                   requestOptions: RequestOptions(path: path),
                   statusCode: 200,
-                  data: <String, dynamic>{},
+                  data: <String, dynamic>{'valid': true},
                 );
               }
               return Response(
@@ -240,15 +240,89 @@ void main() {
     });
   });
 
+  group('validateAndFetchFlags /validate body', () {
+    test(
+      'an explicit valid:false grades invalid and never fetches features',
+      () async {
+        final calledPaths = <String>[];
+        when(() => dio.post<dynamic>(any(), data: any(named: 'data')))
+            .thenAnswer((invocation) async {
+              final path = invocation.positionalArguments.first as String;
+              calledPaths.add(path);
+              return Response(
+                requestOptions: RequestOptions(path: path),
+                statusCode: 200,
+                data: <String, dynamic>{'valid': false, 'reason': 'expired'},
+              );
+            });
+
+        final state = await buildClient().validateAndFetchFlags();
+
+        // Previously the body was discarded entirely, so a server saying
+        // "not valid" over a 200 was graded fully valid.
+        expect(state.status, LicenseStatus.invalid);
+        expect(calledPaths.where((p) => p.endsWith('/features')), isEmpty);
+      },
+    );
+
+    test(
+      'an unparseable body is not evidence of entitlement -> invalid',
+      () async {
+        when(() => dio.post<dynamic>(any(), data: any(named: 'data')))
+            .thenAnswer((invocation) async {
+              final path = invocation.positionalArguments.first as String;
+              return Response(
+                requestOptions: RequestOptions(path: path),
+                statusCode: 200,
+                data: 'not json at all',
+              );
+            });
+
+        final state = await buildClient().validateAndFetchFlags();
+
+        expect(state.status, LicenseStatus.invalid);
+      },
+    );
+
+    test(
+      'a network error still degrades to the cached result, not invalid',
+      () async {
+        await cache.write(
+          LicenseState(
+            status: LicenseStatus.valid,
+            flags: const {'waddlebot.gazer.camera-stream': true},
+            lastFetched: fakeNow.subtract(const Duration(days: 1)),
+            deviceId: 'device-abc',
+          ),
+        );
+        when(() => dio.post<dynamic>(any(), data: any(named: 'data')))
+            .thenThrow(
+              DioException(
+                requestOptions: RequestOptions(path: '/validate'),
+                type: DioExceptionType.connectionTimeout,
+              ),
+            );
+
+        final state = await buildClient().validateAndFetchFlags();
+
+        // Graceful degradation is for transport failure only -- an answer
+        // that says "not valid" is an answer.
+        expect(state.status, LicenseStatus.gracePeriod);
+      },
+    );
+  });
+
   group('validateAndFetchFlags never throws', () {
-    test('an unexpected exception (malformed response shape) is swallowed, not rethrown', () async {
+    test('an unexpected exception (malformed features shape) is swallowed, not rethrown', () async {
       when(() => dio.post<dynamic>(any(), data: any(named: 'data')))
           .thenAnswer((invocation) async {
             final path = invocation.positionalArguments.first as String;
             return Response(
               requestOptions: RequestOptions(path: path),
               statusCode: 200,
-              data: <String, dynamic>{},
+              // /validate affirms; /features answers with no `features`
+              // key, so the cast below it throws.
+              data: <String, dynamic>{'valid': true},
             );
           });
 
