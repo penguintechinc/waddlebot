@@ -89,11 +89,10 @@ class StatusPanel extends ConsumerWidget {
     final List<VideoDevice> devices =
         ref.watch(videoDevicesProvider).value ?? const <VideoDevice>[];
     final GazerSettings? settings = ref.watch(settingsProvider).value;
-    // Watched for its side effect, not its value: reading this provider is
-    // what resolves the telemetry config and applies it via
-    // `GazerTelemetry.init`. The row below renders `GazerTelemetry.health`
-    // instead, which is live rather than a build-time snapshot.
-    ref.watch(telemetryConfigProvider);
+    // One combined, live health value rather than three mutable statics
+    // read during build(). The notifier also watches telemetryConfigProvider,
+    // whose read is what applies the telemetry config in the first place.
+    final TelemetryHealth telemetryHealth = ref.watch(telemetryHealthProvider);
 
     final bool cameraOn = state is! IdleState && state is! ErrorState;
     final String? deviceLabel = cameraOn && devices.isNotEmpty
@@ -261,28 +260,17 @@ class StatusPanel extends ConsumerWidget {
                   : l10n.statusPanelForegroundServiceInactiveLabel,
             ),
             const Divider(),
-            // Bound to GazerTelemetry.health rather than reading its
-            // counters during build(): the counters are mutable statics, so
-            // nothing rebuilt this row when they changed, and combining
-            // them here got the common cases wrong (a collector that
-            // succeeded once and then died read as "Exporting", and
-            // encode-dropped batches surfaced nowhere).
-            ValueListenableBuilder<TelemetryHealth>(
-              valueListenable: GazerTelemetry.health,
-              builder:
-                  (BuildContext context, TelemetryHealth health, Widget? _) =>
-                      _row(
-                        context,
-                        l10n.statusPanelTelemetryLabel,
-                        switch (health.status) {
-                          TelemetryHealthStatus.disabled =>
-                            l10n.statusPanelTelemetryDisabledLabel,
-                          TelemetryHealthStatus.ok =>
-                            l10n.statusPanelTelemetryExportingLabel,
-                          TelemetryHealthStatus.degraded =>
-                            l10n.statusPanelTelemetryFailedLabel,
-                        },
-                      ),
+            _row(
+              context,
+              l10n.statusPanelTelemetryLabel,
+              switch (telemetryHealth.status) {
+                TelemetryHealthStatus.disabled =>
+                  l10n.statusPanelTelemetryDisabledLabel,
+                TelemetryHealthStatus.ok =>
+                  l10n.statusPanelTelemetryExportingLabel,
+                TelemetryHealthStatus.degraded =>
+                  l10n.statusPanelTelemetryFailedLabel,
+              },
             ),
           ],
         ),

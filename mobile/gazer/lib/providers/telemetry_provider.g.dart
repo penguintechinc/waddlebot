@@ -87,3 +87,102 @@ final class TelemetryConfigProvider
 }
 
 String _$telemetryConfigHash() => r'bf0da4b6ad449a7b0344af21a1ca490c9d3890c4';
+
+/// Live telemetry export health for the status panel.
+///
+/// Bridges `GazerTelemetry.health` -- a [ValueListenable] on a static
+/// facade -- into the provider graph, so a widget watches a provider
+/// instead of reading mutable statics during `build()` and actually
+/// rebuilds when export health changes.
+///
+/// Watching [telemetryConfigProvider] is load-bearing, not incidental:
+/// reading it is what resolves and applies the config, and therefore what
+/// decides whether health starts out `disabled`. A widget watching this
+/// notifier gets that side effect transitively.
+
+@ProviderFor(TelemetryHealthNotifier)
+final telemetryHealthProvider = TelemetryHealthNotifierProvider._();
+
+/// Live telemetry export health for the status panel.
+///
+/// Bridges `GazerTelemetry.health` -- a [ValueListenable] on a static
+/// facade -- into the provider graph, so a widget watches a provider
+/// instead of reading mutable statics during `build()` and actually
+/// rebuilds when export health changes.
+///
+/// Watching [telemetryConfigProvider] is load-bearing, not incidental:
+/// reading it is what resolves and applies the config, and therefore what
+/// decides whether health starts out `disabled`. A widget watching this
+/// notifier gets that side effect transitively.
+final class TelemetryHealthNotifierProvider
+    extends $NotifierProvider<TelemetryHealthNotifier, TelemetryHealth> {
+  /// Live telemetry export health for the status panel.
+  ///
+  /// Bridges `GazerTelemetry.health` -- a [ValueListenable] on a static
+  /// facade -- into the provider graph, so a widget watches a provider
+  /// instead of reading mutable statics during `build()` and actually
+  /// rebuilds when export health changes.
+  ///
+  /// Watching [telemetryConfigProvider] is load-bearing, not incidental:
+  /// reading it is what resolves and applies the config, and therefore what
+  /// decides whether health starts out `disabled`. A widget watching this
+  /// notifier gets that side effect transitively.
+  TelemetryHealthNotifierProvider._()
+    : super(
+        from: null,
+        argument: null,
+        retry: null,
+        name: r'telemetryHealthProvider',
+        isAutoDispose: false,
+        dependencies: null,
+        $allTransitiveDependencies: null,
+      );
+
+  @override
+  String debugGetCreateSourceHash() => _$telemetryHealthNotifierHash();
+
+  @$internal
+  @override
+  TelemetryHealthNotifier create() => TelemetryHealthNotifier();
+
+  /// {@macro riverpod.override_with_value}
+  Override overrideWithValue(TelemetryHealth value) {
+    return $ProviderOverride(
+      origin: this,
+      providerOverride: $SyncValueProvider<TelemetryHealth>(value),
+    );
+  }
+}
+
+String _$telemetryHealthNotifierHash() =>
+    r'61633ce21c2c174365b1fec88a5c5b1dbd2f4e15';
+
+/// Live telemetry export health for the status panel.
+///
+/// Bridges `GazerTelemetry.health` -- a [ValueListenable] on a static
+/// facade -- into the provider graph, so a widget watches a provider
+/// instead of reading mutable statics during `build()` and actually
+/// rebuilds when export health changes.
+///
+/// Watching [telemetryConfigProvider] is load-bearing, not incidental:
+/// reading it is what resolves and applies the config, and therefore what
+/// decides whether health starts out `disabled`. A widget watching this
+/// notifier gets that side effect transitively.
+
+abstract class _$TelemetryHealthNotifier extends $Notifier<TelemetryHealth> {
+  TelemetryHealth build();
+  @$mustCallSuper
+  @override
+  WhenComplete runBuild() {
+    final ref = this.ref as $Ref<TelemetryHealth, TelemetryHealth>;
+    final element =
+        ref.element
+            as $ClassProviderElement<
+              AnyNotifier<TelemetryHealth, TelemetryHealth>,
+              TelemetryHealth,
+              Object?,
+              Object?
+            >;
+    return element.handleCreate(ref, build);
+  }
+}
