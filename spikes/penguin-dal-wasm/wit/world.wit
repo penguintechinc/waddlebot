@@ -1,0 +1,25 @@
+package waddle:bundle@0.0.1-spike;
+
+/// Minimal process-stage world for the penguin-dal-over-WASM feasibility
+/// spike. Mirrors the real `transform(event: PlatformEvent) -> PlatformEvent
+/// | None` contract (docs/APP_BUNDLE_AUTHORING.md Sec2) using JSON strings
+/// in place of typed records -- sufficient to prove/disprove the plumbing,
+/// not a production wire format.
+world stage {
+    /// event: JSON-encoded PlatformEvent ({platform,event_type,actor,payload,occurred_at}).
+    /// Returns JSON-encoded PlatformEvent, or none for "no reply" (process.no_reply).
+    export transform: func(event: string) -> option<string>;
+
+    /// Host-side statement execution -- the one channel a bundle's DB calls
+    /// actually cross the component boundary through. `sql` uses $1/$2/...
+    /// placeholders (flask_core.database.AsyncDAL.execute's own convention);
+    /// `params` is a JSON array. Returns a JSON array of row objects.
+    import db-execute: func(sql: string, params: string) -> string;
+
+    /// flask_core.bundle_runtime.get_bundle_context(), JSON-encoded
+    /// ({tenant, community, app_id}).
+    import context-get: func() -> string;
+
+    /// Standard logging.Logger sink -- level name + message.
+    import log: func(level: string, msg: string);
+}

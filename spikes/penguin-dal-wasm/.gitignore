@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pyc
+evidence/bundle.wasm
+evidence/buildtime_marker_host.txt
