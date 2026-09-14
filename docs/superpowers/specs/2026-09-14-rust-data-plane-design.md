@@ -73,7 +73,7 @@ Because both are git-ignored, every claim this spec takes from them is additiona
 | N1 | Rewriting the control plane. `hub_api` stays Python 3.13 + Quart. | Not in-line of traffic (`critical-rules.md` Data Plane boundary table). |
 | N2 | Rewriting `core/svc_presentation` or its `presentation` surface. | Outside the four-service scope; `presentation` stays a non-script, client-side surface. |
 | N3 | Keeping a Python execution path as a fallback. | Decision D3: clean cut, v3 is a major-version jump. |
-| N4 | Changing the Valkey key scheme, envelope JSON field names, the Module→Feature→App model, or the chart's service/value names. | Keeps the cut-over an implementation change, not a data or topology migration. |
+| N4 | Changing the envelope JSON field names, the Module→Feature→App model, or the chart's service/value names. **The Valkey key scheme does change** — per-ingest-source streams replace per-bundle process lists (D23, D24) — but the envelope carried inside them is byte-identical. | Keeps the cut-over an implementation change rather than a re-modelling of the domain; the transport change is deliberate and is the one place this spec touches the key scheme. |
 | N5 | Changing the third-party (`webhook_push`/`rest_pull`) execution model. | Already out-of-process across a network hop. |
 | N6 | Per-`(tenant, stage)` Valkey ACL users. | Per-**service** ACL users are in scope (§11.6); the per-tenant scheme in `stream_pipeline.py`'s docstring remains design-doc-only. |
 | N7 | Replacing the 5 s distribution poll with a push mechanism. | Unchanged; it governs bundle-set refresh only, not event latency. |
@@ -110,6 +110,9 @@ Every row was decided by the human product owner during the 2026-09-14 design se
 | D21 | The `waddle-sdk` ships **one** database facade: the `penguin-dal` public API, implemented over the WIT `db` import. No `flask_core.database.AsyncDAL` facade and no pydal facade exist. | Waddles' DAL is `penguin-dal`; shipping two surfaces would institutionalize the legacy one. | Human, 2026-09-14 (correction) |
 | D21a | Every existing Python bundle that imports `flask_core.database.AsyncDAL` or reaches a DAL through `get_bundle_dal()` is **migrated to the `penguin-dal` API first**, in Python, with its own pytest suite updated and passing natively, before any WASM compilation work. Bundle logic and entrypoint signatures are otherwise untouched. | Those bundles should already have been on `penguin-dal`; migrating them is a correction, not new scope, and it removes the need for a compatibility facade entirely. | Human, 2026-09-14 (supersedes "byte-identical" for DB-access lines only) |
 | D21b | The compiler **rejects** any bundle that still imports `flask_core.database` or `pydal`, with a message naming the module and pointing at the `penguin-dal` equivalent. | A gate that cannot be bypassed is what stops the legacy surface from creeping back in through a new bundle. | Human, 2026-09-14 |
+| D23 | **The spine is Valkey Streams, not lists.** Ingest receives or polls each event once and `XADD`s it once onto the stream of the ingest source it came from; every subscribing process bundle reads it through its own consumer group. **Supersedes** the list-based design: the per-bundle `LPUSH` copies, the `LMOVE` processing keys, the consumer index, the heartbeat sorted set and the reaper are all removed, replaced by the pending-entries list and `XAUTOCLAIM`. | One write per event regardless of how many bundles subscribe, real per-bundle isolation of failure and lag, and at-least-once from the server rather than from hand-rolled bookkeeping. The repo already contains a tested implementation of this model (`libs/flask_core/flask_core/stream_pipeline.py:341-1047`), gated off. | Human, 2026-09-14 |
+| D24 | **Stream granularity is per ingest source**, and access is **manifest-requested, hub-api-granted**: `consumes` is a request, hub-api resolves it into explicit `app_stream_grants` rows and creates consumer groups only on granted streams, the admin sees the grant list in words at install, and the stage reads only granted streams. Admins may revoke individual grants; the Valkey ACL stays pattern-scoped, so the selectivity is logical and lives in the stage. | Per-platform streams would force "all Twitch or none"; per-source plus explicit grants is what lets an operator give a bundle one channel. Bundles hold no Valkey connection, so the stage is the only possible enforcement point and the spec says so rather than implying Valkey enforces it. | Human, 2026-09-14 |
+| D25 | **Action streams are strictly per bundle** — one stream, one consumer group, never read on another bundle's behalf — and the `_target_app_id` cross-bundle redirect becomes a **declared, approved capability** (`routes_to`, exact ids, no wildcards), enforced by the stage, which is also the only writer. | Ingest streams are shared read-only platform data; action envelopes are a bundle's own output and routinely carry its private state. The asymmetry is deliberate, and the one cross-bundle path is visible at install rather than implicit. | Human, 2026-09-14 |
 | D22 | **Naming: Waddles is the product and repo name; `waddlebot` survives only as the legacy identifiers listed here.** The repo becomes `penguintechinc/waddles` (local clone `~/code/waddles`), images become `ghcr.io/penguintechinc/waddles/<service>`, the Kubernetes namespace and in-cluster DNS become `waddles` (`hub-api.waddles.svc.cluster.local`), and chart Secrets become `waddles-*`. Flag keys (`waddles.*`) and Valkey keys (`waddles:*`) already used the name. **The complete list of surviving `waddlebot` literals:** (1) the Helm chart directory and release name `k8s/helm/waddlebot`, which this project does not rename (N4 keeps the chart's names and values stable); (2) the Postgres `DB_NAME` default `waddlebot`, which this project does not migrate; (3) the legacy `waddlebot:stream:*` / `waddlebot:dlq:*` key prefixes belonging to the unused `flask_core.stream_pipeline.StreamPipeline` class, which this spec does not use and does not rename; (4) Python package paths and the scratchpad path of the sandbox spike report. Every other occurrence is Waddles. | One product name, and a short, explicit list of the places a rename would mean a migration this project is not doing. | Human, 2026-09-14 |
 
 ---
@@ -166,16 +169,17 @@ Every row was decided by the human product owner during the 2026-09-14 design se
           │  socket leases · supervisor    │
           │  Twitch outbound relay (BLMOVE)│<───────────────┐ outbound relay
           └──────────────┬─────────────────┘                │ (dedicated conn)
-                         │ LPUSH activated process keys     │
+                         │ ONE XADD per event               │
                          v                                  │
           ╔═══════════════════════════════════════╗         │
-          ║ Valkey  (TLS + ACL, per-service user)  ║         │
-          ║  waddles:t:{tenant}:c:{community}      ║         │
-          ║          :app:{app_id}:{stage}         ║         │
-          ║  …:{stage}:proc:{consumer}   (leases)  ║         │
-          ║  waddles:dlq:{stage}                   ║         │
+          ║ Valkey Streams (TLS + ACL per service) ║         │
+          ║  {scope}:src:{platform}:{src_id}:events ║       │
+          ║     one group per granted bundle        ║       │
+          ║  {scope}:app:{app_id}:action            ║       │
+          ║     one group: {app_id}                 ║       │
+          ║  waddles:dlq:{stage}                    ║       │
           ╚═══════════════════════════════════════╝         │
-                         │ LMOVE (at-least-once)            │
+                   │ XREADGROUP (granted streams only)      │
                          v                                  │
           ┌────────────────────────────────┐                │
           │ svc-process       :8201        │                │
@@ -236,8 +240,8 @@ Every row was decided by the human product owner during the 2026-09-14 design se
 
 ### 3.3 What deliberately does not change
 
-- The Valkey key scheme (`bundle_stream_key`/`bundle_config_key`/`bundle_state_key`, `libs/flask_core/flask_core/stream_pipeline.py:80-112`).
-- The envelope JSON shape (`PlatformEvent` / `StageEnvelope`), including the `event`-not-`payload` naming and the `_target_app_id` reserved payload key.
+- The scope prefix and its `_tenant` rendering (`libs/flask_core/flask_core/stream_pipeline.py:67-112`), plus `:cfg` and `:state` verbatim. The **process hop's** keys change to per-ingest-source streams (D23, D24); the action hop keeps `…:app:{app_id}:action`, as a stream.
+- The envelope JSON shape (`PlatformEvent` / `StageEnvelope`), including the `event`-not-`payload` naming and the `_target_app_id` reserved payload key, which gains a declaration requirement (D25) but no shape change.
 - The 5 s distribution-poll cadence and its graceful-degrade-to-last-known-good behaviour.
 - Helm chart structure: service names, values keys, ports 8200/8201/8202/8208, metrics 9090.
 - `app_catalog` / `app_activations` / `app_tenant_availability` resolution semantics and 3-tier config precedence.
@@ -293,7 +297,7 @@ penguin-libs/packages/
 
 ### 4.1 `core/svc_ingest` (Rust, rewrite)
 
-**Responsibility.** Own every inbound platform connection and every inbound HTTP intake surface; normalize raw platform payloads into `PlatformEvent` with fixed, non-pluggable code; resolve which process-stage bundles are activated for the event's `(tenant, community)`; write finished `StageEnvelope`s directly onto those bundles' `:process` keys. Additionally run the Twitch outbound relay drain. **Holds every platform credential. Runs no bundle and links no executor.**
+**Responsibility.** Own every inbound platform connection and every inbound HTTP intake surface; normalize raw platform payloads into `PlatformEvent` with fixed, non-pluggable code; write each finished `StageEnvelope` **once** onto the Valkey stream of the ingest source it came from (§10.6). Additionally run the Twitch outbound relay drain. **Holds every platform credential. Runs no bundle and links no executor.**
 
 **Interfaces.**
 
@@ -301,7 +305,7 @@ penguin-libs/packages/
 |---|---|
 | Inbound HTTP | `:8200` — the endpoint table in §10.1. |
 | Inbound sockets | Twitch IRC (per channel), Twitch EventSub websocket (per tenant, when selected), Discord gateway, Slack Socket Mode, Kick Pusher; YouTube live poll. |
-| Outbound | Valkey `LPUSH` onto activated `:process` keys; Twitch IRC sends drained from the outbound relay key. |
+| Outbound | One Valkey `XADD` per event onto `{scope}:src:{platform}:{source_id}:events`; Twitch IRC sends drained from the outbound relay list. |
 | Control | `GET {HUB_API_URL}/api/v1/distribution/bundles?stage=process` every `POLL_INTERVAL_S`, with a `distribution:read`-scoped HS256 service JWT minted from `SECRET_KEY` (unchanged mechanism). |
 
 **Normalizers absorbed as code.** The six `core/svc_ingest/bundles/*_ingest.py` `normalize()` functions become Rust functions in `src/normalize/{twitch,twitch_eventsub,discord,slack,youtube,kick,generic}.rs`. Their behaviour is preserved exactly; the ported tests are the acceptance criterion (§14.4).
@@ -330,7 +334,7 @@ penguin-libs/packages/
 
 ### 4.2 `core/svc_process` (Rust, rewrite)
 
-**Responsibility.** Drain each activated bundle's `:process` key, run the stage's built-ins around each bundle call, invoke the bundle's `transform` through the executor, and enqueue the result onto the right `:action` key.
+**Responsibility.** `XREADGROUP` from each activated bundle's **granted** ingest-source streams, skip non-matching entries cheaply (§5.3), run the stage's built-ins around each bundle call, invoke the bundle's `transform` through the executor, and `XADD` the result onto that bundle's own `:action` stream — or, for an approved `_target_app_id` redirect, onto the declared target's.
 
 **Built-ins vs bundles.** The Python runner's always-on hooks are re-homed with **no third path** — each is either a Rust built-in of the stage or an always-installed bundle:
 
@@ -353,7 +357,7 @@ Rationale for the split: a hook that must run for every event regardless of acti
 
 ### 4.3 `core/svc_action` (Rust, rewrite)
 
-**Responsibility.** Terminal stage. Drain each activated bundle's `:action` key, invoke `dispatch` through the executor, classify the returned `transport-error.retryable`, apply retry-with-backoff, and write the outcome to `action_dispatch_log`. Platform senders become **Rust built-ins** the bundles reach through the host API (`relay` for Twitch, `http` with guarded egress for REST platforms) — a bundle never holds a platform credential.
+**Responsibility.** Terminal stage. `XREADGROUP` each activated bundle's own `:action` stream through the single group `{app_id}`, invoke `dispatch` through the executor, classify the returned `transport-error.retryable`, apply retry-with-backoff, and write the outcome to `action_dispatch_log`. Platform senders become **Rust built-ins** the bundles reach through the host API (`relay` for Twitch, `http` with guarded egress for REST platforms) — a bundle never holds a platform credential.
 
 **Retry semantics (preserved from `core/svc_action/runner.py`).** The runner owns all backoff timing; a bundle never sleeps. `transport-error.retryable = true` ⇒ retry; `false` ⇒ terminal failure recorded to `action_dispatch_log`. Defaults: `ACTION_MAX_RETRIES=3`, `ACTION_BASE_BACKOFF_MS=250`, `ACTION_MAX_BACKOFF_MS=8000`, full jitter. A `retry-after-ms` returned by the bundle (or by a built-in sender parsing a `Retry-After` header) overrides the computed backoff when larger, capped at `ACTION_MAX_BACKOFF_MS`.
 
@@ -402,34 +406,44 @@ The Job's network identity is shared across phases, so the NetworkPolicy's two a
 
 ### 4.7 `penguin-spine` (new crate, `penguin-libs/packages/rust-spine`)
 
-**Responsibility.** The Valkey list spine: key builders, envelope types, the at-least-once drain loop, the lease reaper, the DLQ, and queue bounding.
+**Responsibility.** The Valkey Streams spine: key builders, envelope types, `XADD`/`XREADGROUP`/`XACK`/`XAUTOCLAIM`, consumer-group management, grant-scoped reads, the DLQ, and `MAXLEN ~` bounding.
 
 **Public surface.**
 
 ```rust
-pub struct BundleIsolationKeys { pub tenant: String, pub community: Option<String>, pub app_id: String }
-impl BundleIsolationKeys {
-    pub fn stream_key(&self, stage: Stage) -> String;      // …:{stage}
-    pub fn processing_key(&self, stage: Stage, consumer_id: &str) -> String;  // …:{stage}:proc:{consumer}
-    pub fn config_key(&self) -> String;                    // …:cfg
-    pub fn state_key(&self) -> String;                     // …:state
+pub struct Scope { pub tenant: String, pub community: Option<String> }
+impl Scope {
+    pub fn source_stream(&self, platform: &str, source_id: &str) -> String;  // …:src:{platform}:{source_id}:events
+    pub fn action_stream(&self, app_id: &str) -> String;                     // …:app:{app_id}:action
+    pub fn config_key(&self, app_id: &str) -> String;                        // …:app:{app_id}:cfg
+    pub fn state_key(&self, app_id: &str) -> String;                         // …:app:{app_id}:state
 }
-pub enum Stage { Ingest, Process, Action }
+pub enum Stage { Process, Action }
 pub struct PlatformEvent { /* §6.1 */ }
 pub struct StageEnvelope { /* §6.1 */ }
-pub struct SpineClient { /* pooled, TLS-aware, ACL-aware */ }
+pub struct Grant { pub stream: String, pub platform: String, pub source_id: String }
+pub struct Delivered { pub stream: String, pub entry_id: String, pub env: StageEnvelope, pub deliveries: u64 }
+
+pub struct SpineClient { /* pooled, TLS-aware, ACL-aware; admin + write traffic only */ }
 impl SpineClient {
-    pub async fn enqueue(&self, key: &str, env: &StageEnvelope) -> Result<EnqueueOutcome, SpineError>;
-    pub async fn take(&self, keys: &[String]) -> Result<Vec<Leased>, SpineError>;
-    pub async fn ack(&self, leased: &Leased) -> Result<(), SpineError>;
-    pub async fn dead_letter(&self, leased: &Leased, err: &DlqError) -> Result<(), SpineError>;
-    pub async fn heartbeat(&self) -> Result<(), SpineError>;
-    pub async fn reap(&self, stage: Stage) -> Result<ReapReport, SpineError>;
+    pub async fn append(&self, stream: &str, env: &StageEnvelope) -> Result<String, SpineError>; // XADD → entry id
+    pub async fn ensure_group(&self, stream: &str, app_id: &str) -> Result<(), SpineError>;      // BUSYGROUP-tolerant
+    pub async fn destroy_group(&self, stream: &str, app_id: &str) -> Result<(), SpineError>;
+    pub async fn ack(&self, d: &Delivered, app_id: &str) -> Result<(), SpineError>;
+    pub async fn claim_stale(&self, stream: &str, app_id: &str) -> Result<Vec<Delivered>, SpineError>; // XAUTOCLAIM
+    pub async fn dead_letter(&self, d: &Delivered, err: &DlqError) -> Result<(), SpineError>;
+    pub async fn group_stats(&self, stream: &str) -> Result<Vec<GroupStats>, SpineError>;        // XINFO GROUPS
 }
-pub struct BlockingPopClient { /* dedicated connection, own socket timeout — §5.5 */ }
+
+/// Dedicated connection, own socket timeout — §5.7. Reads ONLY granted streams.
+pub struct GroupReader { /* … */ }
+impl GroupReader {
+    pub fn new(grants: Vec<Grant>, app_id: String, consumer_id: String) -> Self;
+    pub async fn read(&mut self) -> Result<Vec<Delivered>, SpineError>;  // XREADGROUP … BLOCK
+}
 ```
 
-**Invariants the crate enforces (each has a test):** strict serde on every envelope read; a stage value outside `{ingest, process, action}` is an error, never a silently-wrong key; `community: None` always renders as the literal `_tenant` segment; lease/heartbeat traffic never shares a connection with an in-flight blocking pop.
+**Invariants the crate enforces (each has a test):** strict serde on every envelope read; `community: None` always renders as the literal `_tenant` segment; a `GroupReader` asked for a stream outside its `grants` fails with `SpineError::StreamNotGranted`; administrative traffic never shares a connection with an in-flight blocking read; an entry payload is always the envelope JSON under the single field `env`.
 
 ### 4.8 `penguin-bundle-host` (new crate, `penguin-libs/packages/rust-bundle-host`)
 
@@ -527,90 +541,153 @@ The synchronous `to_thread` replacement is the piece most likely to surprise an 
 
 ## 5. Spine and envelopes
 
-### 5.1 Transport
+### 5.1 Transport: Valkey Streams, written once per event
 
-Valkey **lists** on the existing keys. Producers `LPUSH` at the head; consumers take from the tail — FIFO per key, unchanged. `penguin-spine` owns the key builders, the envelope types and the drain loop; no service builds a key by string concatenation.
+**Supersedes the list-based spine.** Ingest receives or polls each event once and writes it **once**; every subscribing process bundle then reads it from there through its own consumer group. Nothing is copied per bundle.
 
-### 5.2 At-least-once delivery
+**Prior art in this repository.** `libs/flask_core/flask_core/stream_pipeline.py:341-1047` already implements exactly this model — `XADD`/`XREADGROUP`/`XACK`/`XPENDING`/`XTRIM`, `BUSYGROUP`-tolerant `create_consumer_group`, and a bounded `move_to_dlq` — but is gated off by default (`STREAM_PIPELINE_ENABLED`, false) and uses the legacy `waddlebot:stream:*` / `waddlebot:dlq:*` namespace **(legacy identifier)**. This design activates that model under the `waddles:` namespace, with per-bundle groups; the DLQ record shape is taken from it rather than invented.
 
-Today a message is implicitly acked the instant it is popped, and a crash between the pop and the downstream push loses the event. The Rust spine replaces the bare pop with a lease:
-
-```
-take:      LMOVE  {stage_key}  {proc_key}  RIGHT LEFT      -- atomic; oldest first
-           SADD   waddles:proc:idx:{stage}:{consumer_id}  {proc_key}
-           ZADD   waddles:consumers:{stage}  {now_ms}  {consumer_id}
-ack:       LREM   {proc_key}  1  {raw_json}                -- delete on success
-requeue:   LMOVE  {proc_key}  {stage_key}  LEFT RIGHT      -- back to the tail; next to be taken
-```
-
-- `{proc_key}` = `waddles:t:{tenant}:c:{community|_tenant}:app:{app_id}:{stage}:proc:{consumer_id}`.
-- `{consumer_id}` = `SPINE_CONSUMER_ID`, defaulting to the pod name (downward API) and falling back to `{hostname}-{uuid-v4}`.
-- Heartbeat: `ZADD waddles:consumers:{stage} {now_ms} {consumer_id}` every `SPINE_LEASE_HEARTBEAT_MS` (default `5000`).
-- Lease TTL: `SPINE_LEASE_TTL_MS`, default `30000`.
-
-**Reaper.** On startup, and every `SPINE_REAPER_INTERVAL_MS` (default `15000`), each replica runs:
+**One stream per configured ingest source**, not per platform:
 
 ```
-ZRANGEBYSCORE waddles:consumers:{stage}  -inf  {now_ms - SPINE_LEASE_TTL_MS}
-  for each dead consumer_id:
-      SMEMBERS waddles:proc:idx:{stage}:{consumer_id}
-        for each proc_key:  LMOVE proc_key -> stage_key (LEFT RIGHT) until empty
-      DEL       waddles:proc:idx:{stage}:{consumer_id}
-      ZREM      waddles:consumers:{stage} {consumer_id}
+waddles:t:{tenant}:c:{community|_tenant}:src:{platform}:{source_id}:events
 ```
 
-The reaper is idempotent and safe to run concurrently on every replica: each `LMOVE` is atomic, and a re-queue that races another reaper simply moves nothing.
+`{source_id}` is the stable identifier hub-api assigns to one ingest configuration — one Twitch channel/account, one Discord guild connection, one Slack workspace, one generic webhook source, one REST-intake custom platform — and it is the same value carried in `PlatformEvent.source.account_id`/`source.channel_id`'s owning record. Per-source granularity is what makes selective access possible: a bundle can be granted "Twitch #channelA" without being granted every Twitch channel in the tenant.
 
-**Redelivery cap.** Each envelope carries a `deliveries` counter incremented by the taking consumer (stored in the DLQ record, not in the envelope JSON — the envelope shape is frozen; the counter lives in a Valkey hash `waddles:deliv:{stage}` field `{sha256(raw_json)}` with a `SPINE_DELIVERY_TTL_S=3600` expiry). At `SPINE_MAX_DELIVERIES` (default `5`) the envelope goes to the DLQ with `error.kind = "max_deliveries"` instead of being re-queued.
+Ingest writes with approximate trimming:
 
-### 5.3 Dead-letter queue
+```
+XADD {stream} MAXLEN ~ {SPINE_STREAM_MAXLEN} * env {envelope_json}
+```
 
-- Key: `waddles:dlq:{stage}` — one list per stage, not per bundle, so an operator has three places to look.
-- Write: `LPUSH` the DLQ record of §6.3, then `LTRIM waddles:dlq:{stage} 0 {SPINE_DLQ_MAXLEN - 1}` (default `10000`, matching the existing `DEFAULT_DLQ_MAXLEN`).
-- Written on: envelope deserialization failure, bundle trap or error return, executor call timeout, `max_deliveries` exhaustion, queue overflow, and a disabled-by-trip bundle's events.
-- `waddles_spine_dlq_total{stage,reason}` is incremented on every write, with `reason` equal to the record's `error.kind`.
+- The entry has exactly one field, `env`, whose value is the `StageEnvelope` JSON of §6.1.2 — byte-identical to what the list-based design carried, so the envelope contract and its golden fixtures are unchanged.
+- `MAXLEN ~` (default `SPINE_STREAM_MAXLEN` = `100000`) is approximate on purpose: exact trimming is O(N) on every write.
+- Every trim increments `waddles_stream_trimmed_total{stream}`.
 
-### 5.4 Bounded queues and backpressure
+### 5.2 Consumer groups: requested by `consumes`, granted by hub-api
 
-Stage keys are bounded at `SPINE_STAGE_MAXLEN` (default `10000`). On `enqueue`:
+A bundle's `consumes` (§6.4.3) is a **request**, not an entitlement. At activation, hub-api resolves the request against the tenant/community's configured ingest sources and produces an explicit **grant list**:
 
-1. `LPUSH` the envelope.
-2. `LLEN`; if greater than `SPINE_STAGE_MAXLEN`, `RPOP` the excess (the **oldest** entries — drop-oldest).
-3. Every dropped entry is written to the DLQ with `error.kind = "queue_overflow"` and increments `waddles_spine_dropped_total{stage}`.
-4. `waddles_spine_queue_depth{stage}` observes the post-trim length.
+```
+app_id  →  [ waddles:t:acme:c:main:src:twitch:tw-channelA:events,
+             waddles:t:acme:c:main:src:discord:dg-guildX:events ]
+```
 
-Steps 1–2 run as a single Lua `EVAL` so the length check and the trim cannot race another producer.
+| Step | Who | What |
+|---|---|---|
+| Resolve | hub-api, at activation | Expand every `consumes` rule against the configured sources. `platform: twitch` with no `source_id` matches every Twitch source; a rule naming a `source_id` matches exactly one. |
+| Record | hub-api | One row per granted stream in the new `app_stream_grants` table (§6.8). |
+| Show | hub-api → admin | The grant list is rendered in words on the install/activation screen — "this bundle will read: Twitch #channelA, Discord guild X" — with wildcards spelled out into the concrete sources they resolve to. |
+| Create | hub-api | `XGROUP CREATE {stream} {app_id} $ MKSTREAM`, `BUSYGROUP`-tolerant, on **granted streams only**. |
+| Ensure | the stage, at startup and on every distribution refresh | Re-issues the same `BUSYGROUP`-tolerant create for each granted stream, so a group lost to a Valkey restore is restored without operator action. |
+| Destroy | hub-api, at deactivation | `XGROUP DESTROY {stream} {app_id}` for every grant, then deletes the rows. |
 
-### 5.5 Client rules carried over verbatim
+**The stage is the enforcement point.** Bundles hold no Valkey connection and never name a stream; the stage reads on a bundle's behalf **only from that bundle's granted streams**. A consumer group existing on a stream is not itself authority — the stage will not read a stream that is not in the bundle's grant list, which is what makes the negative test in §14.6 (a Discord-only bundle never seeing Twitch entries even when a group exists) meaningful rather than tautological.
 
-Two gotchas documented in `core/svc_ingest/outbound_drain.py` are properties of the protocol, not of `redis-py`, and apply identically to `redis-rs`/`deadpool-redis`. `penguin-spine` encodes both:
+**Re-resolution.** Adding an ingest source later re-runs the resolution for every activated bundle in that tenant/community: a bundle whose rule is `platform: twitch` with no `source_id` automatically gains a group and a grant on the new channel's stream; a bundle scoped to a specific `source_id` does not. Removing a source destroys the groups on its stream and deletes those grants.
 
-1. **A blocking pop runs on its own dedicated connection with its own socket timeout.** The block timeout is a *server-side command argument*, not the client socket's read timeout. `RELAY_BLOCK_TIMEOUT_S` (default `30`) must be strictly less than `DRAIN_SOCKET_TIMEOUT_S` (default `65`); `penguin-spine` refuses to construct a `BlockingPopClient` where that does not hold, with a startup error naming both values.
-2. **Lease/heartbeat traffic (`SET`, `EVAL`, `ZADD`) never shares a connection with an in-flight blocking pop.** Cancelling the future does not tell the Valkey server to abandon the command, so a pooled connection can hand the next caller a socket with a stale pending reply. `BlockingPopClient` owns a single connection that is never returned to the shared pool, and the shared pool refuses `BLMOVE`/`BRPOP`/`BLMPOP` commands outright.
+**Revocation.** An admin can revoke an individual grant without uninstalling or deactivating the bundle (`DELETE /api/v1/apps/{app_id}/grants/{grant_id}`, §9.6): the row is deleted, the group destroyed, the stage stops reading that stream within one distribution poll, and the action is audit-logged with the actor's UUID.
+
+**Valkey ACLs are unchanged by this.** The stage's ACL user stays pattern-scoped to `waddles:t:*` (§11.6.1). Per-bundle selectivity is **logical, implemented in the stage**, not enforced by Valkey — stated plainly here so nobody mistakes the ACL for the boundary. The boundary that matters is that bundles have no Valkey access at all.
+
+### 5.3 Reading, filtering and acking
+
+Each process-stage worker, per granted stream:
+
+```
+XREADGROUP GROUP {app_id} {consumer_id} COUNT {SPINE_READ_COUNT} BLOCK {SPINE_BLOCK_MS}
+           STREAMS {stream} >
+```
+
+- `{consumer_id}` is the pod identity (`SPINE_CONSUMER_ID`, defaulting to the pod name, else `{hostname}-{uuid-v4}`).
+- `COUNT` defaults to `64`, `BLOCK` to `1000` ms. The blocking read runs on a **dedicated connection** under the rules of §5.7 — that rule survives the transport change untouched.
+- **Consumer-side matching.** The stage re-evaluates the bundle's `consumes.event_types` and `filters` against the entry it read. A non-match is a **cheap skip**: `XACK` immediately, no executor call, `waddles_consumer_skipped_total{app_id,reason}` +1. This is where a `!sr`-only bundle avoids paying for every chat line, and it costs one string comparison per entry rather than a wasted WASM invocation.
+- A match is handed to the executor; on success the entry is `XACK`ed. Failures follow the retry policy and then go to the DLQ (§5.5).
+
+Filters remain an optimization, not a security boundary: a bundle validates its own input, and the stage never promises that a delivered event satisfied a filter the bundle did not declare.
+
+### 5.4 At-least-once, recovery and idempotency
+
+At-least-once comes from the **pending-entries list** (PEL), not from a hand-rolled processing key. The `LMOVE`/processing-key/consumer-index/reaper machinery of the list design is removed entirely.
+
+- An entry delivered by `XREADGROUP` sits in the group's PEL until `XACK`.
+- A crash between read and ack leaves it pending; another consumer recovers it with
+
+```
+XAUTOCLAIM {stream} {app_id} {consumer_id} {SPINE_CLAIM_IDLE_MS} 0 COUNT 64
+```
+
+  run every `SPINE_CLAIM_INTERVAL_MS` (default `15000`) against entries idle longer than `SPINE_CLAIM_IDLE_MS` (default `30000`). Each claim increments `waddles_stream_claimed_total{app_id}`.
+- **Redelivery cap.** `XAUTOCLAIM`/`XPENDING` report a delivery count per entry; at `SPINE_MAX_DELIVERIES` (default `5`) the entry is DLQ'd with `error.kind = "max_deliveries"` and `XACK`ed rather than claimed again.
+
+**Idempotency is a bundle expectation, stated in the authoring guide.** A bundle may see the same event twice after a crash. The stream entry id is the stable de-duplication key and is exposed to the bundle as `message-id` on the `context` capability (§6.5) — a bundle that writes must either be naturally idempotent or record the `message-id` it last applied. Every first-party bundle is reviewed for this in M2.
+
+### 5.5 Dead-letter queue
+
+- Key: `waddles:dlq:{stage}` — one per stage, unchanged.
+- Write: `XADD waddles:dlq:{stage} MAXLEN ~ {SPINE_DLQ_MAXLEN} * rec {dlq_record_json}` (default `10000`, matching the existing `DEFAULT_DLQ_MAXLEN`), then `XACK` the source entry so it stops being redelivered. The record shape is §6.3, taken from `StreamPipeline.move_to_dlq`'s prior art.
+- Written on: envelope deserialization failure, bundle trap or error return, executor call timeout, `max_deliveries` exhaustion, a disabled-by-trip bundle's events, and executor unavailability.
+- **Not** written on: an entry no bundle subscribed to (nothing is enqueued in the first place), or a consumer-side filter skip (normal operation).
+- `waddles_spine_dlq_total{stage,reason}` on every write, `reason` = the record's `error.kind`.
+
+### 5.6 Backpressure
+
+- Streams are bounded by `MAXLEN ~` at write time (§5.1); the oldest entries fall off, and `waddles_stream_trimmed_total{stream}` makes that visible rather than silent.
+- The signal that matters operationally is **group lag**, not stream length: `waddles_group_lag{app_id,stream}` and `waddles_group_pending{app_id,stream}`, sampled from `XINFO GROUPS` every `SPINE_STATS_INTERVAL_MS` (default `10000`). A stuck bundle shows as growing PEL on its own group while every other group stays healthy — which is exactly the isolation the per-bundle group buys, and it is bounded by the three-strike disable of §7.5.
+- An operator alert fires on `waddles_group_pending` above `SPINE_PEL_ALERT` (default `5000`) for a single group, or on any trimming of a stream whose slowest group has not caught up.
+
+### 5.7 Client rules carried over verbatim
+
+Two gotchas documented in `core/svc_ingest/outbound_drain.py` are properties of the protocol, not of `redis-py`, and apply identically to `redis-rs`/`deadpool-redis` and identically to `XREADGROUP ... BLOCK`. `penguin-spine` encodes both:
+
+1. **A blocking read runs on its own dedicated connection with its own socket timeout.** The block timeout is a *server-side command argument*, not the client socket's read timeout. `SPINE_BLOCK_MS` (default `1000`) and `RELAY_BLOCK_TIMEOUT_S` (default `30`) must each be strictly less than the owning connection's socket timeout (`DRAIN_SOCKET_TIMEOUT_S`, default `65`); `penguin-spine` refuses to construct a blocking-read client where that does not hold, with a startup error naming both values.
+2. **Administrative traffic (`XGROUP`, `XACK`, `XAUTOCLAIM`, `XINFO`) never shares a connection with an in-flight blocking read.** Cancelling the future does not tell the Valkey server to abandon the command, so a pooled connection can hand the next caller a socket with a stale pending reply. The blocking reader owns a connection that is never returned to the shared pool, and the shared pool refuses `XREADGROUP ... BLOCK`, `BRPOP` and `BLMOVE` outright.
 
 Both rules have dedicated tests (§14.2).
 
-### 5.6 Drain cadence and the latency SLA
+### 5.8 Cadence and the latency SLA
 
 | Timer | Value | Governs |
 |---|---|---|
-| `POLL_INTERVAL_S` | `5.0` | **Bundle-set refresh only** — how soon a newly activated bundle is noticed. Unchanged from `core/svc_ingest/config.py:47`. |
-| `SPINE_DRAIN_IDLE_SLEEP_MS` | `100` | How long a stage sleeps after a drain pass that moved zero messages. A pass that moved at least one message immediately runs again with no sleep. |
-| `RELAY_BLOCK_TIMEOUT_S` | `30` | The Twitch outbound relay's genuine blocking pop. |
+| `POLL_INTERVAL_S` | `5.0` | **Bundle-set and grant refresh only** — how soon a newly activated bundle, a new grant, or a revocation is noticed. Unchanged from `core/svc_ingest/config.py:47`. |
+| `SPINE_BLOCK_MS` | `1000` | How long a `XREADGROUP` blocks when its stream is idle. An entry arriving during the block wakes the reader immediately — this is a push, not a poll. |
+| `SPINE_CLAIM_INTERVAL_MS` | `15000` | How often abandoned entries are reclaimed. |
+| `RELAY_BLOCK_TIMEOUT_S` | `30` | The Twitch outbound relay's blocking pop (still a list). |
 
-Worst-case queueing delay added by a stage is therefore one `SPINE_DRAIN_IDLE_SLEEP_MS` (100 ms), not one poll interval. Two hops (process, action) plus ingest gives a worst case of 300 ms of scheduling latency, leaving the rest of the 3 s text budget to platform round-trips and bundle work. The end-to-end budget is asserted in the alpha e2e run (§14.8).
+Because `XREADGROUP` blocks rather than polls, a waiting consumer is woken by the `XADD` itself; the added scheduling latency per hop is sub-millisecond in the common case, not one drain interval. Worst case is bounded by the executor call budget, leaving the 3 s text and 5 s A/V budgets dominated by platform round-trips and bundle work. The end-to-end budget is asserted in the alpha e2e run (§14.8).
 
-### 5.7 Ingest → process routing
+### 5.9 Process → action
 
-Ingest writes finished `PlatformEvent`s (wrapped in a `StageEnvelope` with `stage = "process"`) **directly onto the `:process` key of every activated process-stage bundle** for the event's `(tenant, community)`, resolved through the distribution API. There is no `:ingest` key in the new design: nothing consumes one, because ingest bundles no longer exist. The key builder still accepts `Stage::Ingest` so historical keys remain parseable by tooling, and `penguin-spine` refuses to *enqueue* onto an `:ingest` key with error `IngestStageNotWritable`.
+The action hop is **strictly per app bundle**:
 
-### 5.8 Ordering, scope and tenancy
+```
+waddles:t:{tenant}:c:{community|_tenant}:app:{app_id}:action      (stream, one group: {app_id})
+```
 
-- **Ordering:** per-bundle FIFO within a stage. No ordering guarantee across bundles, communities, or the process→action hop — unchanged from today.
-- **Tenant** is the deployment's `RUNNER_TENANT_SLUG`; **community** is `Option<String>` where `None` renders `_tenant`.
-- Tenant and community are sourced **exclusively** from the Valkey key the envelope was taken from, never from event payload. The `_target_app_id` escape hatch changes only the destination key's `app_id` segment, never its tenant or community segments — the invariant `stream_pipeline.py` documents at lines 251-286 is preserved bit for bit.
+A bundle's process output goes **only** to its own action stream, read by exactly one consumer group, `{app_id}`. The stage never reads another bundle's action stream on a bundle's behalf.
 
----
+**This is a data-leakage boundary, and the asymmetry with ingest is deliberate.** Ingest source streams carry shared, read-only platform data — the same public chat line every subscribed bundle is entitled to see — so many groups read one stream by design. An action envelope is different: it is a bundle's own output, and it routinely carries the results of that bundle's private state and its resolved config. One bundle must never observe another bundle's action entries, and the per-bundle stream plus single-group model is what makes that structural rather than conventional. §14.6 asserts it directly.
+
+**The one cross-bundle path is `_target_app_id`, and it is now a declared capability.** A process bundle that wants to route an event to another app must list that app in its manifest:
+
+```yaml
+routes_to: ["waddles.community.forums.default"]
+```
+
+| Rule | Behaviour |
+|---|---|
+| Declaration | Exact `app_id`s only. No wildcards, no prefixes. |
+| Install-time | hub-api validates that each target exists in `app_catalog` and renders "may send events to app X" on the consent screen (§9.7). |
+| Runtime | The stage compares the `_target_app_id` a bundle set against the **approved** `routes_to` set. A redirect to an undeclared or unapproved target is **dropped** — the event is not delivered anywhere — `waddles_route_denied_total{app_id,target}` is incremented, and the attempt is logged at WARN with both ids. |
+| Write path | The **stage** writes to the target's action stream. The source bundle never names a stream, never holds a Valkey connection, and cannot write to another bundle's stream even if the redirect is approved. |
+| Invariants | A redirect changes only the destination key's `app_id` segment; tenant and community still come from the stream the entry was read from, and the reserved payload key is popped off before the write. |
+
+### 5.10 Ordering, scope and tenancy
+
+- **Ordering:** per-stream FIFO per consumer group. Entries from one ingest source reach one bundle in the order they were written. No ordering guarantee across sources, across bundles, or across the process→action hop — the same guarantee the list design offered, now with an explicit name.
+- **Tenant** is the deployment's `RUNNER_TENANT_SLUG`; **community** is `Option<String>` where `None` renders as the literal `_tenant` segment.
+- Tenant and community are sourced **exclusively** from the stream key the entry was read from, never from event payload. `PlatformEvent.source` identifies the connection, never the tenancy. The `_target_app_id` escape hatch changes only the destination key's `app_id` segment — the invariant documented at `libs/flask_core/flask_core/stream_pipeline.py:251-286` is preserved bit for bit.
 
 ## 6. Data contracts
 
@@ -697,32 +774,34 @@ The queue-crossing shape is unchanged from `libs/flask_core/flask_core/stream_pi
 
 ### 6.2 Key scheme
 
-Base: `waddles:t:{tenant}:c:{community|_tenant}:app:{app_id}`.
+Scope prefix: `waddles:t:{tenant}:c:{community|_tenant}`. Per-bundle base: `{scope}:app:{app_id}`.
 
 | Purpose | Key | Valkey type | Written by | Read by |
 |---|---|---|---|---|
-| Stage queue | `{base}:{stage}` where `{stage}` ∈ `process`, `action` | list | ingest (process keys), process (action keys) | the owning stage |
-| Legacy ingest queue | `{base}:ingest` | list | nothing (writes refused: `IngestStageNotWritable`) | nothing; the builder still parses it for tooling |
-| In-flight lease | `{base}:{stage}:proc:{consumer_id}` | list | the taking consumer | its own consumer; the reaper |
-| Consumer index | `waddles:proc:idx:{stage}:{consumer_id}` | set | the taking consumer | the reaper |
-| Consumer heartbeats | `waddles:consumers:{stage}` | sorted set (score = epoch ms) | every consumer | the reaper |
-| Delivery counter | `waddles:deliv:{stage}` field `{sha256(raw_json)}` | hash, `SPINE_DELIVERY_TTL_S=3600` | the taking consumer | the taking consumer |
-| Bundle config | `{base}:cfg` | string (JSON) | the stage, on distribution refresh | the stage (host `context`) |
-| Bundle state | `{base}:state` | hash | host `kv` calls | host `kv` calls |
-| Dead letter | `waddles:dlq:{stage}` | list, `LTRIM`-capped | any stage | operators, replay tooling |
-| Twitch outbound relay | the provider-scoped key from `waddle_transports.transports.irc_relay.outbound_queue_key("twitch")` | list | svc-action's `relay` host call | svc-ingest's outbound drain |
+| **Ingest source stream** | `{scope}:src:{platform}:{source_id}:events` | stream, `MAXLEN ~ SPINE_STREAM_MAXLEN` | svc-ingest, once per event | every process bundle **granted** that stream, each through its own consumer group named `{app_id}` |
+| **Action stream** | `{scope}:app:{app_id}:action` | stream, `MAXLEN ~ SPINE_STREAM_MAXLEN` | svc-process | svc-action, one consumer group `{app_id}` |
+| Bundle config | `{scope}:app:{app_id}:cfg` | string (JSON) | the stage, on distribution refresh | the stage (host `context`) |
+| Bundle state | `{scope}:app:{app_id}:state` | hash | host `kv` calls | host `kv` calls |
+| Dead letter | `waddles:dlq:{stage}` | stream, `MAXLEN ~ SPINE_DLQ_MAXLEN` | any stage | operators, replay tooling |
+| Twitch outbound relay | the provider-scoped key from `waddle_transports.transports.irc_relay.outbound_queue_key("twitch")` | list (unchanged — a single-consumer relay, not a fan-out) | svc-action's `relay` host call | svc-ingest's outbound drain |
 
-`{community}` is the community slug, or the literal `_tenant` when the activation is tenant-wide — never omitted, so splitting a key on `:` always yields the same field count.
+Entry payload for every stream above is a single field, `env` (or `rec` for the DLQ), holding the JSON of §6.1.2 (or §6.3). Consumer groups are named by `app_id`; consumers within a group are named by pod identity.
+
+`{community}` is the community slug, or the literal `_tenant` when the activation is tenant-wide — never omitted, so splitting a key on `:` always yields the same field count. `{source_id}` is hub-api's stable identifier for one ingest configuration.
+
+**Removed by the Streams design** (they belonged to the list-based spine and have no successor): the per-stage queue key `{base}:{stage}`, the `{base}:ingest` key, the in-flight lease key `{base}:{stage}:proc:{consumer_id}`, the consumer index `waddles:proc:idx:*`, the consumer heartbeat sorted set `waddles:consumers:*`, and the delivery-counter hash `waddles:deliv:*`. The PEL replaces all six.
 
 ### 6.3 DLQ record
 
-One JSON object per `LPUSH` onto `waddles:dlq:{stage}`:
+One JSON object per `XADD` onto the `waddles:dlq:{stage}` stream, carried in a single field `rec`:
 
 ```json
 {
   "schema_version": 1,
   "stage": "process",
-  "key": "waddles:t:global:c:_tenant:app:waddles.bot.commands.default:process",
+  "key": "waddles:t:global:c:_tenant:src:twitch:tw-channelA:events",
+  "entry_id": "1757851200000-0",
+  "group": "waddles.bot.commands.default",
   "tenant": "global",
   "community": null,
   "app_id": "waddles.bot.commands.default",
@@ -744,6 +823,8 @@ One JSON object per `LPUSH` onto `waddles:dlq:{stage}`:
 | Field | Notes |
 |---|---|
 | `schema_version` | Always `1` for this spec. |
+| `entry_id` | The Valkey stream entry id the record came from — the stable de-duplication key, the same value handed to the bundle as `message-id`. |
+| `group` | The consumer group (`app_id`) that was processing the entry. |
 | `raw` | The original envelope JSON **as a string, verbatim**, so a malformed envelope is still replayable/inspectable. |
 | `artifact_digest` | `null` when the failure happened before a bundle was selected (e.g. `envelope_invalid`). |
 | `error.kind` | One of the ten values below; equals the `reason` label on `waddles_spine_dlq_total`. |
@@ -757,7 +838,7 @@ One JSON object per `LPUSH` onto `waddles:dlq:{stage}`:
 | `memory_limit` | The instance exceeded its memory cap. |
 | `host_call_denied` | A capability check refused the call (undeclared egress host, table outside `data.tables`, missing capability). |
 | `max_deliveries` | `deliveries` reached `SPINE_MAX_DELIVERIES`. |
-| `queue_overflow` | Drop-oldest trimming evicted the entry (§5.4). |
+
 | `bundle_disabled` | The bundle is disabled after three sandbox trips (§7.5). |
 | `executor_unavailable` | The executor was down past `EXECUTOR_UNAVAILABLE_READY_S` and the event could not be attempted. |
 
@@ -869,13 +950,14 @@ platform_compatibility:
 | `limits.egress_rps` | integer | no | `10` | Per-bundle egress rate; must be ≥ `1` and ≤ `EGRESS_RATE_LIMIT_RPS` (`10`) unless the operator raised the ceiling. |
 | `permissions` | list of string | no | `[]` | OIDC scopes (`resource:action`) the bundle's Feature requires; mirrors v1's `permissions`/`requires_scopes`. |
 | `config_schema` | map | no | `{}` | Per-key `{type, default}` documentation used by the activation UI. |
+| `routes_to` | list of string | no | `[]` | Exact `app_id`s this bundle may redirect events to via `_target_app_id` (§5.9). No wildcards. A redirect to an id outside the **approved** list is dropped and counted. |
 | `compatible_with` | list of string | no | `[]` | Other `app_id`s. |
 | `incompatible_with` | list of string | no | `[]` | Other `app_id`s; checked pairwise before activation (`detect_conflict`). |
 | `platform_compatibility` | map | no | `{tested_with: "", min_version: null, max_version: null}` | SemVer strings, parsed not enforced, exactly as v1. |
 
 #### 6.4.3 The `consumes` contract
 
-Bundles no longer live inside ingest, so ingest needs a declarative statement of which process bundles want an event. One Twitch chat line may be wanted by forty bundles, or by none; `consumes` is what makes that decision cheap and explicit instead of a fan-out to everything.
+Bundles no longer live inside ingest, so the system needs a declarative statement of which process bundles want which events. `consumes` is a **request**: hub-api resolves it at activation into an explicit list of granted ingest streams (§5.2, §6.8), and the stage reads only those. One Twitch chat line is written once and read by however many bundles subscribed to that source.
 
 ```yaml
 consumes:
@@ -889,6 +971,7 @@ consumes:
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `platform` | string | yes | One of `twitch`, `discord`, `slack`, `youtube`, `kick`, `waddles`, `custom:<name>`, or `*`. `custom:<name>` must name a platform registered for the tenant (§10.4). `*` requires the tenant setting `allow_wildcard_consumes` (rule V30). |
+| `source_id` | string | no | Restrict this rule to **one** configured ingest source (one Twitch channel, one Discord guild connection, one webhook source). Absent ⇒ every source of that platform in the tenant/community, including sources added later (§5.2 re-resolution). |
 | `event_types` | list of string | yes, ≥ 1 | Glob patterns over the `PlatformEvent.event_type` namespace — a dotted, lowercase namespace such as `chat.message`, `chat.message.deleted`, `channel.follow`, `channel.subscribe`, `stream.online`, `stream.offline`, `member.join`. `*` matches one segment, `**` matches one or more; a bare `*` therefore matches only single-segment types and `**` is the true catch-all, which also requires `allow_wildcard_consumes`. |
 | `filters.command_prefix` | list of string | no | Match when `event.payload.text` starts with any listed prefix, after trimming leading whitespace, compared case-insensitively. This is the filter that stops a `!sr`-only bundle being woken by every chat line. |
 | `filters.actor_roles` | list of string | no | Match when `event.payload.actor_roles` (normalized by ingest) intersects the list. Values: `broadcaster`, `moderator`, `vip`, `subscriber`, `member`, `everyone`. |
@@ -897,9 +980,10 @@ Semantics, fixed so the algorithm in §10.6 is unambiguous:
 
 - A bundle matches an event when **any** of its `consumes` rules matches (rules are ORed).
 - Within one rule, `platform`, `event_types` and every present `filters` key must all match (ANDed). An absent filter key is not a constraint.
-- Filters are evaluated by **ingest**, against the normalized `PlatformEvent`, before anything is enqueued. They are deliberately restricted to two cheap, allocation-free checks; anything richer belongs inside the bundle's `transform`.
-- Filters are an **optimization, not a security boundary**. A bundle still validates its own input; ingest never promises that a delivered event satisfied a filter it did not declare.
-- `consumes` is part of the capability surface shown at install/approval time, next to `egress` and `data.tables` — it is how an operator sees what a bundle will be woken by.
+- `platform` and `source_id` determine **which streams the bundle is granted** (resolved once, at activation). `event_types` and `filters` are evaluated **consumer-side**, by the stage, on each entry it reads: a non-match is acked immediately and never reaches the executor (§5.3).
+- Filters are an **optimization, not a security boundary**. A bundle still validates its own input; the stage never promises that a delivered event satisfied a filter the bundle did not declare.
+- **Why the wildcard gate still exists.** Under Streams a wildcard no longer multiplies *write* cost — the event is written once regardless. It multiplies **consumer** cost: `platform: "*"` grants a group on every stream in the tenant, so the stage wakes for and filters every event in the tenant on that bundle's behalf, and every such group's PEL must be tracked. That is the cost `allow_wildcard_consumes` (default false) exists to make deliberate.
+- `consumes` is part of the capability surface shown at install/approval time, next to `egress` and `data.tables`, rendered as the concrete grant list (§5.2) rather than as the raw rule — an operator approves "reads Twitch #channelA, Discord guild X", not a glob.
 
 #### 6.4.4 Validation rules
 
@@ -941,6 +1025,7 @@ Two further checks run against the **compiled artifact**, not the YAML, and use 
 | V28 | An `action` stage declares no `consumes` | `consumes_on_action_stage` |
 | V29 | Every `consumes[].platform` is a known platform, or `custom:<name>` naming a platform registered for the tenant, or `*`; every `event_types` entry is a valid glob over the dotted `event_type` namespace; every `filters` key is one of `command_prefix`, `actor_roles`, with values of the documented shape | `unknown_consumes_platform` / `invalid_event_type_pattern` / `invalid_consumes_filter` |
 | V30 | A `consumes` rule using `platform: "*"` or an `event_types` entry of `**` is accepted only when the tenant setting `allow_wildcard_consumes` is true | `wildcard_consumes_not_allowed` |
+| V30a | Every `routes_to` entry is a syntactically valid `app_id`, contains no wildcard, and names a bundle present in `app_catalog` | `invalid_routes_to_target` / `unknown_routes_to_target` |
 | V31 | The component imports nothing outside the WIT world's import list **plus the denying `wasi:sockets` stub set** (§6.5): no other `wasi:*` interface, and no `wasi:filesystem` beyond the read-only scratch preopen. A component importing `wasi:sockets/*` must instantiate cleanly against the stubs — Python-built components always do; a Tier 2 upload that does not is rejected | `forbidden_host_import` |
 
 ### 6.5 The WIT world
@@ -1005,6 +1090,10 @@ interface context {
     app-id: string,
     feature: string,
     version: string,
+    /// The Valkey stream entry id of the event being processed. Stable and
+    /// unique per delivery target; the de-duplication key a bundle records
+    /// to stay idempotent under at-least-once redelivery (Sec 5.4).
+    message-id: string,
     /// Resolved 3-tier config (activation > tenant availability > bundle default),
     /// as canonical JSON object text.
     config-json: string,
@@ -1277,6 +1366,39 @@ A `hello` reporting `runtime: "runc"` is refused with `error.code = "UNSANDBOXED
 `entrypoint` is retained verbatim for provenance and for the admin UI; the Rust stages **do not** dispatch on it — dispatch is by WIT export. A row whose `artifactDigest` is `null` (a registration without a compiled artifact) is skipped by the stage and counted in `waddles_bundle_skipped_total{reason="no_artifact"}`.
 
 **Polling behaviour is unchanged:** every `POLL_INTERVAL_S` (5.0 s), exponential backoff on failure (base 1.0 s, cap 60.0 s), and a hub-api outage degrades gracefully to the last-known-good bundle set rather than raising.
+
+A `stage=process` row additionally carries the bundle's resolved **stream grants**, which is what the stage reads from:
+
+```json
+"grants": [
+  {"grantId": 118, "stream": "waddles:t:acme:c:main:src:twitch:tw-channelA:events",
+   "platform": "twitch", "sourceId": "tw-channelA", "label": "Twitch #channelA"},
+  {"grantId": 119, "stream": "waddles:t:acme:c:main:src:discord:dg-guildX:events",
+   "platform": "discord", "sourceId": "dg-guildX", "label": "Discord guild X"}
+]
+```
+
+The stage reads **only** the streams listed here. A grant removed by a revocation or a deactivation disappears from the next poll, and the stage stops reading that stream within one `POLL_INTERVAL_S`. An empty `grants` array means the bundle is activated but currently reads nothing — a legitimate state (every grant revoked), reported as `waddles_bundle_grants{app_id}` = `0` rather than as an error.
+
+### 6.8 `app_stream_grants`
+
+One row per (bundle, granted stream), written by hub-api at activation and re-resolution, deleted at revocation and deactivation.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigserial | Primary key; the `grantId` in the distribution response and the revoke endpoint |
+| `tenant_id` | integer | FK `tenants(id)` |
+| `community_id` | integer, nullable | FK `communities(id)`; `NULL` = tenant-wide, mirroring the `_tenant` key segment |
+| `app_id` | text | FK `app_catalog(app_id)` |
+| `stream_key` | text | The fully rendered Valkey stream key |
+| `platform` | text | Denormalized for display and filtering |
+| `source_id` | text | The ingest source this grant covers |
+| `label` | text | Human-readable rendering shown to the admin ("Twitch #channelA") |
+| `granted_by` | uuid, nullable | The approving user's UUID; `NULL` for grants created by automatic re-resolution |
+| `granted_at` | timestamptz | |
+| `revoked_at` | timestamptz, nullable | Set instead of deleting, so revocations remain auditable |
+
+`UNIQUE (app_id, stream_key) WHERE revoked_at IS NULL`. No PII: the approver is a UUID into the single `users` identity table, never a name or address.
 
 ---
 
@@ -1611,9 +1733,21 @@ Result: `scanStatus: "not_scanned"`. That value is **permanent for the life of t
 
 ### 9.5 Activation and rollout
 
-Activation is unchanged: a row in `app_activations` (community-scoped) or `app_tenant_availability` (tenant-wide), with the same 3-tier config precedence. What changes is that the distribution API now also hands the pod the digest and the capability-bearing manifest subset, so a pod can go from "this bundle is activated" to "this exact artifact is loaded" without a second lookup.
+Activation is unchanged in shape: a row in `app_activations` (community-scoped) or `app_tenant_availability` (tenant-wide), with the same 3-tier config precedence. What changes is that the distribution API now also hands the pod the digest, the capability-bearing manifest subset, and the resolved stream grants, so a pod can go from "this bundle is activated" to "this exact artifact reads exactly these streams" without a second lookup.
 
-Convergence bound after an activation or a rollback: one distribution poll (≤ 5 s) + one bucket poll (≤ 60 s) = **≤ 65 seconds**.
+Activation additionally performs the grant resolution of §5.2: expand `consumes` against the configured ingest sources, write `app_stream_grants` rows, and `XGROUP CREATE ... MKSTREAM` (BUSYGROUP-tolerant) on each granted stream. Deactivation destroys those groups and marks the rows revoked.
+
+Convergence bound after an activation, a revocation or a rollback: one distribution poll (≤ 5 s) + one bucket poll (≤ 60 s) = **≤ 65 seconds**.
+
+### 9.6 Grant management (hub-api)
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v1/apps/{app_id}/grants` | List the bundle's stream grants for a tenant/community, with labels — the same rendering the install screen shows |
+| `POST /api/v1/apps/{app_id}/grants/resolve` | Re-run resolution (idempotent); called automatically when an ingest source is added or removed, and available to an admin |
+| `DELETE /api/v1/apps/{app_id}/grants/{grantId}` | Revoke one grant without uninstalling or deactivating the bundle: sets `revoked_at`, destroys the consumer group, writes an audit entry with the actor's UUID |
+
+All three require an admin scope; every mutation is audit-logged. Revoking the last grant leaves the bundle activated and reading nothing, which is a legitimate configuration, not an error.
 
 ---
 
@@ -1698,29 +1832,21 @@ Optional query parameter `community=<slug>` sets the envelope community; absent 
 - **Constant-time comparison** (`subtle::ConstantTimeEq`) for every signature check; a length mismatch still performs the comparison.
 - **Activation resolution** is via the distribution API for every route, so per-community activation is honoured uniformly (§15.3).
 - **Rejection metrics** carry `reason` values drawn from the error-code column of §10.1, so a dashboard can distinguish a misconfigured sender from an attack.
-### 10.6 Fan-out: which process bundles receive an event
+### 10.6 One write per event
 
-Bundles no longer run inside ingest, so ingest must decide, per event, which activated process bundles want it. The decision is driven entirely by the `consumes` contract of §6.4.3.
+Ingest does **not** fan out. It receives or polls each event once, normalizes it, and writes it once onto the stream belonging to the ingest source it came from:
 
 ```
-for each normalized PlatformEvent E at (tenant, community):
-  1. bundles ← activated process-stage bundle set for (tenant, community),
-               read from the distribution-API cache (refreshed on the existing
-               5 s poll; a hub-api outage degrades to last-known-good, never empty-by-error)
-  2. matched ← [ b for b in bundles if any rule in b.manifest.consumes matches
-                 E.platform AND E.event_type AND every declared filter ]
-  3. if matched is empty:
-        waddles_ingest_fanout_zero_total{platform,event_type} += 1        # counted, never DLQ'd
-     else:
-        one StageEnvelope per matched bundle, LPUSHed onto that bundle's own
-        …:app:{app_id}:process key, in a single pipelined MULTI
-  4. waddles_ingest_fanout_matches{platform,event_type}.observe(len(matched))
+for each normalized PlatformEvent E from source S at (tenant, community):
+  XADD waddles:t:{tenant}:c:{community|_tenant}:src:{S.platform}:{S.source_id}:events
+       MAXLEN ~ {SPINE_STREAM_MAXLEN} * env {StageEnvelope(E).json}
+  waddles_stream_events_total{platform,source_id} += 1
 ```
 
-- **One round trip regardless of breadth.** Forty matching bundles are forty `LPUSH`es inside one `MULTI`/`EXEC`, not forty round trips; the envelope JSON is serialized once and reused.
-- **Zero matches is normal, not an error.** An event nobody subscribed to is counted and discarded — it is not a failure, so it never reaches a DLQ, which is reserved for events that were accepted and then failed.
-- **Matching is per `(platform, event_type, filters)` only.** Tenant and community are already fixed by the resolved bundle set; a bundle can never widen its scope through `consumes`.
-- **Per-bundle attribution:** each matched bundle increments `waddles_consumes_matched_total{app_id}`, so an operator can see which bundle a load spike belongs to.
+- **Ingest holds no subscriber list and consults no manifest.** Which bundles read the stream is decided at activation, by hub-api's grant resolution (§5.2), and enforced by the process stage. Ingest's cost per event is one `XADD` whether the stream has zero subscribers or forty.
+- **No zero-match case exists at write time.** An event nobody subscribed to is simply an entry with no consumer group reading it; it ages out under `MAXLEN ~`. Nothing is counted as a drop and nothing reaches a DLQ, which stays reserved for events that were accepted by a bundle and then failed.
+- **The stream is chosen from `PlatformEvent.source`, never from payload.** `source.platform` and the source's `source_id` name the stream; tenant and community come from the ingest configuration, exactly as before.
+- The one write is the only Valkey operation on the ingest hot path, which is what keeps a chat-heavy channel from costing ingest anything proportional to the number of installed bundles.
 
 - **Ingest's own outbound connections are infrastructure, not bundle egress.** The platform sockets and REST calls (Twitch IRC and EventSub, the Discord gateway, Slack Socket Mode, the YouTube poll, Kick), the distribution-API poll to hub-api, and the Valkey connections are all operator-configured and compiled-in; none of them is evaluated by the bundle SSRF guard, and all of them may resolve to private address space (§8.5). svc-ingest links no executor and serves no bundle `http` capability at all, so the guard has no subject in this service.
 
@@ -2011,9 +2137,10 @@ Existing keys keep their names and defaults. New keys:
 | `sandbox.installer.enabled` | `false` | Optional node installer DaemonSet; §12.2.2 |
 | `sandbox.installer.runscVersion` / `.runscSha256` / `.shimSha256` | empty | Pinned from `build/tool-versions.env`; empty fails rendering when the installer is enabled |
 | `sandbox.installer.nodeLabel` | `waddles.io/gvisor=ready` | Applied by the installer; used as the executor/compiler `nodeSelector` when the installer is enabled |
-| `pipeline.spine.drainIdleSleepMs` | `100` | Idle sleep between empty drain passes |
-| `pipeline.spine.leaseTtlMs` | `30000` | Lease TTL |
-| `pipeline.spine.stageMaxLen` | `10000` | Queue bound |
+| `pipeline.spine.streamMaxLen` | `100000` | `MAXLEN ~` bound on every event stream |
+| `pipeline.spine.readCount` / `.blockMs` | `64` / `1000` | `XREADGROUP COUNT` / `BLOCK` |
+| `pipeline.spine.claimIdleMs` / `.claimIntervalMs` | `30000` / `15000` | `XAUTOCLAIM` threshold and cadence |
+| `pipeline.spine.pelAlert` | `5000` | PEL size that raises an operator alert for one group |
 | `pipeline.spine.dlqMaxLen` | `10000` | DLQ bound |
 | `pipeline.spine.maxDeliveries` | `5` | Redelivery cap |
 | `bundles.allowPrebuilt` | `true` | Seeds hub-api's global-admin setting `bundles.allow_prebuilt`; the DB setting is authoritative at runtime |
@@ -2172,14 +2299,15 @@ Defaults are the values a service uses when the variable is unset. Every secret-
 | Var | Default |
 |---|---|
 | `SPINE_CONSUMER_ID` | pod name, else `{hostname}-{uuid-v4}` |
-| `SPINE_DRAIN_IDLE_SLEEP_MS` | `100` |
-| `SPINE_LEASE_TTL_MS` | `30000` |
-| `SPINE_LEASE_HEARTBEAT_MS` | `5000` |
-| `SPINE_REAPER_INTERVAL_MS` | `15000` |
-| `SPINE_STAGE_MAXLEN` | `10000` |
+| `SPINE_STREAM_MAXLEN` | `100000` (approximate, `MAXLEN ~`) |
+| `SPINE_READ_COUNT` | `64` |
+| `SPINE_BLOCK_MS` | `1000` |
+| `SPINE_CLAIM_IDLE_MS` | `30000` |
+| `SPINE_CLAIM_INTERVAL_MS` | `15000` |
+| `SPINE_STATS_INTERVAL_MS` | `10000` |
+| `SPINE_PEL_ALERT` | `5000` |
 | `SPINE_DLQ_MAXLEN` | `10000` |
 | `SPINE_MAX_DELIVERIES` | `5` |
-| `SPINE_DELIVERY_TTL_S` | `3600` |
 | `SOCKET_LEASE_TTL_MS` / `SOCKET_LEASE_RENEW_MS` | `30000` / `10000` |
 
 **Executor and bundles** (svc-process, svc-action)
@@ -2263,17 +2391,23 @@ Histograms first — load and latency are the signals most often missing.
 | `waddles_intake_request_seconds` | histogram | `route`, `status` | Intake handler latency |
 | `waddles_egress_request_seconds` | histogram | `app_id`, `host`, `status` | Guarded egress call duration |
 | `waddles_spine_dlq_total` | counter | `stage`, `reason` | DLQ writes; `reason` = the record's `error.kind` |
-| `waddles_spine_dropped_total` | counter | `stage` | Drop-oldest evictions (queue overflow) |
-| `waddles_spine_requeued_total` | counter | `stage`, `cause` (`reaper`\|`retry`) | Lease re-queues |
+
+
 | `waddles_egress_denied_total` | counter | `app_id`, `reason` | One per §8.2 denial reason |
 | `waddles_host_call_denied_total` | counter | `app_id`, `capability` | Ungranted or out-of-allowlist host call |
 | `waddles_bundle_digest_mismatch_total` | counter | `app_id` | Refused load on digest/signature disagreement |
 | `waddles_sandbox_trip_total` | counter | `app_id`, `limit` (`timeout`\|`memory`\|`trap`\|`denied`) | Sandbox trips |
 | `waddles_bundle_skipped_total` | counter | `reason` | Distribution rows the stage could not use (e.g. `no_artifact`) |
 | `waddles_intake_rejected_total` | counter | `source`, `reason` | Every intake rejection, reason from §10.1 |
-| `waddles_ingest_fanout_matches` | histogram | `platform`, `event_type` | Number of process bundles matched per event (§10.6) |
-| `waddles_ingest_fanout_zero_total` | counter | `platform`, `event_type` | Events no activated bundle subscribed to — counted, never DLQ'd |
-| `waddles_consumes_matched_total` | counter | `app_id` | Per-bundle match attribution |
+| `waddles_stream_events_total` | counter | `platform`, `source_id` | Entries written by ingest, one per event (§10.6) |
+| `waddles_stream_trimmed_total` | counter | `stream` | Entries evicted by `MAXLEN ~` trimming |
+| `waddles_stream_claimed_total` | counter | `app_id` | Entries recovered by `XAUTOCLAIM` from a dead consumer |
+| `waddles_consumer_skipped_total` | counter | `app_id`, `reason` | Entries read and acked without an executor call (`event_type`, `filter`) |
+| `waddles_consumes_matched_total` | counter | `app_id` | Entries that matched and were handed to the executor |
+| `waddles_group_lag` | gauge | `app_id`, `stream` | Undelivered entries for that group, from `XINFO GROUPS` |
+| `waddles_group_pending` | gauge | `app_id`, `stream` | PEL size for that group — the stuck-bundle signal |
+| `waddles_bundle_grants` | gauge | `app_id` | Streams the bundle is currently granted (`0` is legitimate) |
+| `waddles_route_denied_total` | counter | `app_id`, `target` | `_target_app_id` redirects dropped for being outside the approved `routes_to` set |
 | `waddles_executor_restarts_total` | counter | `stage`, `cause` | Executor restarts |
 | `waddles_bundles_loaded` | gauge | `stage` | Components currently resident |
 | `waddles_bundle_disabled` | gauge | `app_id` | `1` while disabled by trips |
@@ -2324,7 +2458,7 @@ Every new capability sits behind a PostHog flag, defaulted OFF until validated, 
 | `waddles.core.generic-intake` | `POST /intake/webhook/{tenant}/{source}` and `POST /intake/events`. |
 | `waddles.core.prebuilt-bundles` | Accepting `artifact: prebuilt` uploads, in addition to the `bundles.allow_prebuilt` admin setting. Both must permit it. |
 | `waddles.core.bundle-egress` | The `http` capability. OFF ⇒ every egress call returns `denied("feature_disabled")`. |
-| `waddles.core.spine-at-least-once` | Lease-based take/ack and the reaper. OFF ⇒ plain take without a lease, for an emergency rollback of just this mechanism. |
+| `waddles.core.spine-at-least-once`  Grant-scoped `XREADGROUP`/`XACK` with `XAUTOCLAIM` recovery. OFF ⇒ the stage reads without claiming abandoned entries, for an emergency rollback of just the recovery mechanism. |
 
 The `--dev` flag convention applies unchanged: an undocumented flag unlocking Professional/Enterprise features for single-user evaluation, gated by the three fail-closed conditions (PenguinTech-controlled domain, ≤ 1 user in the identity table, user creation capped at 1 while active), with the mandatory stderr banner. It grants nothing in this subsystem, since every flag here is `free`-tier, but the services still implement it identically to the rest of the platform.
 
@@ -2340,7 +2474,8 @@ A single committed fixture set is the contract between the Python and Rust imple
 |---|---|---|
 | `envelopes/valid/*.json` | ≥ 20 `StageEnvelope` documents covering: tenant-wide (`community: null`), community-scoped, `target_app_id` set, `trace_context` set and absent, empty `payload`, unicode payload, maximum-length `app_id` | Both: deserialize → re-serialize → byte-identical |
 | `envelopes/invalid/*.json` | ≥ 25 documents, one per rejection reason: missing field, wrong type, unknown top-level key, bad stage, legacy pre-`event` shape, non-object payload, empty `platform` | Both: deserialization **fails**, with the same reason classification |
-| `keys/*.json` | `{tenant, community, app_id, stage} → expected key string`, including the `_tenant` rendering and every stage | Both: key builders produce the exact string |
+| `keys/*.json` | `{tenant, community, platform, source_id} → expected source-stream key` and `{tenant, community, app_id} → expected action-stream, cfg and state keys`, including the `_tenant` rendering | Both: key builders produce the exact string |
+| `entries/*.json` | Stream-entry fixtures: `{field: "env", value: <envelope JSON>}` for event streams and `{field: "rec", value: <DLQ record>}` for the DLQ | Both: the entry payload is the envelope JSON verbatim under a single field — no second encoding layer, no base64 |
 | `dlq/*.json` | One record per `error.kind` | Both: serialize/deserialize round-trip, field-for-field |
 | `manifests/*.yaml` | One valid `bundle.yaml` v2 per language, plus one per rejection rule V1–V26 with its expected `reason` code | `penguin-bundle-host::manifest` and hub-api's install path |
 
@@ -2348,14 +2483,16 @@ CI fails if either side skips a fixture: each suite asserts `fixtures_examined =
 
 ### 14.2 `penguin-spine`
 
-- At-least-once: take → kill the process before ack → reaper re-queues → the event is delivered again exactly once more.
-- Reaper concurrency: three simulated replicas reaping the same dead consumer re-queue each entry exactly once.
-- Redelivery cap: the sixth take of the same envelope goes to the DLQ with `max_deliveries`, not back onto the queue.
-- Queue bounding: pushing `SPINE_STAGE_MAXLEN + 50` envelopes leaves exactly `SPINE_STAGE_MAXLEN` on the key, writes 50 DLQ records with `queue_overflow`, and advances `waddles_spine_dropped_total` by 50.
-- DLQ capping: `LTRIM` keeps exactly `SPINE_DLQ_MAXLEN`.
-- **Client rule 1:** constructing a `BlockingPopClient` with `RELAY_BLOCK_TIMEOUT_S >= DRAIN_SOCKET_TIMEOUT_S` fails at startup with an error naming both values.
-- **Client rule 2:** issuing `BLMOVE`/`BRPOP`/`BLMPOP` on the shared pool is refused; and a test drives a cancelled blocking pop followed by a lease `SET` on the *same* logical client to prove the dedicated connection prevents the stale-reply hand-off.
-- `Stage::Ingest` enqueue is refused with `IngestStageNotWritable`.
+- At-least-once: read → kill the consumer before `XACK` → another consumer's `XAUTOCLAIM` recovers the entry after `SPINE_CLAIM_IDLE_MS` → it is delivered again exactly once more, and the PEL is empty afterwards.
+- Claim concurrency: three simulated replicas running `XAUTOCLAIM` against the same dead consumer each claim disjoint entries; no entry is processed twice concurrently.
+- Redelivery cap: the sixth delivery of the same entry goes to the DLQ with `max_deliveries` and is `XACK`ed, not claimed again.
+- Group isolation: a stuck group's PEL grows while a healthy group on the **same stream** keeps acking — the property the per-bundle group exists for.
+- Fan-in: one `XADD` is observed by every group on the stream, each exactly once; adding a group does not change the writer's cost.
+- Stream bounding: writing `SPINE_STREAM_MAXLEN + 50000` entries leaves the stream within the approximate bound and advances `waddles_stream_trimmed_total`; the test asserts trimming happened, not an exact length, because `MAXLEN ~` is approximate by design.
+- DLQ capping: the DLQ stream stays within `SPINE_DLQ_MAXLEN`.
+- Grant enforcement: a `SpineClient` asked to read a stream outside its grant list refuses with `StreamNotGranted`, even when the consumer group exists.
+- **Client rule 1:** constructing a blocking-read client with `SPINE_BLOCK_MS`/`RELAY_BLOCK_TIMEOUT_S` not strictly less than `DRAIN_SOCKET_TIMEOUT_S` fails at startup with an error naming both values.
+- **Client rule 2:** issuing `XREADGROUP ... BLOCK`, `BRPOP` or `BLMOVE` on the shared pool is refused; and a test drives a cancelled blocking read followed by an `XACK` on the *same* logical client to prove the dedicated connection prevents the stale-reply hand-off.
 
 Backends: `redis-rs` against a real Valkey container for integration tests; no mock-only coverage of the command semantics.
 
@@ -2425,6 +2562,9 @@ Each is a dedicated test whose **pass condition is the failure of the attack**, 
 | 12d | A workload other than the executor dials the stage's host-API port | Denied by the NetworkPolicy; a connection presenting a wrong or unsigned certificate is additionally refused at the TLS layer and counted |
 | 13 | Guest sets a module-level variable and is invoked again | The variable is reset — no state survives a call |
 | 14 | Bundle A attempts to read bundle B's KV namespace or config | Keys are namespaced per `app_id`; the read returns none and is counted |
+| 14a | Bundle A's dispatch observes bundle B's action entries | Never: each action stream has exactly one consumer group and the stage reads only the bundle's own stream. The test writes to B's action stream and asserts A's dispatch is never invoked and A's group never appears on B's stream (§5.9) |
+| 14b | A process bundle sets `_target_app_id` to an app outside its approved `routes_to` | The redirect is dropped, nothing is written to the target's stream, `waddles_route_denied_total{app_id,target}` +1, WARN logged with both ids |
+| 14c | A process bundle whose manifest requests only `discord` is delivered Twitch entries | Never: the stage reads only granted streams, asserted with a Twitch consumer group deliberately pre-created on the Twitch stream so the test proves the stage's grant check, not the group's absence (§5.2) |
 | 15 | Executor sends a frame larger than `EXECUTOR_MAX_FRAME_BYTES` | Stage kills and restarts the executor, `waddles_executor_restarts_total` +1 |
 | 16 | The executor binary links a networking or database crate | `cargo tree -p bundle-executor` contains no `reqwest`, `redis`, `deadpool-redis`, `sea-orm` or `sqlx`; the CI check fails the build if any appears, and reports the number of crates examined |
 
@@ -2500,13 +2640,16 @@ Three user-visible changes are not pure ports:
 
 ### 15.4 Data migration
 
-None for the spine: the key scheme and envelope JSON are unchanged, so in-flight events survive the cut-over. Database migrations are additive:
+The envelope JSON is unchanged, but the **transport is not**: the list-based process keys are replaced by per-ingest-source streams (D23). In-flight events therefore do **not** survive the cut-over, which is acceptable and is stated rather than glossed: the cut-over is a clean-cut deploy (D3), the pipeline is drained before it, and a chat event that is seconds old has no replay value. The action hop keeps its key shape but becomes a stream, so the same applies there. `waddles:dlq:*` is re-created as a stream; any list-shaped DLQ content from a pre-cut-over alpha is exported to a file by the migration script before the key is deleted, with the record count printed.
+
+Database migrations are additive:
 
 | Migration | Adds |
 |---|---|
 | `app_catalog` version columns | `artifact_digest`, `artifact_kind`, `language`, `scan_status`, `manifest_json` |
 | `custom_platforms` | per-tenant registered platform names for the REST intake |
-| `intake_sources` | `{tenant, source, platform, secret_ref, community, mapping, enabled}` |
+| `intake_sources` | `{tenant, source_id, source, platform, secret_ref, community, mapping, enabled}` — `source_id` is the stable id that names the source's stream |
+| `app_stream_grants` | §6.8 — one row per (bundle, granted stream) |
 | `bundle_scan_findings` | per-version scanner findings summary |
 | `global_settings` seed | `bundles.allow_prebuilt = true` |
 | Per-bundle role bootstrap | the RLS policies on bundle-owned tables |
@@ -2537,7 +2680,7 @@ M1.5 runs alongside M1 and must finish before M2's compiler work begins — the 
 
 | Deliverable | Done when |
 |---|---|
-| `penguin-spine` | Key builders, envelope types, take/ack/requeue, reaper, DLQ, bounding, `BlockingPopClient` — all §14.1/§14.2 tests green, coverage ≥ 90 % |
+| `penguin-spine` | Key builders, envelope types, `XADD`/`XREADGROUP`/`XACK`/`XAUTOCLAIM`, group management, grant-scoped reads, DLQ, `MAXLEN ~` bounding, the dedicated blocking-read client — all §14.1/§14.2 tests green, coverage ≥ 90 % |
 | `penguin-bundle-host::wire` + `::manifest` | Frame codec and the 26 manifest rules, golden manifests green |
 | `penguin-logging` | Sanitization ported verbatim, OTel logs/metrics/traces wired, health/metrics surface, `transport:` reporting |
 | `penguin-connectors` (5 crates) | Receivers, senders and signature verification per platform, against recorded fixtures |
@@ -2672,7 +2815,10 @@ The constraints below bind this design. They are summarized, not restated in ful
 | R4 | **wasmtime version pinning versus precompiled artifacts.** A precompiled component is only loadable by the exact engine that produced it; a chart upgrade that changes the engine invalidates every cached artifact at once. | Medium: a slow, thundering-herd recompilation window after an upgrade. | Cache keyed `{digest}-{wasmtime_abi}`; a mismatched artifact is discarded and recompiled, never loaded. Precompilation is measured (`waddles_bundle_load_seconds{phase="precompile"}`), and a rolling upgrade recompiles pod by pod rather than all at once. | Measure cold-start recompilation for the full first-party bundle set and size `EXECUTOR_PRECOMPILE_DIR` accordingly. |
 | R5 | **Valkey TLS + ACL rollout.** The live ACL scheme today is a flat set of legacy per-module users with no `svc-*` entries, and the chart's Secret defines only `REDIS_URL`. Turning on TLS and per-service ACL users touches every service at once, hub-api included. | Medium: a misconfigured ACL is an outage, not a degradation. | The chart provisions the ACL file, the CA and both `VALKEY_URL` and `REDIS_URL`; startup refuses a plaintext or unauthenticated URL loudly rather than connecting insecurely by accident; `security.transport.*` gives operators a documented, visible opt-out (D20). | Bring the alpha stack up with TLS + per-service ACLs before M3 starts, so the three parallel services develop against the final configuration. |
 | R6 | **Schedule versus the v3.0 MVP.** This lands before the MVP (D2) and is a four-service rewrite plus a new sandbox runtime. | High: it is on the critical path. | M3/M4/M5 are parallel and disjoint by service, so the long pole is `max(M3, M4, M5)` rather than their sum. M1 and M2 are deliberately front-loaded because everything else depends on them. Any slip is visible early: M2's completion criterion (every existing bundle compiling and passing its own tests) is the real schedule signal. | Track M2's bundle-compilation count as the weekly schedule metric. |
-| R7 | **At-least-once changes bundle assumptions.** A bundle that was accidentally relying on at-most-once can now double-apply an effect. | Medium. | Idempotency review of every first-party bundle is an M2 deliverable; `waddles_spine_requeued_total` makes redelivery visible; `SPINE_MAX_DELIVERIES` bounds the blast radius. | Covered by the M2 review. |
+| R10 | **hub-api owns consumer-group lifecycle.** Groups are created at activation and destroyed at deactivation/revocation, and re-resolved when an ingest source appears. A hub-api bug or a partial failure leaves a stream with no group (events read by nobody) or an orphan group (PEL growing with no reader). | Medium: silent under-delivery is worse than a loud failure. | Every create is `BUSYGROUP`-tolerant and **idempotent**, and the stage re-issues it on every distribution refresh, so a missing group self-heals within one poll. Orphan groups surface as `waddles_group_pending` growing on a group whose `app_id` is not in any activation — a reconciliation job in hub-api destroys those hourly and logs each one. | Reconciliation covered by an integration test that deletes a group behind the stage's back and asserts recovery. |
+| R11 | **PEL growth from a stuck bundle.** A bundle that neither acks nor fails leaves entries pending indefinitely, and the PEL is memory. | Medium, and bounded. | `XAUTOCLAIM` reclaims after `SPINE_CLAIM_IDLE_MS`; `SPINE_MAX_DELIVERIES` sends a repeatedly-failing entry to the DLQ and acks it; the three-strike disable (§7.5) stops the bundle entirely after three trips. `waddles_group_pending` alerts at `SPINE_PEL_ALERT` per group. The isolation is the point: one stuck bundle's PEL never affects another group. | Load test: one deliberately-hanging bundle alongside four healthy ones on the same stream; assert the healthy groups' lag stays flat and the stuck one is disabled. |
+| R12 | **Valkey memory for `MAXLEN`.** Streams retain entries until trimmed, so memory is roughly `sources × SPINE_STREAM_MAXLEN × entry size`, where the list design retained only undelivered work. | Medium: a sizing question, not a correctness one. | `MAXLEN ~ 100000` per source is the default and is a chart value; the e2e run records bytes per entry so the figure is measured, not guessed, and the chart docs carry the per-source estimate. Trimming is counted, and `maxmemory-policy` on the Valkey deployment is documented as `noeviction` so a memory ceiling fails loudly rather than silently dropping keys. | Measure entry size and per-source memory during the alpha e2e run; publish the sizing table. |
+| R7 | **At-least-once changes bundle assumptions.** A bundle that was accidentally relying on at-most-once can now double-apply an effect. | Medium. | Idempotency review of every first-party bundle is an M2 deliverable; `waddles_stream_claimed_total` makes redelivery visible; `SPINE_MAX_DELIVERIES` bounds the blast radius. | Covered by the M2 review. |
 
 ---
 
@@ -2699,7 +2845,7 @@ Where the approved design left a detail open, the option most consistent with th
 | A1 | **One WIT world (`stage`) exporting both stage interfaces**, with an auto-generated stub returning `unsupported-stage` for the stage a bundle does not implement. | The approved text names a single world, `waddle:bundle/stage@1.0.0`, with both exports. WIT worlds require all exports to be present, so a stub is the only way to have one world and single-stage bundles. |
 | A2 | **Open-ended JSON crosses the WIT boundary as canonical JSON text** (`payload-json`, `config-json`, `message-json`, `fields-json`). | WIT has no dynamic value type; the alternative (a hand-rolled variant tree) would change the shape bundles see, violating D7. |
 | A3 | **Executor frames are `u32` big-endian length + UTF-8 JSON, bidirectional with correlation ids**, carried over one mTLS connection per stage; the executor dials, and host calls flow executor→stage on the same connection. | The approved text fixes a length-prefixed message protocol and a credential-less executor; moving the executor to its own Deployment replaced the Unix socket with an mTLS port, and the host capabilities remain stage-side, which makes the connection bidirectional. JSON keeps golden fixtures trivial at chat volumes. |
-| A4 | **Queue-overflow evictions are written to the DLQ** with `error.kind = "queue_overflow"`. | The approved text pairs "drop-oldest + metric" with a DLQ; silently discarding an envelope that was successfully accepted would contradict "never silently fail". |
+| A4 | **Stream trimming is counted, not dead-lettered.** `MAXLEN ~` evictions increment `waddles_stream_trimmed_total`; they do not produce DLQ records. *(Supersedes the list design's queue-overflow→DLQ rule: under Streams an entry can be trimmed while several groups have already consumed it, so a DLQ record would misreport a successful delivery as a loss. The signal that a consumer actually fell behind is its group lag, which is alerted on separately.)* | The approved text pairs bounding with a metric; the DLQ is reserved for events a bundle accepted and then failed. |
 | A5 | **Hook assignment** (§4.2): the moderation gate, moderation-enforcement routing and cross-app `_target_app_id` routing become Rust built-ins; `bot_process`, raid shoutout, live status, activity feed and reputation accrual become bundles. | The approved text fixes the rule ("bundles or Rust built-ins, no third path") but not each hook. Hooks that must run for every event regardless of activation, or that manipulate envelope routing, are stage behaviour; flag-gated per-feature behaviour is an App. |
 | A6 | **The generic-intake mapping uses RFC 6901 JSON Pointers**, with `$now` as the only magic default. | "Declarative JSON→`PlatformEvent` mapping" rules out expressions; JSON Pointer is the smallest standard that addresses nested bodies. |
 | A7 | **A trip-disabled bundle re-enables on a new digest or a pod restart only.** | The approved text specifies disable + DLQ + alert and no re-enable mechanism; adding an API would be a new feature (recorded as Q1 instead). |
