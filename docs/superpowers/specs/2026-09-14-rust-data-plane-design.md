@@ -112,6 +112,7 @@ Every row was decided by the human product owner during the 2026-09-14 design se
 | D21b | The compiler **rejects** any bundle that still imports `flask_core.database` or `pydal`, with a message naming the module and pointing at the `penguin-dal` equivalent. | A gate that cannot be bypassed is what stops the legacy surface from creeping back in through a new bundle. | Human, 2026-09-14 |
 | D23 | **The spine is Valkey Streams, not lists.** Ingest receives or polls each event once and `XADD`s it once onto the stream of the ingest source it came from; every subscribing process bundle reads it through its own consumer group. **Supersedes** the list-based design: the per-bundle `LPUSH` copies, the `LMOVE` processing keys, the consumer index, the heartbeat sorted set and the reaper are all removed, replaced by the pending-entries list and `XAUTOCLAIM`. | One write per event regardless of how many bundles subscribe, real per-bundle isolation of failure and lag, and at-least-once from the server rather than from hand-rolled bookkeeping. The repo already contains a tested implementation of this model (`libs/flask_core/flask_core/stream_pipeline.py:341-1047`), gated off. | Human, 2026-09-14 |
 | D24 | **Stream granularity is per ingest source**, and access is **manifest-requested, hub-api-granted**: `consumes` is a request, hub-api resolves it into explicit `app_stream_grants` rows and creates consumer groups only on granted streams, the admin sees the grant list in words at install, and the stage reads only granted streams. Admins may revoke individual grants; the Valkey ACL stays pattern-scoped, so the selectivity is logical and lives in the stage. | Per-platform streams would force "all Twitch or none"; per-source plus explicit grants is what lets an operator give a bundle one channel. Bundles hold no Valkey connection, so the stage is the only possible enforcement point and the spec says so rather than implying Valkey enforces it. | Human, 2026-09-14 |
+| D26 | **Install is an explicit permission-consent step, and the runtime enforces the approval rather than the manifest.** The admin sees the bundle's full contract — granted streams in words, egress hosts and methods, tables with read/write, host capabilities actually imported, `routes_to`, limits, scan status, tier and flag — approves it, and the approval is recorded with a `permission_hash` over the canonical summary. Grants, egress allowlists, table roles and capability wiring are generated from that record. Widening on upgrade requires re-approval against a diff; narrowing auto-approves with an audit entry; headless installs must pass the expected hash or fail closed. | A manifest is a request from the bundle's author; an approval is a decision by the operator. Deriving runtime authorization from the manifest would let a new version widen access silently, which is precisely what the consent step exists to prevent. | Human, 2026-09-14 |
 | D25 | **Action streams are strictly per bundle** — one stream, one consumer group, never read on another bundle's behalf — and the `_target_app_id` cross-bundle redirect becomes a **declared, approved capability** (`routes_to`, exact ids, no wildcards), enforced by the stage, which is also the only writer. | Ingest streams are shared read-only platform data; action envelopes are a bundle's own output and routinely carry its private state. The asymmetry is deliberate, and the one cross-bundle path is visible at install rather than implicit. | Human, 2026-09-14 |
 | D22 | **Naming: Waddles is the product and repo name; `waddlebot` survives only as the legacy identifiers listed here.** The repo becomes `penguintechinc/waddles` (local clone `~/code/waddles`), images become `ghcr.io/penguintechinc/waddles/<service>`, the Kubernetes namespace and in-cluster DNS become `waddles` (`hub-api.waddles.svc.cluster.local`), and chart Secrets become `waddles-*`. Flag keys (`waddles.*`) and Valkey keys (`waddles:*`) already used the name. **The complete list of surviving `waddlebot` literals:** (1) the Helm chart directory and release name `k8s/helm/waddlebot`, which this project does not rename (N4 keeps the chart's names and values stable); (2) the Postgres `DB_NAME` default `waddlebot`, which this project does not migrate; (3) the legacy `waddlebot:stream:*` / `waddlebot:dlq:*` key prefixes belonging to the unused `flask_core.stream_pipeline.StreamPipeline` class, which this spec does not use and does not rename; (4) Python package paths and the scratchpad path of the sandbox spike report. Every other occurrence is Waddles. | One product name, and a short, explicit list of the places a rename would mean a migration this project is not doing. | Human, 2026-09-14 |
 
@@ -1400,6 +1401,25 @@ One row per (bundle, granted stream), written by hub-api at activation and re-re
 
 `UNIQUE (app_id, stream_key) WHERE revoked_at IS NULL`. No PII: the approver is a UUID into the single `users` identity table, never a name or address.
 
+### 6.9 `app_install_approvals`
+
+One row per approved (bundle, version, scope) — the record the runtime derives authorization from (§9.7.3).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigserial | Primary key |
+| `tenant_id` | integer | FK `tenants(id)` |
+| `community_id` | integer, nullable | `NULL` = tenant-wide |
+| `app_id` | text | FK `app_catalog(app_id)` |
+| `version` | text | The approved SemVer |
+| `permission_hash` | text | `sha256:` + 64 hex over the canonical JSON of the permission summary |
+| `summary_json` | jsonb | The approved summary in full — grants, egress, tables with read/write, capabilities, `routes_to`, limits, provenance, entitlement |
+| `approved_by` | uuid | The approving user's UUID — never a name or an email |
+| `approved_at` | timestamptz | |
+| `superseded_by` | bigint, nullable | The approval that replaced this one on an upgrade; `NULL` for the current row |
+
+`UNIQUE (app_id, version, tenant_id, community_id) WHERE superseded_by IS NULL`. Canonical JSON means sorted keys, no insignificant whitespace, and arrays in a defined order, so the same permissions always produce the same hash on any machine — the property headless approval (§9.7.5) depends on.
+
 ---
 
 ## 7. Host interface and executor
@@ -1642,6 +1662,18 @@ These endpoints normally live on **private address space** — a cluster Service
                  ┌──────────────┐
                  │  PUBLISHED   │  visible in the catalog, not yet running
                  └──────┬───────┘
+                        │ permission summary built (§9.7)
+                        v
+                 ┌──────────────┐  admin denies, or a headless
+                 │   AWAITING   │  install sends a stale hash
+                 │   APPROVAL   │──────────────────▶ REJECTED
+                 └──────┬───────┘
+                        │ approved → app_install_approvals + audit
+                        v
+                 ┌──────────────┐  the record the runtime derives
+                 │   APPROVED   │  grants, egress, table roles and
+                 │              │  capability wiring from
+                 └──────┬───────┘
                         │ activation (app_activations / app_tenant_availability)
                         v
                  ┌──────────────┐  new version published for the same app_id
@@ -1675,6 +1707,8 @@ These endpoints normally live on **private address space** — a cluster Service
 Responses: `202 Accepted` with a `versionId` and the compiler Job name; `400` with a `reason` code for a manifest that fails a pure-YAML rule; `403 prebuilt_not_allowed` when `artifact: prebuilt` and the global setting `bundles.allow_prebuilt` is false; `409` when `(app_id, version)` already exists; `413` on an oversize part.
 
 `GET /api/v1/apps/{app_id}/versions/{version}` returns the state-machine state, the reason code on rejection, `scanStatus`, the scanner findings summary, and — once published — the digest.
+
+Approval endpoints (§9.7): `GET /api/v1/apps/{app_id}/versions/{version}/permissions` returns the permission summary and its `permission_hash`; `POST …/approve` records the approval (and requires a matching `permission_hash` from a headless caller); `POST …/deny` moves the version to `REJECTED` with the admin's reason.
 
 ### 9.3 Security check detail
 
@@ -1748,6 +1782,59 @@ Convergence bound after an activation, a revocation or a rollback: one distribut
 | `DELETE /api/v1/apps/{app_id}/grants/{grantId}` | Revoke one grant without uninstalling or deactivating the bundle: sets `revoked_at`, destroys the consumer group, writes an audit entry with the actor's UUID |
 
 All three require an admin scope; every mutation is audit-logged. Revoking the last grant leaves the bundle activated and reading nothing, which is a legitimate configuration, not an error.
+
+### 9.7 Install-time permission consent
+
+A bundle's full contract is presented to the global admin at install as an explicit consent step — the Android "permissions this app needs" model. Nothing about a bundle's reach is discovered at runtime.
+
+#### 9.7.1 The permission summary
+
+Derived from `bundle.yaml` **plus the validated component's actual host imports**, so a manifest that under-declares cannot hide anything: the summary is built from what the component really imports, cross-checked against what the manifest asked for, and a discrepancy fails the install (V25/V31).
+
+| Section | Rendered as |
+|---|---|
+| **Ingest streams** | The resolved grant list in words — "reads Twitch #channelA, Discord guild X" — with wildcards spelled out into the concrete sources they currently resolve to, and a note that a `platform`-wide rule will also pick up sources added later (§5.2) |
+| **Outbound network** | Each `egress` host with its allowed methods; `*.example.com` shown as a wildcard, not flattened |
+| **Database** | Each `data.tables` entry with **read / write** derived from the statements the component can issue, one line per table |
+| **Host capabilities** | Which of `http`, `kv`, `db`, `relay`, `flags`, `log` the component actually imports (`context` and `clock` are always granted and are not listed as permissions) |
+| **Cross-bundle routing** | "may send events to app X" for each `routes_to` entry (§5.9); absent when the list is empty |
+| **Resource limits** | `timeout_ms`, `memory_mb`, `egress_rps` requested, each shown against the platform ceiling |
+| **Provenance** | `language`, `artifactKind`, and `scanStatus` — a source upload shows its scanner summary; a prebuilt upload shows the permanent **"not security-scanned"** badge |
+| **Entitlement** | `min_tier` and the PostHog feature flag key that gates the bundle |
+| **Unusual requests** | Called out separately and first: a private-host egress request (`bundles.egress.allowPrivateHosts`), a wildcard `consumes`, a `routes_to` list, a limit at the platform ceiling, or a prebuilt artifact |
+
+#### 9.7.2 Approval
+
+The admin approves or denies. Approval writes one `app_install_approvals` row (§6.9) and an audit entry:
+
+- `permission_hash` = SHA-256 over the **canonical JSON** of the summary (keys sorted, no insignificant whitespace, arrays in a defined order), so the same permissions always hash the same way.
+- `approver` is a user **UUID** into the single `users` identity table — never a name or an email (PII tokenization).
+- The approved summary JSON is stored in full alongside the hash, so an auditor can see what was agreed without reconstructing it.
+
+#### 9.7.3 The runtime enforces the approval, not the manifest
+
+This is the load-bearing half. Stream grants, the egress allowlist, the per-bundle Postgres role's table grants, and the executor's capability wiring are all generated **from the approval record**. A manifest can never widen access without a new approval, because nothing at runtime reads the manifest for authorization — the distribution API serves the approved set, and §14.6 asserts that a manifest requesting a table outside the approval is denied at runtime and counted.
+
+#### 9.7.4 Upgrades
+
+On a new version, hub-api diffs the new summary against the approved one:
+
+| Change | Behaviour |
+|---|---|
+| **Widening** — a new stream, host, method, table, capability, `routes_to` target, or a higher limit | The version is published but **not activated**. The admin sees a field-by-field diff of exactly what is new and must re-approve. |
+| **Narrowing** — anything removed or lowered | Auto-approved, with an audit entry recording the narrowing and the new `permission_hash`. |
+| **Unchanged** | Auto-approved; the `permission_hash` matches and the row records the new version against the same hash. |
+
+#### 9.7.5 Headless installs
+
+A CLI or API install must pass the `permission_hash` it expects to approve:
+
+```
+POST /api/v1/apps/{app_id}/versions/{version}/approve
+{"permission_hash": "sha256:…", "scope": {"tenant": "acme", "community": "main"}}
+```
+
+A mismatch **fails closed** with `409 permission_hash_mismatch` and returns the current summary and hash — a non-interactive installer can never approve permissions it has not seen. `GET …/permissions` returns the summary and hash for the caller to inspect first.
 
 ---
 
@@ -2564,6 +2651,9 @@ Each is a dedicated test whose **pass condition is the failure of the attack**, 
 | 14 | Bundle A attempts to read bundle B's KV namespace or config | Keys are namespaced per `app_id`; the read returns none and is counted |
 | 14a | Bundle A's dispatch observes bundle B's action entries | Never: each action stream has exactly one consumer group and the stage reads only the bundle's own stream. The test writes to B's action stream and asserts A's dispatch is never invoked and A's group never appears on B's stream (§5.9) |
 | 14b | A process bundle sets `_target_app_id` to an app outside its approved `routes_to` | The redirect is dropped, nothing is written to the target's stream, `waddles_route_denied_total{app_id,target}` +1, WARN logged with both ids |
+| 14d | A version's manifest requests a table (or host, or capability, or stream) that is **not** in the approved permission summary | Denied at runtime — the stage generates its allowlists from the approval record, not the manifest — the call returns `denied(...)`, `waddles_host_call_denied_total` / `waddles_egress_denied_total` is incremented, and the mismatch is logged at ERROR naming the manifest value and the approved set (§9.7.3) |
+| 14e | An upgrade widens any permission | The new version is published but not activated until re-approval; the diff names exactly the added stream/host/table/capability/`routes_to` target or raised limit. A narrowing upgrade auto-approves and writes an audit entry |
+| 14f | A headless install passes a stale `permission_hash` | `409 permission_hash_mismatch`, nothing is approved, and the response carries the current summary and hash |
 | 14c | A process bundle whose manifest requests only `discord` is delivered Twitch entries | Never: the stage reads only granted streams, asserted with a Twitch consumer group deliberately pre-created on the Twitch stream so the test proves the stage's grant check, not the group's absence (§5.2) |
 | 15 | Executor sends a frame larger than `EXECUTOR_MAX_FRAME_BYTES` | Stage kills and restarts the executor, `waddles_executor_restarts_total` +1 |
 | 16 | The executor binary links a networking or database crate | `cargo tree -p bundle-executor` contains no `reqwest`, `redis`, `deadpool-redis`, `sea-orm` or `sqlx`; the CI check fails the build if any appears, and reports the number of crates examined |
@@ -2651,6 +2741,7 @@ Database migrations are additive:
 | `intake_sources` | `{tenant, source_id, source, platform, secret_ref, community, mapping, enabled}` — `source_id` is the stable id that names the source's stream |
 | `app_stream_grants` | §6.8 — one row per (bundle, granted stream) |
 | `bundle_scan_findings` | per-version scanner findings summary |
+| `app_install_approvals` | §6.9 — the approved permission summary and its hash, which the runtime derives authorization from |
 | `global_settings` seed | `bundles.allow_prebuilt = true` |
 | Per-bundle role bootstrap | the RLS policies on bundle-owned tables |
 | Ingest-stage cleanup | removes `stages.ingest` from the six affected `app_catalog` rows |
@@ -2726,7 +2817,7 @@ Verify `runsc` availability on the alpha MicroK8s node and on the DigitalOcean n
 | gVisor benchmark | `waddles_executor_call_seconds` and `waddles_e2e_latency_seconds` measured with `sandbox.gvisor.enabled` true and false on the same hardware and bundle set; both distributions published in the chart docs, and the §12.2 trade-off sentence cites our own number (§18, R8) |
 | `waddle-sdk-rs`, `waddle-sdk-js` | Example bundle per language passing the WIT conformance suite |
 | Bucket flow | MinIO in alpha, Nest configurable; poller, verification, precompilation, hot-swap proven in a harness |
-| hub-api install hooks | `POST /api/v1/apps/{app_id}/versions`, the version state machine, `bundles.allow_prebuilt`, the distribution API's six new fields |
+| hub-api install hooks | `POST /api/v1/apps/{app_id}/versions`, the version state machine, `bundles.allow_prebuilt`, the distribution API's new fields, the permission-consent screen and approval API (§9.7), `app_install_approvals` and `app_stream_grants` |
 | Idempotency review | Every first-party bundle reviewed and, where needed, made idempotent under at-least-once (§15.3 item 3) |
 
 ### M3 — `svc_action` (parallel)
