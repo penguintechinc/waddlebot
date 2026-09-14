@@ -628,17 +628,42 @@ The queue-crossing shape is unchanged from `libs/flask_core/flask_core/stream_pi
   "event_type": "chat.message",
   "actor": "some_user",
   "payload": {"text": "!songrequest foo", "channel_id": "12345", "message_id": "abc"},
-  "occurred_at": "2026-09-14T12:00:00.000Z"
+  "occurred_at": "2026-09-14T12:00:00.000Z",
+  "source": {"platform": "twitch", "account_id": "bot-primary", "channel_id": "12345"}
 }
 ```
 
 | Field | JSON type | Required | Constraint | Violation |
 |---|---|---|---|---|
 | `platform` | string | yes | non-empty | `EnvelopeError` / `SpineError::Envelope`, DLQ `error.kind = "envelope_invalid"` |
-| `event_type` | string | yes | non-empty | same |
+| `event_type` | string | yes | non-empty; a dotted, lowercase namespace (`chat.message`, `channel.follow`, `stream.online`) — the namespace `consumes.event_types` globs match against | same |
 | `actor` | string \| null | yes (may be null) | string when present | same |
 | `payload` | object | yes | JSON object; may be empty `{}`; never a scalar or array | same |
 | `occurred_at` | string | yes | non-empty; RFC 3339 UTC with millisecond precision, `Z` suffix | same |
+| `source` | object \| null | no | When present: `{platform, account_id, channel_id}`, all strings, `channel_id` nullable; `source.platform` **must equal** the top-level `platform` | same |
+
+**`source` — which connection this event came in on.** Tenant and community stay *outside* the event, on the envelope and the key, exactly as before; `source` answers a different question: *which* of possibly several connections to the same platform produced this. Without it, a deployment with two Twitch bot accounts, or one bot in forty channels, cannot tell its events apart, and a bundle cannot filter by channel.
+
+| Field | Meaning |
+|---|---|
+| `source.platform` | The platform slug (`twitch`, `discord`, …, `waddles`, or a tenant-registered `custom:<name>`). Mirrors the top-level `platform` so a consumer reading only `source` is never wrong. |
+| `source.account_id` | The identity of the *connection*: the bot account, app id, or intake source name — e.g. the Twitch bot login, the Discord application id, the Slack app id, the generic-webhook `{source}` path segment. Stable across restarts, never a secret. |
+| `source.channel_id` | The platform's own channel/guild/room identifier the event occurred in, or `null` for events with no channel (an account-level notification). |
+
+**How today's `normalize()` outputs map into it.** The six ported normalizers each already know their connection's identity, because the receiver that produced the raw payload owns it; `source` is populated by the normalizer, not inferred later:
+
+| Normalizer | `source.account_id` | `source.channel_id` |
+|---|---|---|
+| Twitch IRC | the bot login the `IrcTransport` authenticated as | the IRC channel (without `#`) |
+| Twitch EventSub (webhook or websocket) | the subscription's client/app id | `event.broadcaster_user_id` from the notification |
+| Discord gateway | the bot application id | the channel id (guild id stays in `payload`) |
+| Slack Socket Mode | the Slack app id (`xapp-` app, not the token) | the channel id |
+| YouTube live poll | the configured channel's OAuth client or API-key identity | the live chat's video/broadcast id |
+| Kick (Pusher or webhook) | the configured Kick app id | the channel slug |
+| Generic webhook intake | the `{source}` path segment | from the source's mapping, or `null` |
+| Generic REST intake | the JWT `sub` | the `community` query parameter's channel, or `null` |
+
+`source` is optional in deserialization (absent or `null` → `None`) for the same backward-compatibility reason as `target_app_id`, but **svc-ingest always populates it** — every event entering the pipeline through any route in §10.1 carries one, and a bundle's `consumes` channel filtering depends on it.
 
 #### 6.1.2 `StageEnvelope`
 
@@ -758,7 +783,16 @@ is_default: true
 stages:
   process:
     entry: "bundles.social_music_process:transform"
-    consumes: ["twitch.chat.message", "discord.message"]
+    # MANDATORY on a process stage — this is what ingest fans out against.
+    consumes:
+      - platform: twitch
+        event_types: ["chat.message"]
+        filters:
+          command_prefix: ["!sr", "!songrequest"]
+      - platform: discord
+        event_types: ["chat.message"]
+        filters:
+          command_prefix: ["!sr", "!songrequest"]
     produces: ["waddles.music.request"]
     config:
       command_prefix: "!"
@@ -821,7 +855,7 @@ platform_compatibility:
 | `is_default` | boolean | no | `false` | At most one `true` per Feature, enforced at registration. |
 | `stages` | map | yes | — | Keys from `{process, action, presentation}`. **`ingest` is rejected.** At least one key required. |
 | `stages.<s>.entry` | string | yes for `process`/`action` when `artifact: source` | — | Language-specific entry reference, recorded for provenance and shown in the UI. Dispatch itself is by WIT export, not by this string. |
-| `stages.<s>.consumes` | list of string | no | `[]` | Event tags this stage consumes; informational, mirrors v1. |
+| `stages.process.consumes` | list of consume-rules | **yes for a `process` stage** | — | The subscription ingest fans out against (§6.4.3). Must be non-empty. **An `action` stage must not declare `consumes`** — an action bundle receives what its own process stage, or a `_target_app_id` redirect, sends it, exactly as today. |
 | `stages.<s>.produces` | list of string | no | `[]` | Event tags this stage produces; informational. |
 | `stages.<s>.config` | map | no | `{}` | The bundle's own **non-secret** shipped defaults. Never per-activation values, never secrets. |
 | `stages.<s>.spec.required_config` | list of string | no | `[]` | Config keys an activation must supply; surfaced at install/activation time. |
@@ -839,7 +873,35 @@ platform_compatibility:
 | `incompatible_with` | list of string | no | `[]` | Other `app_id`s; checked pairwise before activation (`detect_conflict`). |
 | `platform_compatibility` | map | no | `{tested_with: "", min_version: null, max_version: null}` | SemVer strings, parsed not enforced, exactly as v1. |
 
-#### 6.4.3 Validation rules
+#### 6.4.3 The `consumes` contract
+
+Bundles no longer live inside ingest, so ingest needs a declarative statement of which process bundles want an event. One Twitch chat line may be wanted by forty bundles, or by none; `consumes` is what makes that decision cheap and explicit instead of a fan-out to everything.
+
+```yaml
+consumes:
+  - platform: twitch                      # required
+    event_types: ["chat.message"]         # required, ≥1 glob
+    filters:                              # optional, all cheap, all ANDed
+      command_prefix: ["!sr", "!songrequest"]
+      actor_roles: ["broadcaster", "moderator"]
+```
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `platform` | string | yes | One of `twitch`, `discord`, `slack`, `youtube`, `kick`, `waddles`, `custom:<name>`, or `*`. `custom:<name>` must name a platform registered for the tenant (§10.4). `*` requires the tenant setting `allow_wildcard_consumes` (rule V30). |
+| `event_types` | list of string | yes, ≥ 1 | Glob patterns over the `PlatformEvent.event_type` namespace — a dotted, lowercase namespace such as `chat.message`, `chat.message.deleted`, `channel.follow`, `channel.subscribe`, `stream.online`, `stream.offline`, `member.join`. `*` matches one segment, `**` matches one or more; a bare `*` therefore matches only single-segment types and `**` is the true catch-all, which also requires `allow_wildcard_consumes`. |
+| `filters.command_prefix` | list of string | no | Match when `event.payload.text` starts with any listed prefix, after trimming leading whitespace, compared case-insensitively. This is the filter that stops a `!sr`-only bundle being woken by every chat line. |
+| `filters.actor_roles` | list of string | no | Match when `event.payload.actor_roles` (normalized by ingest) intersects the list. Values: `broadcaster`, `moderator`, `vip`, `subscriber`, `member`, `everyone`. |
+
+Semantics, fixed so the algorithm in §10.6 is unambiguous:
+
+- A bundle matches an event when **any** of its `consumes` rules matches (rules are ORed).
+- Within one rule, `platform`, `event_types` and every present `filters` key must all match (ANDed). An absent filter key is not a constraint.
+- Filters are evaluated by **ingest**, against the normalized `PlatformEvent`, before anything is enqueued. They are deliberately restricted to two cheap, allocation-free checks; anything richer belongs inside the bundle's `transform`.
+- Filters are an **optimization, not a security boundary**. A bundle still validates its own input; ingest never promises that a delivered event satisfied a filter it did not declare.
+- `consumes` is part of the capability surface shown at install/approval time, next to `egress` and `data.tables` — it is how an operator sees what a bundle will be woken by.
+
+#### 6.4.4 Validation rules
 
 Every rule below fails the install with a machine-readable `reason` code. Rules run in order; the first failure is reported. V1–V13 reproduce `parse_manifest()`'s existing ordered rules; V14–V24 are new.
 
@@ -875,7 +937,11 @@ Two further checks run against the **compiled artifact**, not the YAML, and use 
 | # | Rule | `reason` code |
 |---|---|---|
 | V25 | The component's exports satisfy the WIT world for every declared script stage | `wit_export_missing` |
-| V26 | The component imports nothing outside the WIT world's import list **plus the denying `wasi:sockets` stub set** (§6.5): no other `wasi:*` interface, and no `wasi:filesystem` beyond the read-only scratch preopen. A component importing `wasi:sockets/*` must instantiate cleanly against the stubs — Python-built components always do; a Tier 2 upload that does not is rejected | `forbidden_host_import` |
+| V27 | A `process` stage declares a non-empty `consumes` list | `consumes_required` |
+| V28 | An `action` stage declares no `consumes` | `consumes_on_action_stage` |
+| V29 | Every `consumes[].platform` is a known platform, or `custom:<name>` naming a platform registered for the tenant, or `*`; every `event_types` entry is a valid glob over the dotted `event_type` namespace; every `filters` key is one of `command_prefix`, `actor_roles`, with values of the documented shape | `unknown_consumes_platform` / `invalid_event_type_pattern` / `invalid_consumes_filter` |
+| V30 | A `consumes` rule using `platform: "*"` or an `event_types` entry of `**` is accepted only when the tenant setting `allow_wildcard_consumes` is true | `wildcard_consumes_not_allowed` |
+| V31 | The component imports nothing outside the WIT world's import list **plus the denying `wasi:sockets` stub set** (§6.5): no other `wasi:*` interface, and no `wasi:filesystem` beyond the read-only scratch preopen. A component importing `wasi:sockets/*` must instantiate cleanly against the stubs — Python-built components always do; a Tier 2 upload that does not is rejected | `forbidden_host_import` |
 
 ### 6.5 The WIT world
 
@@ -1188,7 +1254,11 @@ A `hello` reporting `runtime: "runc"` is refused with `error.code = "UNSANDBOXED
       "manifest": {
         "egress": [{"host": "api.spotify.com", "methods": ["GET", "POST"]}],
         "data": {"tables": ["music_queue", "music_history"]},
-        "limits": {"timeout_ms": 2000, "memory_mb": 64, "egress_rps": 10}
+        "limits": {"timeout_ms": 2000, "memory_mb": 64, "egress_rps": 10},
+        "consumes": [
+          {"platform": "twitch", "event_types": ["chat.message"],
+           "filters": {"command_prefix": ["!sr", "!songrequest"]}}
+        ]
       }
     }
   ]
@@ -1202,7 +1272,7 @@ A `hello` reporting `runtime: "runc"` is refused with `error.code = "UNSANDBOXED
 | `artifactKind` | string | `source` or `prebuilt`. |
 | `language` | string | `python`, `rust`, `javascript`, `typescript`, `other`. |
 | `scanStatus` | string | `scanned` (all configured scanners ran clean), `scanned_with_findings` (ran, non-blocking findings recorded), `not_scanned` (prebuilt upload — the permanent badge), `scan_failed` (a scanner errored; the version is never activated). |
-| `manifest` | object | The capability-bearing subset of `bundle.yaml` the stage must enforce: `egress`, `data.tables`, `limits`. The stage never fetches the full manifest separately. |
+| `manifest` | object | The capability-bearing subset of `bundle.yaml` the stage must enforce: `egress`, `data.tables`, `limits`, and — for a `stage=process` row — `consumes`, which svc-ingest needs in order to route at all (§10.6). The stage never fetches the full manifest separately. |
 
 `entrypoint` is retained verbatim for provenance and for the admin UI; the Rust stages **do not** dispatch on it — dispatch is by WIT export. A row whose `artifactDigest` is `null` (a registration without a compiled artifact) is skipped by the stage and counted in `waddles_bundle_skipped_total{reason="no_artifact"}`.
 
@@ -1378,7 +1448,7 @@ An unresolvable reference returns `denied("secret_unresolved")` and is classifie
 ### 8.4 Compiler and install-time checks
 
 - The compiler rejects a manifest with an empty `egress` when the compiled component imports `waddle:bundle/http` (rule V22). The check is on the **component's actual import list**, not on the source text, so an undeclared import cannot slip through a dynamic call.
-- The install UI shows the full `egress` list and the `data.tables` list on the approval screen; approving an install is approving those two lists.
+- The install UI shows the full `egress` list, the `data.tables` list and the `consumes` subscription on the approval screen; approving an install is approving all three.
 - Changing `egress` or `data.tables` in a new version re-triggers approval; a version whose capability request is a strict subset of the approved one auto-approves.
 
 ### 8.5 The SSRF guard applies to bundles, never to infrastructure
@@ -1507,7 +1577,7 @@ Every scanner run reports **how many items it examined** (files scanned, depende
 | Valid WASI 0.2 component, parses under the pinned wasmtime | blocks |
 | Exports satisfy the WIT world for every declared script stage (V25) | blocks |
 | Imports are a subset of the WIT world's imports plus the denying `wasi:sockets` stub set (V26), and the component instantiates against those stubs | blocks |
-| Manifest checks V1–V24 | blocks |
+| Manifest checks V1–V30, including the `consumes` rules (V27–V30) | blocks |
 | Size ≤ `BUNDLE_MAX_COMPONENT_BYTES` | blocks |
 | Digest computed and recorded | — |
 
@@ -1628,6 +1698,30 @@ Optional query parameter `community=<slug>` sets the envelope community; absent 
 - **Constant-time comparison** (`subtle::ConstantTimeEq`) for every signature check; a length mismatch still performs the comparison.
 - **Activation resolution** is via the distribution API for every route, so per-community activation is honoured uniformly (§15.3).
 - **Rejection metrics** carry `reason` values drawn from the error-code column of §10.1, so a dashboard can distinguish a misconfigured sender from an attack.
+### 10.6 Fan-out: which process bundles receive an event
+
+Bundles no longer run inside ingest, so ingest must decide, per event, which activated process bundles want it. The decision is driven entirely by the `consumes` contract of §6.4.3.
+
+```
+for each normalized PlatformEvent E at (tenant, community):
+  1. bundles ← activated process-stage bundle set for (tenant, community),
+               read from the distribution-API cache (refreshed on the existing
+               5 s poll; a hub-api outage degrades to last-known-good, never empty-by-error)
+  2. matched ← [ b for b in bundles if any rule in b.manifest.consumes matches
+                 E.platform AND E.event_type AND every declared filter ]
+  3. if matched is empty:
+        waddles_ingest_fanout_zero_total{platform,event_type} += 1        # counted, never DLQ'd
+     else:
+        one StageEnvelope per matched bundle, LPUSHed onto that bundle's own
+        …:app:{app_id}:process key, in a single pipelined MULTI
+  4. waddles_ingest_fanout_matches{platform,event_type}.observe(len(matched))
+```
+
+- **One round trip regardless of breadth.** Forty matching bundles are forty `LPUSH`es inside one `MULTI`/`EXEC`, not forty round trips; the envelope JSON is serialized once and reused.
+- **Zero matches is normal, not an error.** An event nobody subscribed to is counted and discarded — it is not a failure, so it never reaches a DLQ, which is reserved for events that were accepted and then failed.
+- **Matching is per `(platform, event_type, filters)` only.** Tenant and community are already fixed by the resolved bundle set; a bundle can never widen its scope through `consumes`.
+- **Per-bundle attribution:** each matched bundle increments `waddles_consumes_matched_total{app_id}`, so an operator can see which bundle a load spike belongs to.
+
 - **Ingest's own outbound connections are infrastructure, not bundle egress.** The platform sockets and REST calls (Twitch IRC and EventSub, the Discord gateway, Slack Socket Mode, the YouTube poll, Kick), the distribution-API poll to hub-api, and the Valkey connections are all operator-configured and compiled-in; none of them is evaluated by the bundle SSRF guard, and all of them may resolve to private address space (§8.5). svc-ingest links no executor and serves no bundle `http` capability at all, so the guard has no subject in this service.
 
 ---
@@ -1923,6 +2017,7 @@ Existing keys keep their names and defaults. New keys:
 | `pipeline.spine.dlqMaxLen` | `10000` | DLQ bound |
 | `pipeline.spine.maxDeliveries` | `5` | Redelivery cap |
 | `bundles.allowPrebuilt` | `true` | Seeds hub-api's global-admin setting `bundles.allow_prebuilt`; the DB setting is authoritative at runtime |
+| `bundles.allowWildcardConsumes` | `false` | Seeds the per-tenant setting `allow_wildcard_consumes` (rule V30); the DB setting is authoritative at runtime |
 | `bundles.bucket.provider` | `minio` | `minio` or `nest` |
 | `bundles.bucket.endpoint` | `http://minio.waddles.svc.cluster.local:9000` | S3 endpoint |
 | `bundles.bucket.name` | `waddles-bundles` | Bucket name |
@@ -2176,6 +2271,9 @@ Histograms first — load and latency are the signals most often missing.
 | `waddles_sandbox_trip_total` | counter | `app_id`, `limit` (`timeout`\|`memory`\|`trap`\|`denied`) | Sandbox trips |
 | `waddles_bundle_skipped_total` | counter | `reason` | Distribution rows the stage could not use (e.g. `no_artifact`) |
 | `waddles_intake_rejected_total` | counter | `source`, `reason` | Every intake rejection, reason from §10.1 |
+| `waddles_ingest_fanout_matches` | histogram | `platform`, `event_type` | Number of process bundles matched per event (§10.6) |
+| `waddles_ingest_fanout_zero_total` | counter | `platform`, `event_type` | Events no activated bundle subscribed to — counted, never DLQ'd |
+| `waddles_consumes_matched_total` | counter | `app_id` | Per-bundle match attribution |
 | `waddles_executor_restarts_total` | counter | `stage`, `cause` | Executor restarts |
 | `waddles_bundles_loaded` | gauge | `stage` | Components currently resident |
 | `waddles_bundle_disabled` | gauge | `app_id` | `1` while disabled by trips |
@@ -2456,6 +2554,21 @@ Pure Python work, no WASM involved, completed and merged before M2's compiler wo
 | Migration | Each listed bundle's DB-access lines are rewritten against the `penguin-dal` public API (`/home/penguin/code/penguin-libs/packages/python-dal/src/penguin_dal/__init__.py`); bundle logic and entrypoint signatures are otherwise untouched |
 | Tests | Each bundle's existing pytest suite is updated to the new DAL and passes **natively** (no WASM), with coverage unchanged or better |
 | Gate | A repo-wide check reports zero occurrences of `flask_core.database` and `pydal` under `bundles/python/`, printing the number of files scanned |
+| `consumes` migration | Every process bundle gains a `consumes` section in its new `bundle.yaml`, translated from today's ingest-stage manifest tags with the mapping table below; the number of migrated bundles is reported and must equal the number of process bundles on disk |
+
+**Legacy `consumes`-tag mapping.** Today's ingest-stage manifests carry flat string tags (`"twitch.eventsub"`, `"kick.message"`, `"discord.message"`) consumed by `core/svc_ingest/fanout.py`. They translate mechanically:
+
+| Legacy tag | New `consumes` rule |
+|---|---|
+| `twitch.message` (IRC) | `{platform: twitch, event_types: ["chat.message"]}` |
+| `twitch.eventsub` | `{platform: twitch, event_types: ["channel.*", "stream.*"]}` |
+| `discord.message` | `{platform: discord, event_types: ["chat.message"]}` |
+| `slack.message` | `{platform: slack, event_types: ["chat.message"]}` |
+| `youtube.message` | `{platform: youtube, event_types: ["chat.message"]}` |
+| `kick.message` | `{platform: kick, event_types: ["chat.message"]}` |
+| (the echo demo bundle, which consumed everything) | Five explicit rules, one per platform — **not** `platform: "*"`, so the migration does not require turning on `allow_wildcard_consumes` anywhere |
+
+Command-only bundles additionally gain a `filters.command_prefix` matching the prefixes their `transform` already tests for, which is where most of the fan-out saving comes from. The committed per-bundle mapping is part of this milestone's output, not left to the implementer's judgement.
 
 ### M1 verification task (blocking M3–M5)
 
