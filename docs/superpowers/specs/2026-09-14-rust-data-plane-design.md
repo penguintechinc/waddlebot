@@ -1,4 +1,4 @@
-# WaddleBot Rust Data Plane + Sandboxed WASM App Bundles — Design Specification
+# Waddles Rust Data Plane + Sandboxed WASM App Bundles — Design Specification
 
 **Date:** 2026-09-14
 **Status:** Approved design — pending user review of written spec
@@ -41,7 +41,7 @@ Because both are git-ignored, every claim this spec takes from them is additiona
 - `core/svc_process/runner.py`, `core/svc_action/runner.py` — stage loops, hardcoded hooks, retry/backoff and audit semantics.
 - `core/svc_streaming/{Cargo.toml,deny.toml,Dockerfile.rust,README.md}`, `core/svc_streaming/src/telemetry.rs` — the Rust service template (stack, pins, lints, OTel wiring, container shape).
 - `hub_api/services/distribution_service.py`, `hub_api/blueprints/v1/distribution.py` — the distribution API this spec extends.
-- `k8s/helm/waddlebot/values.yaml`, `k8s/helm/waddlebot/templates/svc-{ingest,process,action,streaming}.yaml` — chart shape and values keys.
+- `k8s/helm/waddlebot/values.yaml`, `k8s/helm/waddlebot/templates/svc-{ingest,process,action,streaming}.yaml` **(legacy identifier — the chart directory and release name are not renamed by this project)** — chart shape and values keys.
 - `.github/workflows/rust-svc-streaming.yml` — the per-service Rust CI gate set to replicate.
 - `docs/APP_BUNDLE_AUTHORING.md` §5 — the bundle-facing DAL surface as it exists today (`await dal.execute(sql, params)`, `get_bundle_context()`), superseded by `penguin-dal` per D21a.
 - `/home/penguin/code/penguin-libs/packages/python-dal/src/penguin_dal/__init__.py` — the `penguin-dal` public API the bundles migrate to and the SDK facade reproduces.
@@ -107,9 +107,10 @@ Every row was decided by the human product owner during the 2026-09-14 design se
 | D18 | Valkey naming throughout (not Redis), except where naming the wire protocol itself. | House naming; the product deploys Valkey. | Human, 2026-09-14 |
 | D19 | Authentication **and** TLS required by default for Postgres and Valkey. | Credentials and event bodies cross the cluster network; default-off encryption is how it stays off. | Human, 2026-09-14 |
 | D20 | The TLS/auth opt-out is a normal chart/values setting in **every** environment (`security.transport.tls`, `security.transport.auth`, both default `true`). When either is false: a loud warning at every startup, `waddles_insecure_transport{component}` = 1, `/health` reports `transport: insecure`. No environment's values file rejects it. | Operators must be able to run without TLS (bare-metal labs, constrained edge) without editing code; visibility, not prohibition, is the control. | Human, 2026-09-14 (amendment) |
-| D21 | The `waddle-sdk` ships **one** database facade: the `penguin-dal` public API, implemented over the WIT `db` import. No `flask_core.database.AsyncDAL` facade and no pydal facade exist. | WaddleBot's DAL is `penguin-dal`; shipping two surfaces would institutionalize the legacy one. | Human, 2026-09-14 (correction) |
+| D21 | The `waddle-sdk` ships **one** database facade: the `penguin-dal` public API, implemented over the WIT `db` import. No `flask_core.database.AsyncDAL` facade and no pydal facade exist. | Waddles' DAL is `penguin-dal`; shipping two surfaces would institutionalize the legacy one. | Human, 2026-09-14 (correction) |
 | D21a | Every existing Python bundle that imports `flask_core.database.AsyncDAL` or reaches a DAL through `get_bundle_dal()` is **migrated to the `penguin-dal` API first**, in Python, with its own pytest suite updated and passing natively, before any WASM compilation work. Bundle logic and entrypoint signatures are otherwise untouched. | Those bundles should already have been on `penguin-dal`; migrating them is a correction, not new scope, and it removes the need for a compatibility facade entirely. | Human, 2026-09-14 (supersedes "byte-identical" for DB-access lines only) |
 | D21b | The compiler **rejects** any bundle that still imports `flask_core.database` or `pydal`, with a message naming the module and pointing at the `penguin-dal` equivalent. | A gate that cannot be bypassed is what stops the legacy surface from creeping back in through a new bundle. | Human, 2026-09-14 |
+| D22 | **Naming: Waddles is the product and repo name; `waddlebot` survives only as the legacy identifiers listed here.** The repo becomes `penguintechinc/waddles` (local clone `~/code/waddles`), images become `ghcr.io/penguintechinc/waddles/<service>`, the Kubernetes namespace and in-cluster DNS become `waddles` (`hub-api.waddles.svc.cluster.local`), and chart Secrets become `waddles-*`. Flag keys (`waddles.*`) and Valkey keys (`waddles:*`) already used the name. **The complete list of surviving `waddlebot` literals:** (1) the Helm chart directory and release name `k8s/helm/waddlebot`, which this project does not rename (N4 keeps the chart's names and values stable); (2) the Postgres `DB_NAME` default `waddlebot`, which this project does not migrate; (3) the legacy `waddlebot:stream:*` / `waddlebot:dlq:*` key prefixes belonging to the unused `flask_core.stream_pipeline.StreamPipeline` class, which this spec does not use and does not rename; (4) Python package paths and the scratchpad path of the sandbox spike report. Every other occurrence is Waddles. | One product name, and a short, explicit list of the places a rename would mean a migration this project is not doing. | Human, 2026-09-14 |
 
 ---
 
@@ -248,8 +249,10 @@ Every row was decided by the human product owner during the 2026-09-14 design se
 
 ### 4.0 Repository layout after the cut-over
 
+The repository is `penguintechinc/waddles` (local clone `~/code/waddles`); see D22 for the naming rule and the surviving legacy identifiers.
+
 ```
-waddlebot/
+waddles/
   core/
     svc_ingest/        Cargo.toml  src/  tests/  Dockerfile  deny.toml  README.md
     svc_process/       Cargo.toml  src/  tests/  Dockerfile  deny.toml  README.md
@@ -271,7 +274,7 @@ waddlebot/
   wit/
     waddle-bundle/     stage.wit — the single normative copy of the WIT world
   hub_api/             unchanged Python, plus the install/version endpoints of §9
-  k8s/helm/waddlebot/  same chart, new values keys (§12.3)
+  k8s/helm/waddlebot/  same chart, new values keys (§12.3)   (legacy identifier)
   docs/
     APP_BUNDLE_AUTHORING.md      rewritten as v2 in M6
     superpowers/specs/2026-09-14-rust-data-plane-design.md   (this file)
@@ -764,7 +767,7 @@ stages:
   action:
     entry: "bundles.social_music_action:send_request"
     config:
-      api_base: "https://hub-api.waddlebot.svc.cluster.local:8204"
+      api_base: "https://hub-api.waddles.svc.cluster.local:8204"
     spec:
       required_config: ["music_station_token_ref"]
 
@@ -864,7 +867,7 @@ Every rule below fails the install with a machine-readable `reason` code. Rules 
 | V20 | Every `egress[].methods` entry is one of the six allowed uppercase methods | `invalid_egress_method` |
 | V21 | No `egress[].host` matches the tenant-level global denylist | `egress_host_denylisted` |
 | V22 | `egress` is non-empty when the compiled component imports `waddle:bundle/http` | `http_import_without_egress` |
-| V23 | Every `data.tables` entry matches `^[a-z][a-z0-9_]{0,62}$` and is not a reserved WaddleBot identity table (`users`, `tenants`, `communities`, `app_catalog`, `app_activations`, `app_tenant_availability`) | `invalid_data_table` / `reserved_data_table` |
+| V23 | Every `data.tables` entry matches `^[a-z][a-z0-9_]{0,62}$` and is not a reserved Waddles identity table (`users`, `tenants`, `communities`, `app_catalog`, `app_activations`, `app_tenant_availability`) | `invalid_data_table` / `reserved_data_table` |
 | V24 | Each `limits.*` value is within its allowed range (§6.4.2) | `limit_out_of_range` |
 
 Two further checks run against the **compiled artifact**, not the YAML, and use the same reason vocabulary:
@@ -1469,7 +1472,7 @@ Responses: `202 Accepted` with a `versionId` and the compiler Job name; `400` wi
 
 | Check | Tool | Gate |
 |---|---|---|
-| Static analysis | `semgrep` with the WaddleBot ruleset | Any `ERROR`-severity finding blocks. |
+| Static analysis | `semgrep` with the Waddles ruleset | Any `ERROR`-severity finding blocks. |
 | Dependency audit | `pip-audit` (Python), `cargo audit` (Rust), `npm audit` (JS/TS) | Any `high`/`critical` advisory blocks. |
 | Secrets | `gitleaks detect` over the extracted tarball | Any finding blocks. |
 | Malware / composite | Skauswatch, **when configured** (`SKAUSWATCH_URL` set) | A `fail` verdict blocks; `warn` records a finding. |
@@ -1779,12 +1782,12 @@ One rootless image per service, all multi-stage, all digest-pinned bases, all no
 
 | Image | Build | Runtime contents |
 |---|---|---|
-| `ghcr.io/penguintechinc/waddlebot/svc-ingest` | `rust:1.97-slim-bookworm` builder → `debian:bookworm-slim` runtime | `svc-ingest` binary, CA bundle |
-| `ghcr.io/penguintechinc/waddlebot/svc-process` | same | `svc-process` binary, CA bundle |
-| `ghcr.io/penguintechinc/waddlebot/svc-action` | same | `svc-action` binary, CA bundle |
-| `ghcr.io/penguintechinc/waddlebot/bundle-executor` | same | `bundle-executor` binary, CA bundle — its own image, deployed once per stage |
-| `ghcr.io/penguintechinc/waddlebot/svc-streaming` | same (`Dockerfile`, renamed from `Dockerfile.rust`) | `svc-streaming` binary, `ffmpeg` |
-| `ghcr.io/penguintechinc/waddlebot/bundle-compiler` | same builder, plus the Tier 1 toolchains | `bundle-compiler`, `componentize-py`, `cargo`+`wasm32-wasip2`, `componentize-js` |
+| `ghcr.io/penguintechinc/waddles/svc-ingest` | `rust:1.97-slim-bookworm` builder → `debian:bookworm-slim` runtime | `svc-ingest` binary, CA bundle |
+| `ghcr.io/penguintechinc/waddles/svc-process` | same | `svc-process` binary, CA bundle |
+| `ghcr.io/penguintechinc/waddles/svc-action` | same | `svc-action` binary, CA bundle |
+| `ghcr.io/penguintechinc/waddles/bundle-executor` | same | `bundle-executor` binary, CA bundle — its own image, deployed once per stage |
+| `ghcr.io/penguintechinc/waddles/svc-streaming` | same (`Dockerfile`, renamed from `Dockerfile.rust`) | `svc-streaming` binary, `ffmpeg` |
+| `ghcr.io/penguintechinc/waddles/bundle-compiler` | same builder, plus the Tier 1 toolchains | `bundle-compiler`, `componentize-py`, `cargo`+`wasm32-wasip2`, `componentize-js` |
 
 **Vendored tool pinning.** `wasmtime` and the Tier 1 toolchains are fetched at exact versions with SHA-256 verification in the builder stage, never from a distribution's rolling package. The versions live in one place, `build/tool-versions.env`, and are asserted by a container structure test (`bundle-executor --print-wasmtime-version`). No image contains `bwrap`: sandboxing is the node runtime's job now, not a binary we ship.
 
@@ -1852,7 +1855,7 @@ When the installer is enabled, the executor and compiler workloads carry `nodeSe
 # Installing a container-runtime handler requires writing to the node
 # filesystem and restarting containerd, which is not achievable rootless.
 # Scope: this DaemonSet alone, default DISABLED (sandbox.installer.enabled:
-# false). No other WaddleBot workload runs privileged or as root; the
+# false). No other Waddles workload runs privileged or as root; the
 # executor it installs support for is itself rootless with all capabilities
 # dropped. Approved by the human product owner, 2026-09-14.
 sandbox:
@@ -1872,7 +1875,7 @@ Existing keys keep their names and defaults. New keys:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `pipeline.svcIngest.image` / `.svcProcess.image` / `.svcAction.image` / `.svcStreaming.image` | `ghcr.io/penguintechinc/waddlebot/<service>:<tag>` | Replaces the `pipeline.pythonBaseImage` placeholder the three stage templates use today. |
+| `pipeline.svcIngest.image` / `.svcProcess.image` / `.svcAction.image` / `.svcStreaming.image` | `ghcr.io/penguintechinc/waddles/<service>:<tag>` | Replaces the `pipeline.pythonBaseImage` placeholder the three stage templates use today. |
 | `pipeline.executor.callTimeoutMs` | `2000` | `EXECUTOR_CALL_TIMEOUT_MS` |
 | `pipeline.executor.memoryLimitMb` | `64` | `EXECUTOR_MEMORY_LIMIT_MB` |
 | `pipeline.executor.maxCallTimeoutMs` | `10000` | Hard ceiling a manifest may request |
@@ -1881,7 +1884,7 @@ Existing keys keep their names and defaults. New keys:
 | `pipeline.executor.maxConcurrentCalls` | `32` | Global ceiling per pod |
 | `pipeline.executor.tripThreshold` | `3` | Trips before disable |
 | `pipeline.executor.tripWindowSeconds` | `300` | Trip window |
-| `pipeline.executor.image` | `ghcr.io/penguintechinc/waddlebot/bundle-executor:<tag>` | Executor Deployment image |
+| `pipeline.executor.image` | `ghcr.io/penguintechinc/waddles/bundle-executor:<tag>` | Executor Deployment image |
 | `pipeline.executor.replicas` | `2` | Replicas of each executor Deployment |
 | `pipeline.executor.stageConnections` | `4` | `EXECUTOR_STAGE_CONNECTIONS` |
 | `pipeline.executor.hostApiPort.process` / `.action` | `8301` / `8302` | The stages' mTLS host-API listeners |
@@ -1898,13 +1901,13 @@ Existing keys keep their names and defaults. New keys:
 | `pipeline.spine.maxDeliveries` | `5` | Redelivery cap |
 | `bundles.allowPrebuilt` | `true` | Seeds hub-api's global-admin setting `bundles.allow_prebuilt`; the DB setting is authoritative at runtime |
 | `bundles.bucket.provider` | `minio` | `minio` or `nest` |
-| `bundles.bucket.endpoint` | `http://minio.waddlebot.svc.cluster.local:9000` | S3 endpoint |
+| `bundles.bucket.endpoint` | `http://minio.waddles.svc.cluster.local:9000` | S3 endpoint |
 | `bundles.bucket.name` | `waddles-bundles` | Bucket name |
 | `bundles.bucket.region` | `us-east-1` | Region |
-| `bundles.bucket.existingSecret` | `waddlebot-bundle-bucket` | Holds `accessKeyId`, `secretAccessKey` |
+| `bundles.bucket.existingSecret` | `waddles-bundle-bucket` | Holds `accessKeyId`, `secretAccessKey` |
 | `bundles.pollIntervalSeconds` | `60` | Bucket poll cadence |
-| `bundles.signingPublicKeySecret` | `waddlebot-bundle-signing` | Holds `publicKey` (pods) and `privateKey` (compiler Job only) |
-| `bundles.compiler.image` | `ghcr.io/penguintechinc/waddlebot/bundle-compiler:<tag>` | Job image |
+| `bundles.signingPublicKeySecret` | `waddles-bundle-signing` | Holds `publicKey` (pods) and `privateKey` (compiler Job only) |
+| `bundles.compiler.image` | `ghcr.io/penguintechinc/waddles/bundle-compiler:<tag>` | Job image |
 | `bundles.compiler.activeDeadlineSeconds` | `900` | Job deadline |
 | `bundles.compiler.resources.limits` | `{cpu: "2000m", memory: "4Gi"}` | Compilation is memory-hungry |
 | `security.transport.tls` | `true` | §11.6.4 |
@@ -1971,7 +1974,7 @@ containers:
 
 ### 12.5 Network policy
 
-`CiliumNetworkPolicy`, default deny in the `waddlebot` namespace, with explicit allows:
+`CiliumNetworkPolicy`, default deny in the `waddles` namespace, with explicit allows:
 
 | Workload | Ingress | Egress |
 |---|---|---|
@@ -2003,7 +2006,7 @@ Defaults are the values a service uses when the variable is unset. Every secret-
 | `BIND_ADDR` | `0.0.0.0` | |
 | `LOG_LEVEL` | `info` | `error`\|`warn`\|`info`\|`debug` |
 | `RUNNER_TENANT_SLUG` | `global` | Fixed tenant slug per deployment |
-| `HUB_API_URL` | `http://hub-api.waddlebot.svc.cluster.local:8204` | Distribution API base |
+| `HUB_API_URL` | `http://hub-api.waddles.svc.cluster.local:8204` | Distribution API base |
 | `SECRET_KEY` | *(required)* | Mints the `distribution:read` service JWT |
 | `POLL_INTERVAL_S` | `5.0` | Bundle-set refresh |
 | `BASE_BACKOFF_S` / `MAX_BACKOFF_S` | `1.0` / `60.0` | Distribution-poll backoff |
@@ -2011,7 +2014,7 @@ Defaults are the values a service uses when the variable is unset. Every secret-
 | `VALKEY_USERNAME` | the service's ACL user | |
 | `VALKEY_PASSWORD` / `VALKEY_PASSWORD_FILE` | *(required when auth is on)* | Env or file only |
 | `VALKEY_CA_FILE` | `/etc/waddles/ca/valkey-ca.crt` | |
-| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` | `postgres` / `5432` / `waddlebot` / the service role | svc-ingest has no DB |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` | `postgres` / `5432` / `waddlebot` **(legacy identifier — the database name is not renamed by this project)** / the service role | svc-ingest has no DB |
 | `DB_PASSWORD` | *(required when auth is on)* | Env only |
 | `DB_SSLMODE` | `verify-full` | |
 | `DB_SSLROOTCERT` | `/etc/waddles/ca/postgres-ca.crt` | |
@@ -2062,7 +2065,7 @@ Defaults are the values a service uses when the variable is unset. Every secret-
 | `EXECUTOR_PRECOMPILE_DIR` | `/var/cache/waddles/wasm` |
 | `EXECUTOR_WASM_COLLECTOR` | `drc` — must match between precompile and runtime engine (§7.2) |
 | `KV_MAX_VALUE_BYTES` / `KV_MAX_TTL_S` | `65536` / `2592000` |
-| `BUNDLE_BUCKET_ENDPOINT` / `_NAME` / `_REGION` | `http://minio.waddlebot.svc.cluster.local:9000` / `waddles-bundles` / `us-east-1` |
+| `BUNDLE_BUCKET_ENDPOINT` / `_NAME` / `_REGION` | `http://minio.waddles.svc.cluster.local:9000` / `waddles-bundles` / `us-east-1` |
 | `BUNDLE_BUCKET_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | *(required)*, env only |
 | `BUNDLE_POLL_INTERVAL_S` | `60` |
 | `BUNDLE_FETCH_TIMEOUT_S` | `30` |
@@ -2237,7 +2240,7 @@ cargo deny check                     # advisories + licenses + bans + sources
 cargo audit
 cargo test
 cargo llvm-cov --fail-under-lines 90
-semgrep --error                      # with the WaddleBot ruleset
+semgrep --error                      # with the Waddles ruleset
 gitleaks detect --no-git
 trivy image --exit-code 1 --severity HIGH,CRITICAL
 ```
@@ -2496,7 +2499,7 @@ The constraints below bind this design. They are summarized, not restated in ful
 |---|---|---|---|---|
 | R1 | **`penguin-dal` facade in WASM.** The `waddle-sdk` facade must reproduce the `penguin-dal` public API faithfully — query composition, field/table proxies, pagination, row shape — while lowering every call to a parameterized statement over the WIT `db` import, single-threaded and synchronous underneath. A semantic gap breaks migrated bundles. | High: it is the single component that can falsify "bundles otherwise unchanged". | The bundles' own pytest suites, already green natively after M1.5, are the oracle (§14.4): the same suites must pass through the facade. Any construct the facade cannot lower raises an explicit `NotImplementedError` naming the construct, never silently mis-executes. | **Rounds 1 and 2 complete** — report `spikes/penguin-dal-wasm/REPORT.md`, branch `spike/penguin-dal-wasm`, commits `f45e6578` and `964f2729` (`componentize-py` 0.25.1, `wasmtime` 48.0.x, `wasm-tools` 1.259.0). Round 1: an **unchanged** bundle compiled in 3.4–3.9 s to a 21.6 MB component and the query builder round-tripped correctly at 2–4 ms warm per call; four blockers found. Round 2 **confirmed all three runtime mitigations**: the synchronous `to_thread`/`run_in_executor` shim carried the alias bundle's full `!alias add` write path end to end (4 `db-execute` round trips, 9–18 ms; read-only `!alias foo` 0.7–1.0 ms, no DB call); build-time `pkgutil.walk_packages` pre-import generation resolved the lazy imports; guest `wasi:sockets` use fails cleanly with `PermissionError` while the component keeps running. Round 2 also produced two hard requirements now in the spec: the denying socket interfaces must be **native to the Rust executor** (hand-authored stub components proved impractical), and precompilation must use the **same GC collector** as the runtime engine (`-C collector=drc`; a mismatch fails to load) — precompiled `.cwasm` loads in 4.5–5.4 ms versus 3.3–4.5 s uncached. |
 | R2 | **`componentize-py` executes bundle guest code at build time** — **confirmed** in round 2: componentization performs a sandboxed dry-run with the WIT imports trapped, and the compiler's `pkgutil.walk_packages` pre-import deliberately widens that execution to every module in the package. | High for security, medium for compatibility. | The compiler Job keeps the gVisor `RuntimeClass` (D10) with a two-destination network policy and credentials unread until the upload phase — compilation is treated as untrusted-code execution, not as a build step. Bundles whose import-time code needs I/O fail compilation with a clear diagnostic rather than being silently compiled with partial state. | Compile all existing bundles in the sandboxed Job and record which, if any, need an import-time behaviour change. |
-| R3 | **gVisor availability across Kubernetes distributions.** The original bubblewrap design is dead: a feasibility spike (`/tmp/claude-1000/-home-penguin-code-waddlebot/2142d121-d93d-453f-80fa-5e8160d63371/scratchpad/spike-bwrap/REPORT.md`, 2026-09-14, MicroK8s + containerd 2.1.6) found **11 of 11 test configurations failed**: `bwrap` could not create a namespace inside a rootless container even with `hostUsers: false`, as root, or with `SYS_ADMIN` — the kernel sysctls were correct (`unprivileged_userns_clone=1`, unlimited `max_user_namespaces`) but the runtime refuses `unshare(CLONE_NEW*)` inside containers. gVisor replaces it, which moves the risk to "is `runsc` installable on each cluster". | High: no `runsc`, no default-posture sandbox. | The support matrix (§12.2.1) covers MicroK8s, k3s, minikube, kubeadm, GKE Sandbox, and the managed clouds; the optional installer DaemonSet (§12.2.2) covers the rest with pinned, checksum-verified binaries; `sandbox.gvisor.enabled: false` is a documented, visible fallback that keeps every other layer. Startup fails closed when gVisor is requested but absent. | **M1 task:** verify `runsc` on the alpha MicroK8s node and on the DigitalOcean node image used for gamma and production, before M3–M5 start. |
+| R3 | **gVisor availability across Kubernetes distributions.** The original bubblewrap design is dead: a feasibility spike (report at `/tmp/claude-1000/-home-penguin-code-waddlebot/2142d121-d93d-453f-80fa-5e8160d63371/scratchpad/spike-bwrap/REPORT.md` — **legacy identifier**: a scratchpad path predating the rename; 2026-09-14, MicroK8s + containerd 2.1.6) found **11 of 11 test configurations failed**: `bwrap` could not create a namespace inside a rootless container even with `hostUsers: false`, as root, or with `SYS_ADMIN` — the kernel sysctls were correct (`unprivileged_userns_clone=1`, unlimited `max_user_namespaces`) but the runtime refuses `unshare(CLONE_NEW*)` inside containers. gVisor replaces it, which moves the risk to "is `runsc` installable on each cluster". | High: no `runsc`, no default-posture sandbox. | The support matrix (§12.2.1) covers MicroK8s, k3s, minikube, kubeadm, GKE Sandbox, and the managed clouds; the optional installer DaemonSet (§12.2.2) covers the rest with pinned, checksum-verified binaries; `sandbox.gvisor.enabled: false` is a documented, visible fallback that keeps every other layer. Startup fails closed when gVisor is requested but absent. | **M1 task:** verify `runsc` on the alpha MicroK8s node and on the DigitalOcean node image used for gamma and production, before M3–M5 start. |
 | R8 | **gVisor performance overhead on wasmtime.** Syscall-heavy work under a user-space kernel costs latency; the operator-facing figure must be ours, not a vendor's. | Medium: the 3 s text SLA has headroom, but the number drives the opt-out advice. | The opt-out exists precisely because some operators will want the latency back; the documented trade-off sentence (§12.2) cites our own measurement. | **M2 task:** benchmark `waddles_executor_call_seconds` and `waddles_e2e_latency_seconds` with `sandbox.gvisor.enabled` true and false, same hardware, same bundle set, and publish both distributions in the chart docs. |
 | R9 | **gVisor version pin versus node kernel updates.** A pinned `runsc` can lag a node kernel update, and the startup `/proc/self/status` marker check is tied to the pinned sentry's field set. | Medium: a node upgrade could make pods fail closed on a working cluster. | The marker check treats an unrecognized-but-clearly-gVisor `/proc/version` as verified and logs at WARN rather than failing, so only a genuinely absent sandbox fails closed; `runsc` upgrades are a chart value change with the same pinned-digest discipline as every other tool. | Re-verify the marker set whenever the `runsc` pin moves; the check has a test per pinned version. |
 | R4 | **wasmtime version pinning versus precompiled artifacts.** A precompiled component is only loadable by the exact engine that produced it; a chart upgrade that changes the engine invalidates every cached artifact at once. | Medium: a slow, thundering-herd recompilation window after an upgrade. | Cache keyed `{digest}-{wasmtime_abi}`; a mismatched artifact is discarded and recompiled, never loaded. Precompilation is measured (`waddles_bundle_load_seconds{phase="precompile"}`), and a rolling upgrade recompiles pod by pod rather than all at once. | Measure cold-start recompilation for the full first-party bundle set and size `EXECUTOR_PRECOMPILE_DIR` accordingly. |
