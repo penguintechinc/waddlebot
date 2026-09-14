@@ -137,6 +137,23 @@ void main() {
           });
       addTearDown(stateSubscription.close);
 
+      // Two guards around the tap, both for the same observed failure: on a
+      // software-rendered emulator the system IME can animate in over the
+      // bottom of the screen (logcat shows IME_INSETS_ANIMATION for this
+      // package), and Go Live lives at the bottom. flutter_test then reports
+      // a hit-test warning -- the finder resolves, the button is enabled, but
+      // the tap lands on whatever is on top -- and the run fails 90 seconds
+      // later as "chip labels seen: {Idle}, states seen: []", which reads
+      // like a pipeline defect and is not one.
+      //
+      // Dismissing any focus retracts the insets, and making the hit-test
+      // warning fatal means a future miss fails HERE, naming the real cause,
+      // instead of being re-diagnosed from scratch. Neither weakens the
+      // assertions below.
+      WidgetController.hitTestWarningShouldBeFatal = true;
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+
       await tester.tap(find.byKey(const Key('goLiveButton')));
       await tester.pump(const Duration(milliseconds: 500));
 
