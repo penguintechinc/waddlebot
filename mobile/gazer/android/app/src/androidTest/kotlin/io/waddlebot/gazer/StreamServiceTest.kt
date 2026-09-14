@@ -19,8 +19,9 @@ import org.junit.runner.RunWith
  * remove it cleanly when ACTION_STOP is broadcast (the real path the notification's own Stop
  * action - and any other Stop trigger - takes; see StreamService's stopReceiver, which delegates to
  * ServiceTeardownController.stopEverything(): pipeline.stop(), stopForeground(STOP_FOREGROUND_REMOVE),
- * stopSelf()). Cannot run on the JVM unit-test target since it needs a real NotificationManager and
- * Android service lifecycle.
+ * stopSelf(), then releasing the bound clients so a later Go Live re-binds and re-foregrounds
+ * instead of short-circuiting past StreamService.start() (R1). Cannot run on the JVM unit-test
+ * target since it needs a real NotificationManager and Android service lifecycle.
  *
  * Note this test does NOT cover RootEncoderEngine: StreamService's pipeline is lazy and is never
  * prepared here, so no engine is ever constructed. RootEncoderEngine's runtime gate is

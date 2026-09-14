@@ -124,13 +124,24 @@ class ServiceTeardownController(
      * Full stop, for the notification's Stop action and for task removal (app swiped away): cancel
      * any pending idle release, then stop the pipeline first so the camera, mic and RTMP socket are
      * released and IDLE reaches Dart while the service is still alive, then drop the notification
-     * and the service itself.
+     * and the service itself, and finally release the bound clients.
+     *
+     * The last step closes the same hole [onIdleReleaseExpired] closes for the idle-release timer:
+     * [stopService] is `stopSelf()`, and a client holding the service with `BIND_AUTO_CREATE` keeps
+     * it alive through that without ever seeing `onServiceDisconnected` - so PigeonHostApiImpl's
+     * `host` would stay non-null, its `prepare()` would keep short-circuiting past `bindService()`,
+     * and a later manual Go Live from Dart's IdleState would stream from a service that is no
+     * longer in the foreground. Safe here for the same reason it is safe on the expiry path:
+     * [stopPipeline] has already relayed STOPPING/IDLE and those listener posts run on `mainScope`,
+     * which the unbind does not cancel. [releaseBoundClients] is itself idempotent (a no-op when
+     * nothing is bound), so this stays safe even if an idle-release timer somehow also fires.
      */
     fun stopEverything() {
         cancelIdleRelease()
         stopPipeline()
         dropForegroundNotification()
         stopService()
+        releaseBoundClients()
     }
 
     /**

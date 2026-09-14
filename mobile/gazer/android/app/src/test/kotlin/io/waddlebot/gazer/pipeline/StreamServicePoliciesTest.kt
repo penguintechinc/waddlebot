@@ -203,15 +203,20 @@ class StreamServicePoliciesTest {
     )
 
     @Test
-    fun `stopEverything stops the pipeline before dropping the notification and the service`() {
+    fun `stopEverything stops the pipeline before dropping the notification, the service and the bound clients`() {
         // Ordering is the decision: stopping the pipeline first releases the camera, mic and RTMP
-        // socket and lets IDLE reach Dart while the service is still alive to relay it.
+        // socket and lets IDLE reach Dart while the service is still alive to relay it. The bound
+        // clients are released last (R1, the same hole NB1 closed for the idle-release timer):
+        // stopService() is stopSelf(), and a BIND_AUTO_CREATE client keeps the service alive through
+        // that without ever seeing onServiceDisconnected - so without this, tapping Stop in the
+        // shade and then Go Live again would short-circuit past bindService()/StreamService.start()
+        // and stream with no foreground claim.
         val calls = mutableListOf<String>()
         val controller = teardownController(calls, FakeDelayedRunner())
 
         controller.stopEverything()
 
-        assertEquals(listOf("pipeline", "notification", "service"), calls)
+        assertEquals(listOf("pipeline", "notification", "service", "clients"), calls)
     }
 
     @Test
@@ -320,10 +325,14 @@ class StreamServicePoliciesTest {
 
         controller.stopEverything()
 
-        assertEquals(listOf("pipeline", "notification", "service"), calls)
+        assertEquals(listOf("pipeline", "notification", "service", "clients"), calls)
         assertTrue(armed.cancelled, "stopEverything must cancel the pending idle release")
         armed.fire()
-        assertEquals(listOf("pipeline", "notification", "service"), calls, "a cancelled timer must not fire a second teardown")
+        assertEquals(
+            listOf("pipeline", "notification", "service", "clients"),
+            calls,
+            "a cancelled timer must not fire a second teardown",
+        )
     }
 
     @Test
