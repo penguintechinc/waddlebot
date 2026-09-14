@@ -18,6 +18,7 @@ import 'package:gazer/telemetry/telemetry_config.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../helpers/fake_host_api.dart';
+import '../helpers/fake_shared_preferences.dart';
 import '../helpers/fakes.dart';
 import '../helpers/pump_app.dart';
 
@@ -77,6 +78,13 @@ void main() {
 
   setUp(() {
     settingsRepo = FakeSettingsRepository();
+    // The Save button's handler also calls TelemetryConfig.saveEndpointOverride
+    // (SharedPreferencesAsync), which has no platform channel under
+    // flutter_test by default -- an unhandled MissingPluginException there
+    // routes the whole save through the catch branch and shows the failure
+    // SnackBar instead of "Settings saved", masking it in every test here
+    // that never asserted on the resulting SnackBar text.
+    useFakeSharedPreferences();
   });
 
   tearDown(() {
@@ -165,6 +173,52 @@ void main() {
       'rtmp://example.com/live/mystream',
     );
   });
+
+  testWidgets(
+    'save then pop clears the confirmation SnackBar so it cannot cover '
+    "Home's Go Live button",
+    (WidgetTester tester) async {
+      // MaterialApp installs a single ScaffoldMessenger above the Navigator
+      // (app.dart), so without clearing it on pop the "Settings saved"
+      // SnackBar raised here survives the pop back to Home and covers the
+      // bottom of the screen -- exactly where Go Live is anchored -- for its
+      // full ~4s life, silently swallowing a real user's tap.
+      await pumpSettings(tester);
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'RTMP URL'),
+        'rtmp://example.com/live/mystream',
+      );
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.pumpAndSettle();
+      expect(find.text('Settings saved'), findsOneWidget);
+
+      // Pop back to Home the same way a real user's system-back gesture,
+      // hardware back button, or the AppBar's own back arrow all do: through
+      // SettingsScreen's PopScope, which clears the messenger before the
+      // pop actually happens.
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byType(SnackBar),
+        findsNothing,
+        reason: 'a SnackBar still covering Home would swallow the Go Live tap',
+      );
+
+      // A fatal hit-test warning turns "the tap landed on something other
+      // than goLiveButton" into a test failure instead of a silent miss --
+      // the same technique integration_test/go_live_unreachable_test.dart
+      // uses to catch this exact obstruction. This fixture registers no
+      // fake video devices, so Go Live is disabled and the tap is a no-op,
+      // but a disabled button still occupies its layout position: the
+      // assertion is that the tap reaches goLiveButton at all, not that it
+      // starts a stream (the integration test covers that end to end).
+      WidgetController.hitTestWarningShouldBeFatal = true;
+      addTearDown(() => WidgetController.hitTestWarningShouldBeFatal = false);
+      await tester.tap(find.byKey(const Key('goLiveButton')));
+    },
+  );
 
   testWidgets('bitrate slider snaps to 100kbps steps', (
     WidgetTester tester,
