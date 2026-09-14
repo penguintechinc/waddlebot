@@ -6,7 +6,7 @@
       "event_type": "message",
       "actor": "penguin",
       "payload": {
-        "text": "Failed to set alias: run_in_executor (and therefore asyncio.to_thread) is not supported: no real OS threads are available inside componentize-py's WASI sandbox",
+        "text": "alias set: !foo \u2192 !ping",
         "channel_id": "chan-123",
         "author_id": "u-1"
       },
@@ -20,9 +20,32 @@
           "discord",
           "u-1"
         ]
+      },
+      {
+        "sql": "SELECT * FROM command_aliases WHERE ((command_aliases.community_id = $1) AND (command_aliases.alias = $2)) AND (command_aliases.deleted_at IS NULL)",
+        "params": [
+          42,
+          "bar"
+        ]
+      },
+      {
+        "sql": "SELECT * FROM command_aliases WHERE (command_aliases.community_id = $1) AND (command_aliases.alias = $2)",
+        "params": [
+          42,
+          "foo"
+        ]
+      },
+      {
+        "sql": "INSERT INTO command_aliases (community_id, alias, target_command, created_by) VALUES ($1, $2, $3, $4)",
+        "params": [
+          42,
+          "foo",
+          "ping",
+          "penguin"
+        ]
       }
     ],
-    "elapsed_ms": 3.281
+    "elapsed_ms": 8.856
   },
   "alias_bare": {
     "input_text": "!alias foo",
@@ -38,6 +61,6 @@
       "occurred_at": "2026-09-14T00:00:05+00:00"
     },
     "db_execute_calls": [],
-    "elapsed_ms": 0.41
+    "elapsed_ms": 0.66
   }
 }

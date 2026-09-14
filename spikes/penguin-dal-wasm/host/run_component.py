@@ -128,7 +128,8 @@ def main() -> None:
         print("db-execute calls:", len(CALL_LOG))
         print("result:", result)
 
-    with open("evidence/run_results.json", "w", encoding="utf-8") as f:
+    out_path = sys.argv[2] if len(sys.argv) > 2 else "evidence/run_results.json"
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
 

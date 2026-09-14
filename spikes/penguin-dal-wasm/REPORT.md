@@ -371,3 +371,228 @@ docker run --rm -u 1000:1000 -v "$PWD":/work -w /work \
   python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285 \
   /work/.venv/bin/python3 /work/host/run_component.py /work/evidence/bundle.wasm
 ```
+
+---
+
+# Round 2: runtime shims for `to_thread`, lazy imports, sockets
+
+Same worktree/branch, same unmodified bundle. Question: given the design
+requires bundle source to stay unchanged, can the **SDK runtime** (not the
+bundle) absorb Round 1's three blockers?
+
+**Verdict: YES to all three**, for this bundle's actual workload. Full
+`!alias add foo bar` happy path now round-trips end to end for real
+(4 `db-execute` calls, correct SQL/params each time, bundle replies
+`"alias set: !foo -> !ping"`); `_known_commands()` no longer fails via a
+generalized (not hand-picked) fix; a deliberate in-guest socket-open
+attempt fails cleanly. One Round 1 finding needed correcting along the way
+(build-time execution) -- see blocker (2).
+
+## Round 2 verdict table
+
+| Blocker | Round 1 | Round 2 fix | Result |
+|---|---|---|---|
+| (1) `asyncio.to_thread` -> `NotImplementedError` | Hard blocker, bundle's own `try/except` caught it | `_asyncio_patch.py`: monkeypatches `asyncio.to_thread` to run the callable in place; `_poll_loop.py::run_in_executor` patched identically for direct callers | **YES** -- `select()`/`update()`/`insert_async()` now execute; full write path succeeds |
+| (2) Lazy `bundles.bot_process` import invisible to discovery | Hand-fixed with one manual `import bundles.bot_process` line (bundle-specific) | `scripts/generate_bundle_preimports.py` (`pkgutil.walk_packages` over the real `bundles` package dir, build-time, host-side) generates `_bundle_preimports.py` -- one static `import` per module found, no hand-picking | **YES** -- `_known_commands()` succeeds via the generalized mechanism; manual line removed entirely |
+| (3) `wasi:sockets/*` granted wholesale via `add_wasip2()` | Documented as a security-review item, not tested for actual denial | In-guest probe (`app_entry.py::_probe_socket_denied`, harness-only, not the bundle) attempts `socket.socket(AF_INET, SOCK_STREAM)` | **YES** -- fails cleanly: `PermissionError: [Errno 2] Permission denied`, logged via the `log` WIT import, component keeps running normally afterward |
+
+## (1) `asyncio.to_thread` / `run_in_executor`
+
+`waddle_sdk/_asyncio_patch.py`, imported first thing by `app_entry.py`
+(before `flask_core`/`bundles`):
+```python
+async def _sync_to_thread(func, /, *args, **kwargs):
+    call = functools.partial(func, *args, **kwargs)
+    return call()
+
+asyncio.to_thread = _sync_to_thread
+```
+Safe here specifically because (a) `db-execute` is itself a synchronous
+host call on both sides of the component boundary -- there is no real
+blocking I/O being protected from the event loop in the first place -- and
+(b) this bundle's own stage runner never runs concurrent `transform()`
+calls (`flask_core/bundle_runtime.py`'s own docstring: `core/svc_process
+/runner.py` is a plain `while True: rpop` loop). Does **not** generalize to
+a bundle using `to_thread` for real CPU-bound parallelism -- see the
+module's own docstring for the boundary.
+
+`_poll_loop.py::PollLoop.run_in_executor` patched the same way (runs
+`func(*args)` in place, returns an already-resolved `Future`) for any
+bundle that calls it directly rather than through `to_thread`. Verified
+independently, host-side (no WASM): instantiating `PollLoop()` and calling
+`run_in_executor(None, lambda: 42)` returns a `Future` already done with
+result `42` -- `social_alias_process.py` itself never calls
+`run_in_executor` directly, so this path has no in-component exercise from
+THIS bundle; the host-side check is what stands behind "verify... patched
+the same way" for that specific claim.
+
+**Result -- the full write path now works.** `!alias add foo bar`,
+actual `db-execute` calls observed in order:
+
+```
+1. SELECT role FROM community_members WHERE community_id = $1 AND platform = $2 AND platform_user_id = $3 LIMIT 1   params=[42, 'discord', 'u-1']   -> [{"role": "admin"}]
+2. SELECT * FROM command_aliases WHERE ((command_aliases.community_id = $1) AND (command_aliases.alias = $2)) AND (command_aliases.deleted_at IS NULL)   params=[42, 'bar']   -> [{...alias 'bar' -> 'ping'...}]
+3. SELECT * FROM command_aliases WHERE (command_aliases.community_id = $1) AND (command_aliases.alias = $2)   params=[42, 'foo']   -> []
+4. INSERT INTO command_aliases (community_id, alias, target_command, created_by) VALUES ($1, $2, $3, $4)   params=[42, 'foo', 'ping', 'penguin']   -> []
+```
+Bundle reply: `"alias set: !foo -> !ping"`. `!alias foo` unchanged from
+Round 1 (0 DB calls, usage text) -- both in `evidence/run_results_round2.json`.
+
+## (2) Lazy imports, generalized
+
+`scripts/generate_bundle_preimports.py` runs on the host (ordinary
+CPython, before invoking `componentize-py`), walks `waddle_sdk/bundles/`
+with `pkgutil.walk_packages`, and writes `waddle_sdk/_bundle_preimports.py`
+-- one plain `import bundles.<name>` line per module physically present:
+```python
+import bundles.bot_process  # noqa: F401
+import bundles.social_alias_process  # noqa: F401
+```
+`app_entry.py` statically imports `_bundle_preimports` (not
+`bundles.bot_process` directly, as Round 1's hand-fix did) -- removing
+Round 1's manual line entirely and relying solely on this generated file
+still produces a successful `_known_commands()` call (see the
+`social_alias_process.flattened` log line in Sec "(1)" above, which only
+fires once `_known_commands()` returns). Confirmed by rebuilding with the
+manual line deleted and the generated import in its place -- same result.
+
+This generalizes: pointed at any bundle's real installed directory (not
+just this spike's two-file toy package), the same script would surface
+every sibling module regardless of whether the bundle under test imports
+it lazily, dynamically, or not at all -- a real bundle host would run the
+equivalent of this script per bundle before every `componentize-py` build.
+
+## (3) `wasi:sockets` -- what was tried, what actually demonstrates denial
+
+**Hand-authoring `wasi:sockets/*` deny-stubs via the raw component
+`Linker`, as literally proposed, turned out impractical to verify in this
+timebox**: every `wasi:sockets` function (`instance-network`,
+`create-tcp-socket`, `resolve-addresses`, ...) returns a **resource type**
+(`network`, `tcp-socket`, ...), and `wasmtime-py`'s exposed component API
+requires a matching `ResourceType` + `add_resource(name, ty, dtor)` +
+`add_func` triple per interface, hand-built with no WIT-driven codegen
+assistance for the HOST side (componentize-py only generates GUEST-side
+bindings). `Linker` also has no granular "`add_wasip2()` minus sockets"
+call, and `WasiConfig` (checked directly, see `_wasi.py` source) exposes
+**no method to grant network access in the first place** -- no
+`inherit_network`/`allow_ip_name_lookup`/equivalent exists on this class.
+
+**What this means in practice: denial isn't something that has to be
+added -- it's the only reachable outcome already.** `add_wasip2()` links
+wasmtime's real `wasi:sockets` implementation, but with a `WasiConfig`
+that has no way to authorize any socket, every real socket call it backs
+returns a permission failure by construction. Round 1 observed this
+already, incidentally, inside `asyncio.run()`'s self-pipe construction
+(`PermissionError` from `_fallback_socketpair`). Round 2 verifies it
+**deliberately**: `app_entry.py::_probe_socket_denied()` (harness-only --
+not the bundle, which never touches sockets) calls
+`socket.socket(socket.AF_INET, socket.SOCK_STREAM)` directly and logs the
+outcome via the `log` WIT import:
+```
+[guest log] INFO: socket probe: socket() denied cleanly -- PermissionError: [Errno 2] Permission denied
+```
+The component continues running normally afterward -- both required test
+events still complete correctly in the same run (see
+`evidence/run_results_round2.json`). "Fails cleanly" is satisfied: no
+crash, no hang, no trap, a catchable Python exception exactly like any
+other denied syscall.
+
+**Correction this forced on Round 1's "no build-time execution" claim.**
+An earlier version of this round's code called `_probe_socket_denied()`
+at module TOP LEVEL (not lazily on first `transform()` call). The
+`componentize-py componentize` BUILD ITSELF then crashed:
+```
+Caused by:
+    0: error while executing at wasm backtrace:
+           ...
+           1: 0x9fa194 - <unknown>!adapter log
+           ...
+    1: called trapping stub: log
+```
+This proves `componentize-py`'s build step performs an actual **sandboxed
+dry-run execution** of the guest module (using the same
+`componentize_py_runtime.wasm` the final component embeds) with every
+CUSTOM (non-WASI) WIT import wired to a **trapping stub** -- calling one
+during that dry run aborts the build. Round 1's `_buildtime_marker.py`
+(a bare `open()`+file-write, wrapped in `try/except OSError: pass`) could
+not distinguish "did not run" from "ran, but the sandboxed dry-run's
+filesystem access silently failed the write" -- the marker was
+**inconclusive, not proof of non-execution** as Round 1 stated. Fixed
+here by moving the socket probe out of module-top-level code into
+`WitWorld.transform()`'s first call (guarded by a flag), which only
+executes under a REAL host (this spike's `wasmtime`-py runner) that
+answers `log` for real. Practical takeaway for a real SDK: **any
+module-level code that touches a custom WIT import will break the
+build**, not just runtime -- lazy/deferred initialization of anything
+touching a host import is mandatory, not a style preference.
+
+## Cold start: `wasmtime compile`'d `.cwasm` vs uncached
+
+`wasmtime compile -C collector=drc bundle.wasm -o bundle.cwasm` (35.9 MB
+output; `-C collector=drc` required -- see below), loaded via
+`wasmtime.component.Component.deserialize_file`, against
+`Component.from_file` (JIT-compiles from `.wasm` every call, Round 1's
+path) in the same process, same `Engine`:
+
+| Path | Load time | Notes |
+|---|---|---|
+| `Component.from_file` (uncached, Round 1's path) | 3.3-4.5 s (4 runs) | Recompiles the full 21.6 MB component every time |
+| `Component.deserialize_file` (precompiled `.cwasm`) | **4.5-5.4 ms** (4 runs) | **~800x faster** |
+
+Per-call `transform()` latency is identical either way (compilation
+strategy doesn't affect execution speed, only load time): `!alias add foo
+bar` 5-18 ms (4 `db-execute` round trips), `!alias foo` 0.7-1.0 ms (0 DB
+calls) -- both paths, both consistent with Round 2's own numbers in Sec
+"(1)" above.
+
+**Version-matching pitfall hit and fixed:** the CLI's default `.cwasm`
+(`wasmtime compile bundle.wasm -o bundle.cwasm`, no `-C` flag) failed to
+load from the Python package's `Engine()`:
+```
+wasmtime._error.WasmtimeError: failed to load code for: .../bundle.cwasm
+Caused by:
+    module was compiled for the copying collector but the host is configured to use the deferred reference-counting collector
+```
+`wasmtime` CLI 48.0.2 defaults to the `copying` GC collector; the
+`wasmtime` PyPI package 48.0.0's default `Engine()` uses `drc` (deferred
+reference-counting). Fixed with `-C collector=drc` at compile time to
+match. **This means an AOT cache is tied to the exact engine
+configuration that will load it, not just the wasmtime version** -- a
+real bundle host precompiling `.cwasm` files as a build artifact must
+either precompile with the identical `Config` the runtime host will use,
+or (more robustly) precompile via the SAME embedding (e.g. Python
+`Engine.precompile_component`, not present in this package version) that
+will later load it, rather than shelling out to the standalone CLI with
+default settings.
+
+## DAL finding, confirmed
+
+**Bundles import `flask_core.database.AsyncDAL`, which wraps `pydal` --
+never `penguin_dal`.** Evidence:
+`libs/flask_core/flask_core/database.py:30`: `from pydal import (DAL,
+Field, ...)`; `database.py:38`: `class AsyncDAL:` wraps that `pydal.DAL`
+instance (`self.dal = DAL(uri, ...)`, `database.py:71`) and proxies
+missing attributes to it (`__getattr__`, `database.py:457-459`) -- which
+is how `dal.command_aliases` resolves to a real `pydal` `Table`. No file
+in `libs/flask_core/` or `core/svc_process/bundles/social_alias_process
+.py` imports the separate `penguin_dal` PyPI package
+(`penguin-libs/packages/python-dal`) at all; two OTHER `flask_core` files
+(`community_access.py:49`, `tenancy.py:32`) also import directly from
+`pydal`, reinforcing that `pydal` -- not `penguin_dal` -- is this
+repo's actual, consistently-used dependency. Any future SDK spec should
+name `pydal`'s attribute/query-builder surface as the facade target, not
+`penguin_dal`'s.
+
+## Round 2 evidence files (additions)
+
+| File | What it is |
+|---|---|
+| `waddle_sdk/_asyncio_patch.py` | Blocker (1) fix |
+| `waddle_sdk/_bundle_preimports.py` | Blocker (2) fix, auto-generated |
+| `scripts/generate_bundle_preimports.py` | Generates the above |
+| `evidence/run_results_round1.json` / `run_results_round2.json` | Before/after, both test events |
+| `evidence/component_wit_round1.txt` / `component_wit.txt` | Confirmed byte-identical WASI/custom import surface across rounds |
+| `evidence/cwasm_load_timing.txt` | `.cwasm` vs uncached load-time comparison, full output |
+| `evidence/run_in_executor_check.txt` | Host-side proof `PollLoop.run_in_executor` returns an already-done `Future` |
+| `host/load_cwasm.py` | The load-time comparison host script |
+| `evidence/bundle.cwasm` | Precompiled component (35.9 MB; **gitignored**, rebuild via `wasmtime compile -C collector=drc`) |

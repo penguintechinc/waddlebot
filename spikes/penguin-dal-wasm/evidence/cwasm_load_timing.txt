@@ -1,0 +1,17 @@
+[guest log] INFO: socket probe: socket() denied cleanly -- PermissionError: [Errno 2] Permission denied
+[guest log] DEBUG: social_alias_process.flattened alias=foo from=bar target='ping'
+[guest log] DEBUG: social_alias_process.invalidate_alias_unavailable community_id=42 alias=foo
+[guest log] INFO: socket probe: socket() denied cleanly -- PermissionError: [Errno 2] Permission denied
+[guest log] DEBUG: social_alias_process.flattened alias=foo from=bar target='ping'
+[guest log] DEBUG: social_alias_process.invalidate_alias_unavailable community_id=42 alias=foo
+--- cold path: Component.from_file (recompile every time, Round 1's path) ---
+Component.from_file load time: 4499.3 ms
+[from_file] '!alias add foo bar' -> '{"platform": "discord", "event_type": "message", "actor": "penguin", "payload": {"text": "alias set: !foo \\u2192 !ping", "channel_id": "chan-123", "author_id": "u-1"}, "occurred_at": "2026-09-14T00:00:00+00:00"}' (11.342 ms)
+[from_file] '!alias foo' -> '{"platform": "discord", "event_type": "message", "actor": "penguin", "payload": {"text": "Usage: !alias <name> <command> [options] | !alias add <name> <command> | !alias list | !alias delete <name> | !unalias <name>", "channel_id": "chan-123", "author_id": "u-1"}, "occurred_at": "2026-09-14T00:00:05+00:00"}' (0.910 ms)
+
+--- precompiled path: Component.deserialize_file (wasmtime-compiled .cwasm) ---
+Component.deserialize_file load time: 5.4 ms
+[deserialize_file] '!alias add foo bar' -> '{"platform": "discord", "event_type": "message", "actor": "penguin", "payload": {"text": "alias set: !foo \\u2192 !ping", "channel_id": "chan-123", "author_id": "u-1"}, "occurred_at": "2026-09-14T00:00:00+00:00"}' (11.221 ms)
+[deserialize_file] '!alias foo' -> '{"platform": "discord", "event_type": "message", "actor": "penguin", "payload": {"text": "Usage: !alias <name> <command> [options] | !alias add <name> <command> | !alias list | !alias delete <name> | !unalias <name>", "channel_id": "chan-123", "author_id": "u-1"}, "occurred_at": "2026-09-14T00:00:05+00:00"}' (0.763 ms)
+
+SUMMARY: from_file=4499.3ms  deserialize_file=5.4ms  speedup=834.9x

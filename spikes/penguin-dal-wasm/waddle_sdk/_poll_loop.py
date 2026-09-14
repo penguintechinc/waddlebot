@@ -9,13 +9,19 @@ own documentation ships that actually runs inside this sandbox at all --
 here (see REPORT.md: `_make_self_pipe` -> `socket.socketpair()` ->
 `PermissionError`).
 
-Load-bearing finding this class also *proves*, by omission: its own
-`run_in_executor` is `raise NotImplementedError` -- componentize-py's own
-maintainers never implemented it, because there is no real OS thread pool
-to hand blocking work to inside this sandbox. `asyncio.to_thread()`
-(`social_alias_process.py`'s own pattern for every synchronous DB call)
-calls exactly this method. See REPORT.md Sec "asyncio.to_thread" for the
-observed traceback.
+Round 1 finding this class *proved*, by omission: componentize-py's own
+upstream copy leaves `run_in_executor` as `raise NotImplementedError` --
+its own maintainers never implemented it, because there is no real OS
+thread pool to hand blocking work to inside this sandbox. `asyncio
+.to_thread()` (`social_alias_process.py`'s own pattern for every
+synchronous DB call) calls exactly this method. See REPORT.md Round 1,
+Sec 6 for the observed traceback.
+
+Round 2 patches `run_in_executor` below to run synchronously in place
+instead -- see that method's own docstring, and `_asyncio_patch.py`
+(which applies the identical fix directly to `asyncio.to_thread`, the
+actual call site this bundle uses) for what that patch does and does not
+generalize to.
 """
 
 from __future__ import annotations
@@ -30,9 +36,10 @@ class PollLoop(asyncio.AbstractEventLoop):
     or values that resolve immediately (no real suspension) -- exactly
     this spike's `flask_core.database.WasmDAL.execute()`, which performs a
     synchronous WIT host call inside an `async def` and never actually
-    yields. Does NOT support `run_in_executor` (see module docstring) --
-    the wasi:io/poll-based wakers path from the upstream file is likewise
-    omitted since nothing here ever calls `register()`.
+    yields. `run_in_executor` (Round 2) runs synchronously in place rather
+    than dispatching to a real thread pool -- see its own docstring. The
+    wasi:io/poll-based wakers path from the upstream file is omitted since
+    nothing here ever calls `register()`.
     """
 
     def __init__(self) -> None:
@@ -100,12 +107,20 @@ class PollLoop(asyncio.AbstractEventLoop):
         return asyncio.Future(loop=self)
 
     def run_in_executor(self, executor, func, *args):
-        # This is the method `asyncio.to_thread()` calls. componentize-py's
-        # own upstream `poll_loop.py` leaves this exact method unimplemented
-        # too -- there is no OS thread pool inside this sandbox to hand
-        # blocking work to.
-        raise NotImplementedError(
-            "run_in_executor (and therefore asyncio.to_thread) is not "
-            "supported: no real OS threads are available inside "
-            "componentize-py's WASI sandbox"
-        )
+        """Round 2: runs `func(*args)` synchronously in place and returns an
+        already-resolved `Future`, instead of raising `NotImplementedError`
+        (componentize-py's own upstream `poll_loop.py` leaves this exact
+        method unimplemented, for the same reason Round 1 found: no OS
+        thread pool exists inside this sandbox). This is the same fix
+        `_asyncio_patch.py` applies to `asyncio.to_thread` directly,
+        provided here too for any bundle that calls `run_in_executor`
+        itself rather than going through `to_thread`. See
+        `_asyncio_patch.py`'s docstring for exactly what this is (DB-call
+        shaped workloads) and is not (real CPU-bound parallelism) safe for.
+        """
+        future = self.create_future()
+        try:
+            future.set_result(func(*args))
+        except BaseException as exc:  # noqa: BLE001 -- mirror a real executor: propagate via the Future
+            future.set_exception(exc)
+        return future

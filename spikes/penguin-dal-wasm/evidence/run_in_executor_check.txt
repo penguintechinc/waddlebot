@@ -1,0 +1,8 @@
+$ python3 -c "
+import sys; sys.path.insert(0, 'waddle_sdk')
+from _poll_loop import PollLoop
+loop = PollLoop()
+fut = loop.run_in_executor(None, lambda: 42)
+print('type:', type(fut).__name__, 'done:', fut.done(), 'result:', fut.result())
+"
+type: Future done: True result: 42

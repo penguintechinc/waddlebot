@@ -1,0 +1,66 @@
+{
+  "alias_add": {
+    "input_text": "!alias add foo bar",
+    "result": {
+      "platform": "discord",
+      "event_type": "message",
+      "actor": "penguin",
+      "payload": {
+        "text": "alias set: !foo \u2192 !ping",
+        "channel_id": "chan-123",
+        "author_id": "u-1"
+      },
+      "occurred_at": "2026-09-14T00:00:00+00:00"
+    },
+    "db_execute_calls": [
+      {
+        "sql": "SELECT role FROM community_members WHERE community_id = $1 AND platform = $2 AND platform_user_id = $3 LIMIT 1",
+        "params": [
+          42,
+          "discord",
+          "u-1"
+        ]
+      },
+      {
+        "sql": "SELECT * FROM command_aliases WHERE ((command_aliases.community_id = $1) AND (command_aliases.alias = $2)) AND (command_aliases.deleted_at IS NULL)",
+        "params": [
+          42,
+          "bar"
+        ]
+      },
+      {
+        "sql": "SELECT * FROM command_aliases WHERE (command_aliases.community_id = $1) AND (command_aliases.alias = $2)",
+        "params": [
+          42,
+          "foo"
+        ]
+      },
+      {
+        "sql": "INSERT INTO command_aliases (community_id, alias, target_command, created_by) VALUES ($1, $2, $3, $4)",
+        "params": [
+          42,
+          "foo",
+          "ping",
+          "penguin"
+        ]
+      }
+    ],
+    "elapsed_ms": 18.245
+  },
+  "alias_bare": {
+    "input_text": "!alias foo",
+    "result": {
+      "platform": "discord",
+      "event_type": "message",
+      "actor": "penguin",
+      "payload": {
+        "text": "Usage: !alias <name> <command> [options] | !alias add <name> <command> | !alias list | !alias delete <name> | !unalias <name>",
+        "channel_id": "chan-123",
+        "author_id": "u-1"
+      },
+      "occurred_at": "2026-09-14T00:00:05+00:00"
+    },
+    "db_execute_calls": [],
+    "elapsed_ms": 0.82
+  }
+}
