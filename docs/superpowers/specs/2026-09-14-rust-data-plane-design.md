@@ -112,6 +112,8 @@ Every row was decided by the human product owner during the 2026-09-14 design se
 | D21b | The compiler **rejects** any bundle that still imports `flask_core.database` or `pydal`, with a message naming the module and pointing at the `penguin-dal` equivalent. | A gate that cannot be bypassed is what stops the legacy surface from creeping back in through a new bundle. | Human, 2026-09-14 |
 | D23 | **The spine is Valkey Streams, not lists.** Ingest receives or polls each event once and `XADD`s it once onto the stream of the ingest source it came from; every subscribing process bundle reads it through its own consumer group. **Supersedes** the list-based design: the per-bundle `LPUSH` copies, the `LMOVE` processing keys, the consumer index, the heartbeat sorted set and the reaper are all removed, replaced by the pending-entries list and `XAUTOCLAIM`. | One write per event regardless of how many bundles subscribe, real per-bundle isolation of failure and lag, and at-least-once from the server rather than from hand-rolled bookkeeping. The repo already contains a tested implementation of this model (`libs/flask_core/flask_core/stream_pipeline.py:341-1047`), gated off. | Human, 2026-09-14 |
 | D24 | **Stream granularity is per ingest source**, and access is **manifest-requested, hub-api-granted**: `consumes` is a request, hub-api resolves it into explicit `app_stream_grants` rows and creates consumer groups only on granted streams, the admin sees the grant list in words at install, and the stage reads only granted streams. Admins may revoke individual grants; the Valkey ACL stays pattern-scoped, so the selectivity is logical and lives in the stage. | Per-platform streams would force "all Twitch or none"; per-source plus explicit grants is what lets an operator give a bundle one channel. Bundles hold no Valkey connection, so the stage is the only possible enforcement point and the spec says so rather than implying Valkey enforces it. | Human, 2026-09-14 |
+| D27 | **The compiler Job splits into an untrusted `build` container and a trusted `publisher` container** sharing one `emptyDir`: `build` runs the per-language build (which executes bundle code) under gVisor with no credentials and **no network at all**; `publisher` runs on the default runtime, validates the component, computes the digests, precompiles, signs, uploads and `INSERT`s the version row. **The hash is never computed inside the sandbox that ran bundle code.** The `app_versions` digest table has **exactly two writers** — `waddles_publisher` and hub-api — with every write audited (role, key, old/new digest) and no privileges for any other role; activation and rollback live in the hub-api-owned `app_active_versions`. hub-api's artifact callback is a notification that triggers an independent re-hash and audit-logged cross-check, not the digest authority. Executors reconcile purely by digest. | A build stage that both runs untrusted code and measures its own output can choose the hash it is judged by. Splitting the containers separates "executes guest code" from "holds credentials" so no component has both, and the two-writer rule plus audit makes an unexpected write detectable rather than invisible. | Human, 2026-09-14 |
+| D28 | **Least User Access via RBAC.** Every Postgres role and every Valkey ACL user gets exactly the privileges its job needs, generated from two versioned, normative matrices (`config/postgres/rbac-matrix.yaml`, `config/valkey/acl-matrix.yaml`) and asserted equal to the live configuration by CI, with non-zero denominators. | Least privilege stated once and enforced mechanically, rather than re-derived by hand in each service and drifting. A matrix that CI compares against reality is the difference between a policy and a wish. | Human, 2026-09-14 |
 | D26 | **Install is an explicit permission-consent step, and the runtime enforces the approval rather than the manifest.** The admin sees the bundle's full contract — granted streams in words, egress hosts and methods, tables with read/write, host capabilities actually imported, `routes_to`, limits, scan status, tier and flag — approves it, and the approval is recorded with a `permission_hash` over the canonical summary. Grants, egress allowlists, table roles and capability wiring are generated from that record. Widening on upgrade requires re-approval against a diff; narrowing auto-approves with an audit entry; headless installs must pass the expected hash or fail closed. | A manifest is a request from the bundle's author; an approval is a decision by the operator. Deriving runtime authorization from the manifest would let a new version widen access silently, which is precisely what the consent step exists to prevent. | Human, 2026-09-14 |
 | D25 | **Action streams are strictly per bundle** — one stream, one consumer group, never read on another bundle's behalf — and the `_target_app_id` cross-bundle redirect becomes a **declared, approved capability** (`routes_to`, exact ids, no wildcards), enforced by the stage, which is also the only writer. | Ingest streams are shared read-only platform data; action envelopes are a bundle's own output and routinely carry its private state. The asymmetry is deliberate, and the one cross-bundle path is visible at install rather than implicit. | Human, 2026-09-14 |
 | D22 | **Naming: Waddles is the product and repo name; `waddlebot` survives only as the legacy identifiers listed here.** The repo becomes `penguintechinc/waddles` (local clone `~/code/waddles`), images become `ghcr.io/penguintechinc/waddles/<service>`, the Kubernetes namespace and in-cluster DNS become `waddles` (`hub-api.waddles.svc.cluster.local`), and chart Secrets become `waddles-*`. Flag keys (`waddles.*`) and Valkey keys (`waddles:*`) already used the name. **The complete list of surviving `waddlebot` literals:** (1) the Helm chart directory and release name `k8s/helm/waddlebot`, which this project does not rename (N4 keeps the chart's names and values stable); (2) the Postgres `DB_NAME` default `waddlebot`, which this project does not migrate; (3) the legacy `waddlebot:stream:*` / `waddlebot:dlq:*` key prefixes belonging to the unused `flask_core.stream_pipeline.StreamPipeline` class, which this spec does not use and does not rename; (4) Python package paths and the scratchpad path of the sandbox spike report. Every other occurrence is Waddles. | One product name, and a short, explicit list of the places a rename would mean a migration this project is not doing. | Human, 2026-09-14 |
@@ -237,7 +239,8 @@ Every row was decided by the human product owner during the 2026-09-14 design se
 | **Stage runner** (svc-ingest / svc-process / svc-action / svc-streaming) | Platform credentials, Postgres roles, Valkey ACL credentials, the egress HTTP client, secret resolution. | Cluster network; its own executor Deployment, over one mTLS host-API port. |
 | **Executor** (`svc-process-executor` / `svc-action-executor` Deployments, gVisor `runsc`) | Nothing. No stage credentials, no Valkey or Postgres access, no writable filesystem beyond a private scratch `emptyDir`, read-only rootfs. Holds only its client certificate for the host-API port and read-only bucket credentials. | Nothing inbound — the NetworkPolicy allows no ingress to the executor at all; it only initiates to the stage's host-API port and to the bucket. |
 | **Bundle** (WASM component) | Only what the WIT imports grant, scoped by its manifest. | The executor's wasmtime store. |
-| **Compiler** (bundle-compiler Job, gVisor `runsc`) | Bucket write credentials, injected only for the upload phase. | hub-api, which creates the Job; egress limited to the bucket and the hub-api callback. |
+| **Compiler `build`** (init container, gVisor `runsc`) | Nothing. No credentials, and its NetworkPolicy allows no egress at all. Runs bundle code. | hub-api, which creates the Job. |
+| **Compiler `publisher`** (trusted container) | Bucket write key, Ed25519 signing key, the `waddles_publisher` DB role. Never runs bundle code. | hub-api; egress limited to the bucket, Postgres and the hub-api notification endpoint. |
 
 ### 3.3 What deliberately does not change
 
@@ -388,22 +391,33 @@ Rationale for the split: a hook that must run for every event regardless of acti
 
 **Responsibility.** One gVisor-sandboxed run per uploaded bundle version: validate the manifest, scan the source, compile it to a WASI 0.2 component (or validate an uploaded prebuilt one), content-address it, and write the component plus a signed metadata sidecar to the bucket. Exits non-zero with a machine-readable reason on any failure.
 
-**Run as** a Kubernetes Job created by hub-api, one Job per version, under the same `RuntimeClass` as the executors (`sandbox.runtimeClassName`, default `runsc`), `backoffLimit: 0`, `activeDeadlineSeconds: 900`, `ttlSecondsAfterFinished: 86400`. Its `CiliumNetworkPolicy` allows egress to the bucket and to hub-api's callback endpoint only — nothing else, in any phase.
+**Run as** a Kubernetes Job created by hub-api, one Job per version, `backoffLimit: 0`, `activeDeadlineSeconds: 900`, `ttlSecondsAfterFinished: 86400`. The Job has **two containers sharing one `emptyDir`**, with sharply different trust:
 
-**Phases (sequential, in one Job):**
+```
+  Job: bundle-compile-{app_id}-{version}
+  ┌────────────────────────────────────────┐   ┌────────────────────────────────────────┐
+  │ initContainer: build      UNTRUSTED    │   │ container: publisher        TRUSTED    │
+  │  runtimeClassName: runsc (gVisor)      │   │  cluster-default runtime               │
+  │  NO credentials, NO network at all     │──▶│  bucket key, signing key, DB role      │
+  │  runs the per-language build, which    │   │  validates, hashes, precompiles,       │
+  │  EXECUTES BUNDLE CODE                  │   │  signs, uploads, records the version   │
+  └──────────────┬─────────────────────────┘   └──────────────▲─────────────────────────┘
+                 │        shared emptyDir /work (source in, component out)
+                 └───────────────────────────────────────────┘
+```
 
-| Phase | Network reachable | Writable | Credentials in the process environment |
-|---|---|---|---|
-| 1. Manifest validation | none | none | none |
-| 2. Source security scan | none | scratch `emptyDir` | none |
-| 3. Compile / component validation | none | scratch `emptyDir` | none |
-| 4. Digest + sign + upload | bucket, then the hub-api callback | none | bucket write key and signing key, read from their mounted files in this phase only |
+| Container | Trust | `RuntimeClass` | Network | Credentials | Does |
+|---|---|---|---|---|---|
+| `build` (init container) | **Untrusted** — it runs bundle code | `sandbox.runtimeClassName` (`runsc`) | **None** — the NetworkPolicy allows nothing, in or out | **None mounted** | Manifest validation, source security scan, the per-language build with the §4.6 flags. Writes the candidate component to `/work`. |
+| `publisher` | **Trusted** — it never runs bundle code | cluster default | bucket, Postgres, hub-api | bucket write key, Ed25519 signing key, the `waddles_publisher` DB role | Validates the component (`wasm-tools component wit` + the per-language import allowlist), computes the component and `.cwasm` SHA-256 digests, precompiles, signs the sidecar, uploads under the digest key, and `INSERT`s the version row |
+
+**Why the split.** The digest is the artifact's identity and the basis of every load-time verification (§11.7). Computing it inside the same process boundary that just executed untrusted bundle code would let a compromised build stage choose the hash it is measured by. Splitting the Job means **the hash is never computed inside the sandbox that ran bundle code**: the publisher reads bytes out of the shared `emptyDir` and measures them itself, and a build container that tampered with those bytes changes the digest rather than hiding it.
+
+The `build` container still gets the strongest sandbox (gVisor, no network, no credentials); the publisher gets credentials but never executes guest code. Neither container has both.
 
 **Hermeticity is measured, not assumed.** The compiler-sandbox spike ran all three Tier 1 toolchains under the pod-boundary model the gVisor Job provides (`--network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp`): Rust built in 0.40 s, Python in 5.52 s, JavaScript in 5.13 s, with DNS resolution failing closed (`gaierror` / `EAI_AGAIN`) rather than hanging. It also found that `componentize-py`'s **own** build sandbox has zero filesystem preopens by default, so a build-time file write from bundle code fails — a welcome additional layer, and explicitly **not** a replacement for the Job's sandbox, since it constrains only what the guest does inside componentization and not what the toolchain process itself could do.
 
-The Job's network identity is shared across phases, so the NetworkPolicy's two allowed destinations apply throughout; what changes per phase is the credential. Phases 1–3 run before the bucket and signing keys are read from their mounted files, and the handles are dropped once phase 4 completes.
-
-**`componentize-py` does execute guest code at build time** — round 2 of the spike confirmed it: componentization performs a sandboxed dry-run of the bundle with the WIT imports trapped, and the compiler's own `pkgutil.walk_packages` pre-import (§4.12) deliberately widens that execution to every module in the package. Phase 3 is therefore genuinely untrusted-code execution, which is exactly why the compiler Job keeps the gVisor `RuntimeClass` requirement (D10) rather than treating compilation as a build step. Untrusted code never coexists with a credential in memory, and the only two destinations it could reach both require one.
+**`componentize-py` does execute guest code at build time** — round 2 of the spike confirmed it: componentization performs a sandboxed dry-run of the bundle with the WIT imports trapped, and the compiler's own `pkgutil.walk_packages` pre-import (§4.12) deliberately widens that execution to every module in the package. The build container is therefore genuinely untrusted-code execution, which is why it keeps the gVisor `RuntimeClass` (D10) and why it is a **separate container with no credentials and no network at all** (D27) rather than a phase of a credentialed process.
 
 **Build flags are part of the contract, not an implementation detail.** The compiler-sandbox spike (`spike/bundle-compiler-sandbox`, commit `1f1d75a4`, report `spikes/bundle-compiler-sandbox/REPORT.md`) found that default builds leak imports beyond the bundle's own world. The compiler therefore builds each Tier 1 language with exactly these flags, and a build that omits them fails validation rather than shipping a component with extra reach:
 
@@ -1441,6 +1455,58 @@ One row per approved (bundle, version, scope) — the record the runtime derives
 
 `UNIQUE (app_id, version, tenant_id, community_id) WHERE superseded_by IS NULL`. Canonical JSON means sorted keys, no insignificant whitespace, and arrays in a defined order, so the same permissions always produce the same hash on any machine — the property headless approval (§9.7.5) depends on.
 
+### 6.10 `app_versions` — the digest table
+
+The record of what was built. The property this table guarantees is **no unexpected writers**, not immutability: exactly two roles may write it, and every write is audited.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigserial | Primary key |
+| `app_id` | text | FK `app_catalog(app_id)` |
+| `version` | text | SemVer |
+| `artifact_digest` | text | `sha256:` + 64 hex over the component bytes |
+| `cwasm_digest` | text | `sha256:` over the precompiled artifact |
+| `wasmtime_abi` | text | The engine identity the `.cwasm` was produced for |
+| `collector` | text | GC collector (`drc`) the `.cwasm` was produced with (§7.2) |
+| `size_bytes` | bigint | |
+| `language` | text | |
+| `artifact_kind` | text | `source` \| `prebuilt` |
+| `built_at` | timestamptz | |
+| `builder` | text | `bundle-compiler@<version>` |
+| `scan_status` | text | `scanned` / `scanned_with_findings` / `not_scanned` / `scan_failed` |
+| `badge` | text, nullable | The permanent "not security-scanned" badge, when applicable |
+| `approval_id` | bigint, nullable | FK `app_install_approvals(id)` |
+
+`UNIQUE (app_id, version)` and `UNIQUE (artifact_digest)`.
+
+#### Roles — exactly two writers
+
+| Role | Grants on `app_versions` | Rationale |
+|---|---|---|
+| `waddles_publisher` | `INSERT`, `UPDATE`, `DELETE` | The trusted publisher container (§4.6) — the only component that ever measures an artifact. |
+| `hub_api` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` | Owns scan outcome, approval linkage, the cross-check of §9.4, and orphan cleanup. |
+| `svc_ingest`, `svc_process`, `svc_action`, `svc_streaming`, the executors, the webui | **No privileges at all** — not `SELECT`, not `INSERT`, not `UPDATE`, not `DELETE`. | Stages read digests through the distribution API; the executor holds no DB credential whatsoever (§11.3). A role that cannot reach the table cannot be tricked into writing it. |
+
+Overwrites by either writer are permitted — a correction, a re-publish, or a cleanup is legitimate work, and forbidding it would only push people to work around the table. What must never happen is a write from somewhere unexpected, so:
+
+**Every write is audited.** An `AFTER INSERT OR UPDATE OR DELETE` trigger records the operation, the writing role (`current_user`), the row key (`app_id`, `version`), and the old and new `artifact_digest` into the audit log. A digest that changes is therefore always attributable — who changed it, when, and from what to what — which is the property that makes an unexpected write detectable rather than invisible. `DELETE` is likewise audited; superseded versions are normally retained for audit (§9.1) rather than deleted.
+
+The grant set is asserted by a negative test (§14.6): each non-writer role's `INSERT`, `UPDATE` and `DELETE` must fail at the SQL level, and the test reports how many roles it exercised.
+
+#### `app_active_versions`
+
+Which version is live is a separate, hub-api-owned table, so activation and rollback never touch an immutable row:
+
+| Column | Type | Notes |
+|---|---|---|
+| `app_id` | text | Part of the primary key |
+| `tenant_id` / `community_id` | integer / integer nullable | Scope; `NULL` community = tenant-wide |
+| `version_id` | bigint | FK `app_versions(id)` |
+| `activated_by` | uuid | User UUID |
+| `activated_at` | timestamptz | |
+
+`PRIMARY KEY (app_id, tenant_id, community_id)`. Only `hub_api` may write it. **Rollback is an `UPDATE` of `version_id` here** — pointing at a different, already-published, already-approved row — never an edit of a digest. The distribution API joins these two tables, which is why `artifactDigest` in §6.7 is always a value some publisher measured, written by one of exactly two roles, and recorded in the audit log if it ever changed.
+
 ---
 
 ## 7. Host interface and executor
@@ -1536,10 +1602,18 @@ A disabled bundle is re-enabled when the pod observes a **new `artifactDigest`**
 
 The **stage** decides what should be loaded; the **executor** fetches and verifies it. The executor is the only one of the two with bucket access, and it is read-only.
 
-Every `BUNDLE_POLL_INTERVAL_S` (default `60`), the stage:
+**Reconciliation is purely by digest.** Every `BUNDLE_POLL_INTERVAL_S` (default `60`), the stage compares the digest set the distribution API advertises against the digest set its executors report as `loaded`, and acts only on the difference:
 
-1. Reads the current bundle set from the last distribution poll: a list of `(app_id, artifactVersion, artifactDigest, manifest)`.
-2. For each digest not already reported `loaded` by an executor connection, sends `load` with the expected `digest`, `component_key` and `sidecar_key`.
+| Comparison | Action |
+|---|---|
+| Same `app_id`, same digest | **No-op.** Nothing is fetched, nothing is verified again, nothing is swapped — a steady-state poll costs one comparison per bundle. |
+| Same `app_id`, different digest | Fetch, verify, precompile, hot-swap, unload the old digest after draining. |
+| `app_id` present in the advertised set, absent locally | Add: fetch, verify, precompile, load. |
+| `app_id` absent from the advertised set (deactivated, revoked, uninstalled) | Unload, and evict its cached artifacts. |
+
+Version strings, timestamps and manifest text play no part in the comparison; the digest is the only identity. A version re-published with identical bytes is therefore correctly a no-op, and a rollback that points `app_active_versions` at an older row is just "different digest" and converges the same way as a roll-forward.
+
+For each digest to add or change, the stage sends `load` with the expected `digest`, `component_key` and `sidecar_key`.
 
 On `load`, the executor:
 
@@ -1763,7 +1837,10 @@ Result: `scanStatus: "not_scanned"`. That value is **permanent for the life of t
 
 ### 9.4 Publish
 
-1. Compute `sha256` over the component bytes.
+Everything below runs in the **publisher** container (§4.6) — never in the build container that executed bundle code.
+
+0. Read the candidate component out of the shared `/work` `emptyDir`, validate it (`wasm-tools component wit` plus the per-language import allowlist of §6.5), and reject the version if validation fails. The publisher trusts nothing the build container wrote; it re-derives everything from the bytes.
+1. Compute `sha256` over the component bytes, and separately over the precompiled `.cwasm`.
 2. `PUT bundles/{app_id}/{version}/{sha256}.wasm`.
 3. Build the sidecar and sign it with the deploy key (Ed25519, private half held only by the compiler Job's secret):
 
@@ -1785,7 +1862,8 @@ Result: `scanStatus: "not_scanned"`. That value is **permanent for the life of t
 ```
 
 4. `PUT bundles/{app_id}/{version}/{sha256}.json`.
-5. `PATCH` the `app_catalog` version row with the digest, `scanStatus`, `language`, `artifactKind` — the DB write is the commit point. A bucket object with no DB row is unreferenced and is garbage-collected by a weekly hub-api job after `BUNDLE_ORPHAN_GRACE_H = 168`.
+5. `INSERT` the `app_versions` row (§6.10) **directly**, over the publisher's own `waddles_publisher` Postgres role — the DB write is the commit point, and the publisher is the only writer of a digest anywhere in the system. A bucket object with no row is unreferenced and is garbage-collected by a weekly hub-api job after `BUNDLE_ORPHAN_GRACE_H = 168`.
+6. Notify hub-api that the version exists. **This callback is a notification, not the digest authority**: hub-api re-fetches the bucket object, re-hashes it, compares the result against the row the publisher inserted, and on a mismatch refuses to let the version be approved, raises an alert and writes an audit entry naming both digests. A cross-check that can only ever agree with itself proves nothing — hub-api measures independently, from the bucket, exactly as a pod does at load time.
 
 ### 9.5 Activation and rollout
 
@@ -1978,6 +2056,8 @@ for each normalized PlatformEvent E from source S at (tenant, community):
 | Bundle exhausts the pod | Per-call epoch deadline, memory cap, instance-pool ceiling, three-strike disable. | A bundle that is slow but under the deadline on every call. Visible in `waddles_executor_call_seconds`. |
 | Malicious bundle **at build time** (`componentize-py` executes module-level code) | The compiler Job runs under the same gVisor `RuntimeClass`, with a network policy allowing only the bucket and the hub-api callback, and with the bucket/signing credentials unread until the phase that no longer runs bundle code. | A compiler-toolchain vulnerability. Mitigated by pinned toolchains with checksums. |
 | Supply-chain: a hostile artifact swapped in the bucket | Content addressing + Ed25519 sidecar signature + digest cross-check against hub-api's DB; refuse on mismatch, keep the old version. | Compromise of both the DB and the signing key. |
+| A compromised build stage chooses its own digest | The digest is computed in the trusted `publisher` container from the bytes in the shared `emptyDir`, never in the `build` container that ran bundle code; hub-api independently re-hashes the bucket object and audit-logs any disagreement (D27). | A compromise of the publisher itself, which runs no guest code and has a far smaller attack surface. |
+| An unexpected writer rewrites a digest row | Exactly two Postgres roles may write `app_versions`; every other role has no privileges on it, asserted by a CI test per role. Every write is audited with the role, key and old/new digest (§6.10). | A compromise of one of the two legitimate writers — which the audit trail then attributes. |
 | Forged inbound events | Per-platform signature verification, per-source HMAC with a replay window, JWT with a mandatory tenant claim, built-in platforms unreachable through the generic REST route. | A leaked per-source secret. Mitigated by rotation and by the secret never leaving hub-api's store. |
 | Prompt/config injection through event payload | Tenant and community are never read from payload; `_target_app_id` changes only the destination key's `app_id` segment. | None structural; enforced by test. |
 
@@ -2126,6 +2206,51 @@ Every service reserves and accepts a SPIFFE identity under `spiffe://penguintech
 
 ---
 
+### 11.10 Least User Access via RBAC
+
+**The governing principle for every credential in this design: each Postgres role and each Valkey ACL user gets exactly the privileges its job needs — no more, and no "it was easier to grant `ALL`".** The pattern recurs throughout this spec — per-bundle Postgres roles limited to `data.tables` (§11.6.2), exactly two writers on `app_versions` (§6.10), a publisher role that touches nothing else (§4.6), an executor with no database credential at all (§11.3), per-service Valkey ACL users (§11.6.1) — and this section makes it one enforceable rule rather than a habit repeated in eight places.
+
+Two artifacts are **normative**, versioned in the repository, and are the source the grants are generated from. They are not documentation of what was configured; they are the configuration.
+
+#### 11.10.1 The Postgres RBAC matrix
+
+`config/postgres/rbac-matrix.yaml` — a role × table × privilege matrix covering every role in the system:
+
+| Role | Scope |
+|---|---|
+| `hub_api` | Control-plane tables: registries, approvals, grants, intake sources, `app_versions`, `app_active_versions` |
+| `waddles_publisher` | `app_versions` only (§6.10) |
+| `svc_ingest` | No database — the row exists and is empty, so "svc-ingest has no DB" is asserted rather than assumed |
+| `svc_process` | Its built-ins' own tables; serves bundle `db` calls through the per-bundle roles, not its own |
+| `svc_action` | `action_dispatch_log`, reference tables |
+| `svc_streaming` | Its own media/recording tables |
+| `webui` | Read-only where it reads at all |
+| executor | **No role.** The matrix states this explicitly so a future change has to delete a line rather than quietly add one |
+| migration runner | DDL, and only during migrations |
+| per-bundle roles (`bundle_<app_id_underscored>`) | Exactly the bundle's approved `data.tables`, generated per approval (§9.7.3) |
+
+Grants are generated from this file; nobody writes a `GRANT` by hand.
+
+**CI test.** A test queries the live `information_schema.role_table_grants` and asserts it **equals** the matrix — set equality, both directions, so a missing grant and an extra grant both fail. It reports the number of roles and tables examined and fails if fewer than **8 roles** or **8 tables** were checked, because a query that matched nothing would otherwise report a clean pass (`critical-rules.md` Verification Integrity).
+
+#### 11.10.2 The Valkey ACL matrix
+
+`config/valkey/acl-matrix.yaml` — a user × commands/categories × key patterns × channels matrix, from which the mounted `users.acl` (§11.6.1) is rendered by the chart. One entry per service user, plus an explicit statement that **the executors have no Valkey user at all**.
+
+**CI test.** A test runs `ACL LIST` against the deployed Valkey and asserts it equals the rendered matrix, plus per-user negative tests that prove the scoping actually bites:
+
+| Negative test | Expected |
+|---|---|
+| `svc-action` attempts `XADD` to an ingest source stream | `NOPERM` — it may write only its own action-related keys |
+| `svc-ingest` attempts `XREADGROUP` on an action stream | `NOPERM` |
+| `svc-process` attempts a key outside `waddles:t:*` | `NOPERM` |
+| Any service attempts `@admin` or `@dangerous` commands (`FLUSHALL`, `CONFIG`, `ACL`) | `NOPERM` |
+| An executor attempts to authenticate to Valkey | Fails — no user exists for it, and its NetworkPolicy denies the route anyway (§12.5) |
+
+Both matrices are referenced from Deployment (§12.3, where the chart renders them) and from Testing (§14.5, where the two equality tests run in every service's CI gate set).
+
+---
+
 ## 12. Deployment
 
 ### 12.1 Images
@@ -2268,6 +2393,8 @@ Existing keys keep their names and defaults. New keys:
 | `security.transport.tls` | `true` | §11.6.4 |
 | `security.transport.auth` | `true` | §11.6.4 |
 | `security.transport.certManager` | auto-detected | Use cert-manager when present, chart-managed CA otherwise |
+| `security.rbac.postgresMatrix` | `config/postgres/rbac-matrix.yaml` | The normative role × table × privilege matrix the grants are generated from (§11.10.1) |
+| `security.rbac.valkeyMatrix` | `config/valkey/acl-matrix.yaml` | The normative ACL matrix the mounted `users.acl` is rendered from (§11.10.2) |
 
 **Unchanged:** `pipeline.svcIngest.port` = 8200, `.svcProcess.port` = 8201, `.svcAction.port` = 8202, replicas 2/2/2, and the existing per-service `resources` blocks (requests `500m`/`512Mi`, limits `2000m`/`2Gi`). The `pipeline.pythonBaseImage` value is removed once no template references it.
 
@@ -2339,7 +2466,8 @@ containers:
 | **svc-process-executor** | **none** | `svc-process:8301`, the bucket, DNS — nothing else |
 | **svc-action-executor** | **none** | `svc-action:8302`, the bucket, DNS — nothing else |
 | svc-streaming | Ingress → `:8208`, RTMP `:1935`, SRT `:9000`, WHIP/WHEP UDP range | Postgres, Valkey, the bucket, DNS |
-| bundle-compiler Job | none | the bucket, hub-api's callback endpoint, DNS — nothing else |
+| **bundle-compiler `build` container** | none | **nothing at all** — no DNS, no bucket, no cluster. It runs bundle code and has no reason to reach anything (§4.6) |
+| **bundle-compiler `publisher` container** | none | the bucket, Postgres, hub-api's notification endpoint, DNS — nothing else |
 
 The two executor rows are the load-bearing ones: with no ingress and two egress destinations, an escaped executor has no route to Valkey, Postgres, the platform APIs, the API server, or the internet. `waddles_egress_denied_total` counts what the stage refuses; the NetworkPolicy is what stops anything that never reaches the stage at all.
 
@@ -2641,6 +2769,16 @@ gitleaks detect --no-git
 trivy image --exit-code 1 --severity HIGH,CRITICAL
 ```
 
+Two RBAC equality gates run alongside them, against the deployed alpha stack (§11.10):
+
+```
+make test-rbac-postgres   # information_schema.role_table_grants == config/postgres/rbac-matrix.yaml
+                          # set equality both ways; prints roles/tables examined;
+                          # fails below 8 roles or 8 tables
+make test-rbac-valkey     # ACL LIST == config/valkey/acl-matrix.yaml, plus the
+                          # per-user negative tests of §11.10.2
+```
+
 `penguin-libs` crates run the same gates in that repo, on their own `release/{lib}/v{X}.{Y}.x` branches, and publish to crates.io through trusted publishing.
 
 No step is wrapped in `|| true`. Where a tool is run twice (a JSON report followed by a gating run), the gating run is on the same inputs in the same job.
@@ -2673,6 +2811,9 @@ Each is a dedicated test whose **pass condition is the failure of the attack**, 
 | 14 | Bundle A attempts to read bundle B's KV namespace or config | Keys are namespaced per `app_id`; the read returns none and is counted |
 | 14a | Bundle A's dispatch observes bundle B's action entries | Never: each action stream has exactly one consumer group and the stage reads only the bundle's own stream. The test writes to B's action stream and asserts A's dispatch is never invoked and A's group never appears on B's stream (§5.9) |
 | 14b | A process bundle sets `_target_app_id` to an app outside its approved `routes_to` | The redirect is dropped, nothing is written to the target's stream, `waddles_route_denied_total{app_id,target}` +1, WARN logged with both ids |
+| 14g | Each non-writer role (`svc_ingest`, `svc_process`, `svc_action`, `svc_streaming`, the executor role, the webui role) attempts `INSERT`, `UPDATE` and `DELETE` on `app_versions` | Every one of the 18 statements fails at the SQL level with a permission error; the test reports the number of roles and statements exercised, and a zero denominator is a failure (§6.10) |
+| 14h | The publisher writes a digest, then it is changed | Both writes appear in the audit log with the writing role, the `(app_id, version)` key, and the old and new `artifact_digest` — the change is attributable, which is the property §6.10 guarantees |
+| 14i | The build container attempts to reach the network, the bucket, Postgres or hub-api | Every attempt fails: its NetworkPolicy allows nothing and it mounts no credential. The digest is computed only in the publisher, asserted by mutating the component in `/work` after the build and observing the recorded digest change rather than the tampering going unnoticed (§4.6) |
 | 14d | A version's manifest requests a table (or host, or capability, or stream) that is **not** in the approved permission summary | Denied at runtime — the stage generates its allowlists from the approval record, not the manifest — the call returns `denied(...)`, `waddles_host_call_denied_total` / `waddles_egress_denied_total` is incremented, and the mismatch is logged at ERROR naming the manifest value and the approved set (§9.7.3) |
 | 14e | An upgrade widens any permission | The new version is published but not activated until re-approval; the diff names exactly the added stream/host/table/capability/`routes_to` target or raised limit. A narrowing upgrade auto-approves and writes an audit entry |
 | 14f | A headless install passes a stale `permission_hash` | `409 permission_hash_mismatch`, nothing is approved, and the response carries the current summary and hash |
@@ -2764,6 +2905,9 @@ Database migrations are additive:
 | `app_stream_grants` | §6.8 — one row per (bundle, granted stream) |
 | `bundle_scan_findings` | per-version scanner findings summary |
 | `app_install_approvals` | §6.9 — the approved permission summary and its hash, which the runtime derives authorization from |
+| `app_versions` | §6.10 — the digest table, with its audit trigger and its two-writer grant set |
+| `app_active_versions` | §6.10 — which version is live per scope; hub-api-owned, the rollback target |
+| RBAC matrices | `config/postgres/rbac-matrix.yaml` and `config/valkey/acl-matrix.yaml`, plus the roles they generate (§11.10) |
 | `global_settings` seed | `bundles.allow_prebuilt = true` |
 | Per-bundle role bootstrap | the RLS policies on bundle-owned tables |
 | Ingest-stage cleanup | removes `stages.ingest` from the six affected `app_catalog` rows |
