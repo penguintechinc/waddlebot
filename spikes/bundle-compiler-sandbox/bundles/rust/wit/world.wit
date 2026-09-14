@@ -1,0 +1,26 @@
+// Tiny WIT world for the bundle-compiler-sandbox spike. Deliberately minimal:
+// one export a bundle must implement, three host imports representative of
+// what a real WaddleBot bundle would call (an outbound HTTP relay, a KV
+// lookup, and structured logging), so validation can be exercised without
+// pulling in the real production `waddle:bundle` package.
+//
+// The three imports live in a named `host` interface rather than as bare
+// world-level functions: jco/componentize-js 1.34.0's JS backends
+// (starlingmonkey and quickjs) could not resolve a "$root" virtual module
+// for bare world-level imports in this spike (see REPORT.md) even though
+// that is the documented convention; the interface-scoped form is the
+// well-trodden path (identical in shape to every real `wasi:*` interface)
+// and worked cleanly across all three toolchains.
+package waddle:bundle@0.0.1-spike;
+
+interface host {
+    http-request: func(req: string) -> string;
+    kv-get: func(key: string) -> option<string>;
+    log: func(level: string, msg: string);
+}
+
+world stage {
+    import host;
+
+    export transform: func(event: string) -> option<string>;
+}

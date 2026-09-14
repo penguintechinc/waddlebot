@@ -1,0 +1,9 @@
+# Generated/regenerable -- not committed for this throwaway spike.
+target/
+__pycache__/
+*.wasm
+*.cwasm
+bundles/*/src/bindings.rs
+bundles/js/scaffold-out/
+bundles/js/dbg/
+out/
