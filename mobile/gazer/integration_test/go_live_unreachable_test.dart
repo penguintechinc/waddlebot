@@ -137,22 +137,40 @@ void main() {
           });
       addTearDown(stateSubscription.close);
 
-      // Two guards around the tap, both for the same observed failure: on a
-      // software-rendered emulator the system IME can animate in over the
-      // bottom of the screen (logcat shows IME_INSETS_ANIMATION for this
-      // package), and Go Live lives at the bottom. flutter_test then reports
-      // a hit-test warning -- the finder resolves, the button is enabled, but
-      // the tap lands on whatever is on top -- and the run fails 90 seconds
-      // later as "chip labels seen: {Idle}, states seen: []", which reads
-      // like a pipeline defect and is not one.
+      // Clear the confirmation SnackBar from the Settings step above before
+      // tapping, or this tap silently misses.
       //
-      // Dismissing any focus retracts the insets, and making the hit-test
-      // warning fatal means a future miss fails HERE, naming the real cause,
-      // instead of being re-diagnosed from scratch. Neither weakens the
-      // assertions below.
+      // ScaffoldMessenger sits *above* the Navigator in MaterialApp, so the
+      // "Settings saved" SnackBar survives the pop back to Home and keeps
+      // covering the bottom ~64dp of the screen for its full 4-second life --
+      // exactly where Go Live is anchored. The finder still resolves to an
+      // enabled FilledButton, so the tap is issued and lands on the SnackBar;
+      // the pipeline never hears about it and the run fails 90 seconds later
+      // as "chip labels seen: {Idle}. States seen: []", which reads like a
+      // pipeline defect and is not one. Whether the tap falls inside that
+      // 4-second window is pure timing: locally the preceding license/flag
+      // wait outlasted the SnackBar and this passed, while on CI's emulator
+      // the flags resolved sooner and it did not.
+      //
+      // The unfocus is for the same class of obstruction from the other
+      // direction -- the two enterText calls above open a soft keyboard whose
+      // insets also eat the bottom of the screen -- and the fatal hit-test
+      // warning means any future obstruction fails HERE, printing the hit
+      // path that identifies it, instead of being re-diagnosed from the
+      // symptom 90 seconds downstream. Nothing below is relaxed.
       WidgetController.hitTestWarningShouldBeFatal = true;
       FocusManager.instance.primaryFocus?.unfocus();
+      tester
+          .firstState<ScaffoldMessengerState>(find.byType(ScaffoldMessenger))
+          .clearSnackBars();
       await tester.pumpAndSettle();
+      expect(
+        find.byType(SnackBar),
+        findsNothing,
+        reason:
+            'a SnackBar still covering the bottom of the screen would '
+            'swallow the Go Live tap',
+      );
 
       await tester.tap(find.byKey(const Key('goLiveButton')));
       await tester.pump(const Duration(milliseconds: 500));
