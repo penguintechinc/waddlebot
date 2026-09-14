@@ -1350,7 +1350,7 @@ Every `http.send` runs this sequence on the **stage** side. Each step that rejec
 | 3 | Host matches an `egress[].host` entry | `host_not_declared` |
 | 4 | Method is in that entry's `methods` | `method_not_declared` |
 | 5 | Host is not on the tenant-level global denylist (refreshed from hub-api every `EGRESS_DENYLIST_REFRESH_S` = `60`; last-known-good on outage) | `host_denylisted` |
-| 6 | DNS resolution yields no address in a forbidden range: loopback (`127.0.0.0/8`, `::1`), private (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`), link-local (`169.254/16`, `fe80::/10`), unspecified, multicast, or the cloud metadata addresses (`169.254.169.254`, `fd00:ec2::254`) | `ssrf_blocked_address` |
+| 6 | DNS resolution yields no address in a forbidden range: loopback (`127.0.0.0/8`, `::1`), private (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`), link-local (`169.254/16`, `fe80::/10`), unspecified, multicast, or the cloud metadata addresses (`169.254.169.254`, `fd00:ec2::254`). **The private-range half of this check is lifted when the tenant setting `bundles.egress.allowPrivateHosts` is true** (§8.5); loopback, link-local, unspecified, multicast and cloud metadata stay blocked in every configuration | `ssrf_blocked_address` |
 | 7 | The connection is pinned to the resolved, checked address (no second resolution between check and connect) | `dns_rebind_blocked` |
 | 8 | Per-bundle token bucket (`limits.egress_rps`, burst `EGRESS_RATE_LIMIT_BURST` = `20`) admits the call | *(returns `rate-limited`, not `denied`)* |
 | 9 | TLS handshake completes at TLS 1.2 or better with a verified chain | `tls_verification_failed` |
@@ -1380,6 +1380,24 @@ An unresolvable reference returns `denied("secret_unresolved")` and is classifie
 - The compiler rejects a manifest with an empty `egress` when the compiled component imports `waddle:bundle/http` (rule V22). The check is on the **component's actual import list**, not on the source text, so an undeclared import cannot slip through a dynamic call.
 - The install UI shows the full `egress` list and the `data.tables` list on the approval screen; approving an install is approving those two lists.
 - Changing `egress` or `data.tables` in a new version re-triggers approval; a version whose capability request is a strict subset of the approved one auto-approves.
+
+### 8.5 The SSRF guard applies to bundles, never to infrastructure
+
+**§8.2 governs bundle-initiated `http` calls through the host capability, and nothing else.** It does not, and must not, apply to the stage's own connections to the infrastructure it is configured with:
+
+| Connection | Configured by | SSRF guard |
+|---|---|---|
+| Postgres (`DB_HOST`/`DATABASE_URL`) | operator | **Not applied** |
+| Valkey (`VALKEY_URL`) | operator | **Not applied** |
+| Artifact bucket (`BUNDLE_BUCKET_ENDPOINT`) | operator | **Not applied** |
+| hub-api (`HUB_API_URL`) | operator | **Not applied** |
+| OTLP collector (`OTEL_EXPORTER_OTLP_ENDPOINT`) | operator | **Not applied** |
+| Platform APIs reached by svc-ingest/svc-action built-ins | operator + compiled-in | **Not applied** |
+| Bundle `http.send` | bundle manifest | **Applied in full (§8.2)** |
+
+These endpoints normally live on **private address space** — a cluster Service IP, an RFC 1918 VPC address, a LAN host — and reaching them is the ordinary case, not an attack. The distinction is provenance, not address range: operator configuration is trusted input, and a bundle's URL is not. A stage therefore resolves and connects to its configured endpoints without consulting the egress allowlist or the private-range rules at all; there is no code path in which an operator's `VALKEY_URL` is evaluated by the bundle egress guard.
+
+**The per-tenant escape hatch for bundles.** Some legitimate integrations are self-hosted on the same LAN (a local media server, an on-prem ticketing system). `bundles.egress.allowPrivateHosts` (chart value, per-tenant override, default `false`, env `EGRESS_ALLOW_PRIVATE_HOSTS`) lifts **only** the private-range portion of step 6 for bundle calls whose host is already on the manifest's `egress` allowlist. Loopback, link-local, unspecified, multicast and the cloud metadata addresses remain blocked regardless — those have no legitimate integration use and are the actual SSRF targets. Enabling it is logged at WARN at startup and surfaced on the install/approval screen for every bundle in that tenant.
 
 ---
 
@@ -1610,6 +1628,7 @@ Optional query parameter `community=<slug>` sets the envelope community; absent 
 - **Constant-time comparison** (`subtle::ConstantTimeEq`) for every signature check; a length mismatch still performs the comparison.
 - **Activation resolution** is via the distribution API for every route, so per-community activation is honoured uniformly (§15.3).
 - **Rejection metrics** carry `reason` values drawn from the error-code column of §10.1, so a dashboard can distinguish a misconfigured sender from an attack.
+- **Ingest's own outbound connections are infrastructure, not bundle egress.** The platform sockets and REST calls (Twitch IRC and EventSub, the Discord gateway, Slack Socket Mode, the YouTube poll, Kick), the distribution-API poll to hub-api, and the Valkey connections are all operator-configured and compiled-in; none of them is evaluated by the bundle SSRF guard, and all of them may resolve to private address space (§8.5). svc-ingest links no executor and serves no bundle `http` capability at all, so the guard has no subject in this service.
 
 ---
 
@@ -1666,6 +1685,8 @@ The worst outcome of a full escape is therefore: the attacker can issue exactly 
 ### 11.4 Egress
 
 See §8. Summarized as a security property: no bundle reaches the network except through a stage-side client that checks scheme, declared host, declared method, tenant denylist, resolved-address SSRF rules, DNS-rebind pinning, rate limit, TLS 1.2+ with verification, redirect re-checking, response size and total timeout — in that order, with a metric on every denial.
+
+**Scope, stated as a security property (§8.5):** the SSRF rules constrain **bundle-supplied URLs**, not operator-supplied configuration. A stage's connections to Postgres, Valkey, the artifact bucket, hub-api and the OTLP collector are configuration, live on private address space by design, and are never evaluated against the bundle egress guard. Conflating the two would break every normal deployment while protecting nothing: the threat the guard addresses is a bundle choosing a destination, and an operator's `VALKEY_URL` is not a bundle choosing anything. The one deliberate overlap is `bundles.egress.allowPrivateHosts`, which lets an operator extend the *bundle* guard to private hosts already on a manifest's allowlist, while loopback, link-local and cloud metadata stay blocked in every configuration.
 
 ### 11.5 Secrets
 
@@ -1745,6 +1766,8 @@ Both are ordinary values, settable in `alpha.yml`, `beta.yml`, `gamma.yml` and `
   "transport_detail": {"valkey": {"tls": false, "auth": true},
                        "postgres": {"tls": true, "auth": true}},
   "sandbox": "gvisor",
+  "dependencies": {"postgres": "ok", "valkey": "ok", "bucket": "ok",
+                   "hub_api": "ok", "otlp": "tcp"},
   "executor": {"state": "running", "connections": 4, "bundles_loaded": 7},
   "spine": {"stage": "process", "consumer_id": "svc-process-7d9c4f"}
 }
@@ -1906,6 +1929,7 @@ Existing keys keep their names and defaults. New keys:
 | `bundles.bucket.region` | `us-east-1` | Region |
 | `bundles.bucket.existingSecret` | `waddles-bundle-bucket` | Holds `accessKeyId`, `secretAccessKey` |
 | `bundles.pollIntervalSeconds` | `60` | Bucket poll cadence |
+| `bundles.egress.allowPrivateHosts` | `false` | Per-tenant override; lifts only the private-range portion of the bundle SSRF check for hosts already on a manifest's `egress` allowlist (§8.5). Never affects the stage's own infrastructure connections, which are exempt regardless |
 | `bundles.signingPublicKeySecret` | `waddles-bundle-signing` | Holds `publicKey` (pods) and `privateKey` (compiler Job only) |
 | `bundles.compiler.image` | `ghcr.io/penguintechinc/waddles/bundle-compiler:<tag>` | Job image |
 | `bundles.compiler.activeDeadlineSeconds` | `900` | Job deadline |
@@ -1988,11 +2012,35 @@ containers:
 
 The two executor rows are the load-bearing ones: with no ingress and two egress destinations, an escaped executor has no route to Valkey, Postgres, the platform APIs, the API server, or the internet. `waddles_egress_denied_total` counts what the stage refuses; the NetworkPolicy is what stops anything that never reaches the stage at all.
 
+**Infrastructure endpoints are allowed whatever their address range.** The stage rows' egress rules are generated from the operator's configured endpoints — `DB_HOST`/`DATABASE_URL`, `VALKEY_URL`, `BUNDLE_BUCKET_ENDPOINT`, `HUB_API_URL`, `OTEL_EXPORTER_OTLP_ENDPOINT` — and allow them whether they resolve to a cluster Service IP, an RFC 1918 VPC address, or a public host. The chart renders `toCIDR`/`toFQDN`/`toEndpoints` rules accordingly; there is no private-range exclusion on a stage's infrastructure egress, because that is where these services normally live (§8.5). Only the **bundle** `egress` hosts folded into the same rows are subject to the private-range default, and lifting it is `bundles.egress.allowPrivateHosts`. The executor rows are unaffected either way: default-deny plus the stage's host-API port plus the bucket, and nothing else.
+
 No `NodePort`, `HostPort`, `externalIPs` or `hostNetwork` in beta or production; alpha keeps its existing NodePort exemption. External ingress reaches only each pod's declared serving port.
 
 ---
 
-### 12.6 Environment variables (consolidated)
+### 12.6 Startup connectivity self-check
+
+Before a stage drains anything, and before the compiler Job starts phase 1, each service probes every infrastructure endpoint it is configured with — Postgres, Valkey, the artifact bucket, hub-api, and (when an endpoint is set) the OTLP collector. These are the private-network connections of §8.5, exempt from the bundle egress guard, and a failure to reach one is a configuration problem the operator must see immediately.
+
+Each probe reports a **classified** result, never a bare "connection failed":
+
+| Class | Meaning | Example message |
+|---|---|---|
+| `dns` | The hostname did not resolve | `valkey: DNS resolution failed for 'valkey.waddles.svc.cluster.local' — check the Service name and the pod's DNS policy` |
+| `tcp` | Resolved, but the connection was refused, timed out, or was blocked | `postgres: TCP connect to 10.42.0.17:5432 timed out after 5s — check the NetworkPolicy egress rule and that the endpoint is listening` |
+| `tls` | Connected, but the handshake or certificate verification failed | `postgres: TLS verification failed for 10.42.0.17:5432 — certificate is not signed by DB_SSLROOTCERT (/etc/waddles/ca/postgres-ca.crt)` |
+| `auth` | TLS succeeded, credentials were rejected | `valkey: authentication rejected for ACL user 'svc-process' — check the password Secret` |
+| `ok` | Reachable and authenticated | — |
+
+Behaviour:
+
+- **Never a silent retry loop.** Each probe runs with `STARTUP_PROBE_TIMEOUT_MS` (default `5000`) and at most `STARTUP_PROBE_ATTEMPTS` (default `3`) attempts at 1 s intervals; the classified result is logged at ERROR on failure, every time, with the endpoint named.
+- A required endpoint still failing after the attempts → **exit 78** (`EX_CONFIG`), so the pod crash-loops with the reason in its logs instead of appearing healthy and processing nothing.
+- The OTLP collector is the one non-required probe: an unreachable collector logs at WARN and the service starts (telemetry failure is never a request failure), consistent with §13.
+- Results are exposed on `/health` under `dependencies`, each with its class, so a failing probe is visible to an operator without reading logs.
+- `waddles_dependency_up{dependency}` is `1`/`0` per endpoint, and `waddles_dependency_check_total{dependency,class}` counts each classified outcome.
+
+### 12.7 Environment variables (consolidated)
 
 Defaults are the values a service uses when the variable is unset. Every secret-bearing variable is read from the environment or a file, never from a CLI flag.
 
@@ -2077,6 +2125,8 @@ Defaults are the values a service uses when the variable is unset. Every secret-
 | `EGRESS_RATE_LIMIT_RPS` / `_BURST` | `10` / `20` |
 | `EGRESS_MAX_REDIRECTS` | `3` |
 | `EGRESS_DENYLIST_REFRESH_S` | `60` |
+| `EGRESS_ALLOW_PRIVATE_HOSTS` | `false` — bundle calls only; infrastructure endpoints are exempt from the guard entirely (§8.5) |
+| `STARTUP_PROBE_TIMEOUT_MS` / `STARTUP_PROBE_ATTEMPTS` | `5000` / `3` (§12.6) |
 
 **svc-action only**
 
@@ -2134,6 +2184,8 @@ Histograms first — load and latency are the signals most often missing.
 | `waddles_sandbox_gvisor` | gauge | `stage`, `enabled` | `1` on the series matching the active posture, `0` on the other — so "gVisor off" and "not reporting" are distinguishable (§12.2) |
 | `waddles_host_api_rejected_total` | counter | `stage`, `reason` | Host-API connections refused (bad certificate, wrong peer identity, `UNSANDBOXED_EXECUTOR`) |
 | `waddles_host_api_connections` | gauge | `stage` | Live executor connections per stage |
+| `waddles_dependency_up` | gauge | `dependency` | `1`/`0` per configured infrastructure endpoint (§12.6) |
+| `waddles_dependency_check_total` | counter | `dependency`, `class` | Startup/periodic probe outcomes, `class` ∈ `ok`, `dns`, `tcp`, `tls`, `auth` |
 | `waddles_socket_lease_held` | gauge | `provider`, `community` | `1` on the replica holding the single-owner lease |
 
 ### 13.2 Traces
@@ -2161,7 +2213,7 @@ Context propagates on the envelope between stages and on outbound HTTP via W3C `
 
 ### 13.4 Health endpoints
 
-`/health` (rich, §11.6.4), `/healthz` (bare `ok`, for the Kubernetes probes), `/metrics` on `:9090`. Readiness is false while: the distribution poll has never succeeded, the executor has been unavailable longer than `EXECUTOR_UNAVAILABLE_READY_S` (15 s), or Valkey is unreachable.
+`/health` (rich, §11.6.4, including the `dependencies` block of §12.6), `/healthz` (bare `ok`, for the Kubernetes probes), `/metrics` on `:9090`. Readiness is false while: the distribution poll has never succeeded, the executor has been unavailable longer than `EXECUTOR_UNAVAILABLE_READY_S` (15 s), or a required dependency probe is not `ok`.
 
 ### 13.5 Feature flags
 
@@ -2258,7 +2310,9 @@ Each is a dedicated test whose **pass condition is the failure of the attack**, 
 | 1 | Guest calls `wasi:sockets` through the executor's native denying implementations | Every call returns `access-denied` immediately (guest Python sees `PermissionError`), no connection is attempted, **the component keeps running and the invocation completes**, the call is counted as `denied`, and three such calls in the window trip the bundle. A Tier 2 component importing a `wasi:*` interface outside the world plus the stub set is rejected at validation with `forbidden_host_import` |
 | 2 | Escaped executor attempts to reach Valkey, Postgres, the API server or the internet (simulated by a probe container in the executor's pod) | Every connection fails — the NetworkPolicy allows only the stage's host-API port and the bucket; the probe records each failure and the test asserts all of them |
 | 3 | Guest calls `http.send` to a host not in `egress` | `denied("host_not_declared")`, `waddles_egress_denied_total` +1 |
-| 4 | Guest calls `http.send` to `169.254.169.254` via a DNS name that resolves there | `denied("ssrf_blocked_address")` |
+| 4 | Guest calls `http.send` to `169.254.169.254` via a DNS name that resolves there | `denied("ssrf_blocked_address")` — and the same with `bundles.egress.allowPrivateHosts: true`, which must **not** unblock cloud metadata, loopback, link-local, unspecified or multicast |
+| 4a | Guest calls `http.send` to an allowlisted host resolving into RFC 1918 | `denied("ssrf_blocked_address")` by default; **allowed** with `bundles.egress.allowPrivateHosts: true` — both branches asserted |
+| 4b | A stage connects to Postgres, Valkey, the bucket, hub-api and the OTLP collector on private addresses | All succeed with `bundles.egress.allowPrivateHosts: false`: the test proves the bundle SSRF guard is never consulted for operator-configured endpoints (§8.5) |
 | 5 | Guest follows a redirect to an undeclared host | `denied("redirect_off_allowlist")` |
 | 6 | Guest issues SQL against a table outside `data.tables` | `denied(...)` before Postgres is touched; a second test bypasses the parser check and asserts the Postgres role also refuses |
 | 7 | Bucket serves a component whose bytes do not match the recorded digest | Load refused, previous version still serving, `waddles_bundle_digest_mismatch_total` +1 |
