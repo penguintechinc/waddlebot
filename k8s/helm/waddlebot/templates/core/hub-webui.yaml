@@ -33,6 +33,13 @@ spec:
         - name: http
           containerPort: 8080
           protocol: TCP
+        env:
+        # T10 (v3 demo) -- webui-server/server.js proxies /api/* to this URL (default
+        # http://localhost:8060 is not reachable in-cluster). Points at the v3 pipeline
+        # hub-api Service (templates/hub-api.yaml), the only hub-api Deployment running in
+        # the T10 minimal demo -- legacy modules.hub stays disabled (see values-alpha.yaml).
+        - name: HUB_API_URL
+          value: "http://{{ include "waddlebot.fullname" . }}-hub-api-v3:{{ .Values.pipeline.hubApi.port }}"
         livenessProbe:
           httpGet:
             path: /health

@@ -93,8 +93,14 @@ modules:
     env:
       RATE_LIMIT_MAX_REQUESTS: "1000"    # ~10x default; local e2e test/dev only
       RATE_LIMIT_WINDOW_MS: "60000"      # keep 60s window unchanged
+  # T10 (v3 demo) -- hub-webui is the demo surface (the browser-facing React SPA + Express
+  # proxy). Re-enabled here even though the rest of this `modules:` block stays disabled
+  # for the T10 pipeline cutover -- hub-webui has no v3 pipeline replacement yet
+  # (templates/hub-webui.yaml / pipeline.hubWebui is still a SKELETON with no built image),
+  # so this legacy Deployment is the only servable frontend. Image built from
+  # admin/hub_module/Dockerfile.webui, pushed to localhost:32000/waddlebot/hub-webui:alpha.
   hubWebui:
-    enabled: false
+    enabled: true
   coreCommunity:
     enabled: false
   coreData:
