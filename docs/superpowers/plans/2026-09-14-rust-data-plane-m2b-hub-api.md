@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.13, Quart, `quart-schema` (`@validate_request`/`@validate_response`), `pydal` (runtime queries, this codebase's established pattern — see Global Constraints for why `penguin-dal` is not used here), Alembic + raw SQL (schema/DDL), `boto3` (S3-compatible bucket), `kubernetes` (Job orchestration), `redis.asyncio` (Valkey admin ops), `cryptography` (AES-256-GCM secret-at-rest), `PyYAML` (RBAC matrix), pytest + `AsyncDAL` file-backed sqlite fixtures.
 
-**Spec:** `docs/superpowers/specs/2026-09-14-rust-data-plane-design.md` at commit `680a0a9b` (branch `docs/rust-data-plane-spec`) — sections 2 (D24/D26/D28), 5.2, 6.4–6.10, 7.4 (db capability), 8.4, 9, 10.3–10.6, 11.6.2, 11.10, 12.3, 13.5, 16 (M2), 19 (Q1/Q3), 20 (A-series). This plan implements the **hub-api** half of M2 only — the compiler binary and SDKs (M2a) are a separate plan; every boundary this plan shares with M2a is called out explicitly and marked "must match M2a."
+**Spec:** `docs/superpowers/specs/2026-09-14-rust-data-plane-design.md` at commit `680a0a9b` (branch `docs/rust-data-plane-spec`) — sections 2 (D24/D26/D28), 5.2, 6.4–6.10, 7.4 (db capability), 8.4, 9, 10.3–10.6, 11.6.2, 11.10, 12.3, 13.5, 16 (M2), 19 (Q1/Q3), 20 (A-series). This plan implements the **hub-api** half of M2 only — the compiler binary and SDKs (M2a) are a separate plan; every boundary this plan shares with M2a is called out explicitly and marked "must match M2a." **Tasks 42-49 (added at commit `e87b389c` of the same spec branch, user review 3) fold in D29/D30/D31** — sections 4.1.1, 5.9, 5.11, 5.12, 6.11, 6.12, 9.7.1, 10.1, 10.3, 11.1, 11.10 (updated), 12.3 (envelope binding key — hub-api never holds it), 15.4, and the M2b milestone row in Sec16. See Decisions #14-#17 below for what changed and why.
 
 ---
 
@@ -35,7 +35,7 @@ Copied verbatim from the spec and house rules — every task's code must satisfy
 - **Branching:** this work lands on `release/v3.0.X` via a `docs/` branch for the plan itself (already checked out); the *implementation* work this plan describes happens on a `feature/`-prefixed branch off `release/v3.0.X`, per `devops.md`.
 - **Commit format:** `feat(hub-api): ...` / `test(hub-api): ...` / `db(hub-api): ...` / `docs(hub-api): ...` / `chore(hub-api): ...`, each ending with:
   ```
-  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+  Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
   ```
 - Say **Waddles**, never "WaddleBot" for the product name in new prose (code/DB identifiers keep the legacy `waddlebot`/`hub_api` names per spec D22 — the chart directory, `DB_NAME`, and Python package paths are the explicitly surviving legacy identifiers).
@@ -54,7 +54,7 @@ These resolve every ambiguity a task would otherwise have to re-derive. They are
 | 3 | The compiler's artifact callback (`POST /api/v1/bundles/{app_id}/versions/{version}/artifact`) is a **notification/cross-check**, not the write authority. hub-api re-hashes the bucket object itself and compares against the claimed digest (refuses + audit-logs on mismatch); it looks for a matching `app_versions` row (written directly by `waddles_publisher`, M2a) and if none exists yet, inserts one itself as a fallback using its own (also-granted) write privilege — never computing a new digest, only ever storing the value the compiler claimed, after verifying it. | Coordinator directive: "hub-api verifies but never computes the digest." Keeps M2b fully testable independent of M2a's ship date. |
 | 4 | Activation/rollback is `POST /api/v1/apps/{app_id}/versions/{version}/activate`, an upsert into `app_active_versions` (tenant/community-scoped, PK `(app_id, tenant_id, community_id)`). Refuses (409) when no `app_versions` row exists with that exact `(app_id, version)` and a non-null `artifact_digest` — i.e. a digest hub-api never verified can never be activated. Rollback is the same endpoint pointed at an older, already-published version. | Spec §6.10: "Rollback is an UPDATE of version_id here... never an edit of a digest." |
 | 5 | RBAC matrix file: `config/postgres/rbac-matrix.yaml` (repo root, spec §11.10.1's literal path). Loader/generator: `scripts/db/rbac_matrix.py` (pure stdlib + PyYAML, no hub-api-package import, loadable by absolute path from both the Alembic migration and the test suite so no `sys.path` fragility). Grants are **generated from this file at migration-run time** — no hand-written `GRANT` anywhere. | Spec D28/§11.10.1: "Grants are generated from this file; nobody writes a `GRANT` by hand." |
-| 6 | 8 Postgres roles this plan creates/asserts: `hub_api`, `waddles_publisher`, `svc_ingest`, `svc_process`, `svc_action`, `svc_streaming`, `webui`, `migration_runner`. 9 tables in the matrix: `app_versions`, `app_active_versions`, `app_version_uploads`, `app_install_approvals`, `app_stream_grants`, `custom_platforms`, `ingest_sources`, `platform_settings`, `app_versions_audit_log`. Satisfies spec's literal `>= 8 roles`/`>= 8 tables` non-vacuous CI check with room to spare. | Spec §11.10.1. |
+| 6 | 8 Postgres roles this plan creates/asserts: `hub_api`, `waddles_publisher`, `svc_ingest`, `svc_process`, `svc_action`, `svc_streaming`, `webui`, `migration_runner`. **11 tables in the matrix** (9 from Tasks 1-3, plus `workstreams` and `workstream_usage_hourly` from Task 42): `app_versions`, `app_active_versions`, `app_version_uploads`, `app_install_approvals`, `app_stream_grants`, `custom_platforms`, `ingest_sources`, `platform_settings`, `app_versions_audit_log`, `workstreams`, `workstream_usage_hourly`. Satisfies spec's literal `>= 8 roles`/`>= 8 tables` non-vacuous CI check with room to spare. | Spec §11.10.1. |
 | 7 | The Valkey ACL matrix (`config/valkey/acl-matrix.yaml`, spec §11.10.2) is **out of scope for this plan** — it is owned by the chart/M6 work across all four Rust services, not by hub-api's own control plane. This plan's Valkey touchpoint (`services/valkey_admin_client.py`) only creates/destroys consumer groups; it does not render or own the ACL matrix. | Spec frames the two matrices as parallel but separately-owned artifacts; hub-api's role in the Postgres one is direct (it owns the schema), its role in the Valkey one is not. |
 | 8 | Settings keys (exact strings, copied from the spec — every later milestone's Rust code reads these literally): global `bundles.allow_prebuilt` (table `platform_settings`); tenant `allow_wildcard_consumes` and `bundles.egress.allowPrivateHosts` (existing generic `tenant_settings` table — no new tenant-settings endpoint needed, `GET/PUT /api/v1/tenant/<slug>/settings` already accepts arbitrary `{key,value}` pairs). | Spec §6.4.4 V30, §8.5, §12.3. |
 | 9 | Feature-flag flag keys used verbatim from spec §13.5: `waddles.core.wasm-bundles`, `waddles.core.generic-intake`, `waddles.core.prebuilt-bundles`. All three are `min_tier: free` (core module), so the two-gate check only ever fails on the PostHog flag being off, never on tier. | Spec §13.5. |
@@ -63,6 +63,10 @@ These resolve every ambiguity a task would otherwise have to re-derive. They are
 | 11 | Endpoint paths, scopes and DTO shapes are fixed once, here, and never repeated with variation in a later task: see the table in Task 11's Interfaces block (versions), Task 22 (approvals), Task 23 (settings), Task 27 (ingest sources), Task 31 (grants), Task 33 (distribution v2), Task 34 (distribution sources), Task 35 (trip re-enable). |
 | 12 | **Distribution API v2 is a new, separately-mounted route pair; the v1 route is not touched until the M6 cut-over.** `GET /api/v1/distribution/v2/bundles` (Task 33) serves the full spec §6.7 row — the five v1 fields plus `artifactVersion`, `artifactDigest`, `artifactKind`, `language`, `scanStatus`, `manifest`, `grants` — with `meta.version` = `2` and an `ETag`/`If-None-Match` 304 path. `GET /api/v1/distribution/sources` (Task 34) is the ingest-source registry the Rust svc-ingest polls, same ETag treatment. `GET /api/v1/distribution/bundles` keeps its **byte-identical** v1 body (five fields, `meta.version` = `1`) so today's `flask_core.stage_runner.BundlePoller` and every existing test in `test_v1_distribution_blueprint.py` keep passing unchanged; it is deleted in M6 once every poller is Rust. | The spec's §6.7 wording ("needs no versioning of the endpoint") assumes a flag-day cut-over of one consumer; this repo has a live Python poller on the v1 shape throughout M2b–M5, so a second route is the only way "the old endpoint keeps working" is literally true rather than true-if-clients-ignore-unknown-fields. Additive-only, reversible, and deleted by one commit at cut-over. |
 | 13 | **Every ingest source carries an `auth` config that svc_ingest enforces** (user's third spec review, authoritative ahead of the spec amendment; the published shape **must match plan M5**). Wire shape, published verbatim by `GET /api/v1/distribution/sources`: `auth = {modes: ["hmac", "ip_allowlist"|"bearer"|"basic", ...], cidrs: [...], secret_ref: "<id>", origin_suffixes: [...], origin_cidrs: [...]}`. **Generic webhook sources** (`platform` starting `custom:`, and the built-in `webhook` platform) MUST declare at least one of `ip_allowlist`, `bearer` or `basic` **in addition to** `hmac`; a create or auth-update with none of the three is refused `422 auth_second_factor_required`. **Twitch and Kick sources** carry an origin policy instead: `origin_suffixes` (defaulting to `["twitch.tv"]` / `["kick.com"]`) plus optional `origin_cidrs`. Bearer tokens and Basic password hashes live encrypted in `ingest_sources.auth_secret_ciphertext`/`auth_secret_iv` (same AES-256-GCM helper as the HMAC secret) and are **never** returned by any endpoint — the wire carries `secret_ref` only. Every auth-config change writes an `audit_log` row (`ingest_source_auth_changed`) recording the old and new `modes`, never the secret. Schema lands as migration 0022 (Task 39); publication and the config/consent views land in Task 40. | The HMAC secret alone authenticates the *payload*, not the *caller*: anyone who replays a captured body passes it. A second factor binds the request to a network location or a credential, and the platform-origin policy does the same job for Twitch/Kick, whose senders are known. Refusing at create time is the only place the requirement is cheap to enforce. |
+| 14 | **`workstreams` (spec §6.11, D30) is 1:1 with `ingest_sources`, but its FK targets `ingest_sources.id`, not the spec's literal `source_id text` FK.** `ingest_sources.source_id` is unique only per `(tenant_id, platform, source_id)` (Task 3's three-column `UNIQUE`), not globally, so the spec's shorthand FK cannot be taken literally in this schema — `platform`/`source_id` are denormalized onto `workstreams` for read convenience instead. `workstreams.ingest_source_id` is **nullable, `ON DELETE SET NULL`** (never `ON DELETE CASCADE`): `workstream_usage_hourly` rows must keep their `workstream_id` FK target for the life of the tenant's usage history even after the source itself is deleted, so deleting a source must never cascade-delete its workstream. `workstreams.id` is a real Postgres `UUID` (`gen_random_uuid()`); the pydal/sqlite test binder has no native UUID field type, so its `id` stays that ORM's usual autoincrement integer — every service function treats `workstream_id` as an opaque string (`str(row.id)`) on the wire and never assumes either representation, exactly like this codebase already treats `app_id`. Schema + backfill: Task 42. Ongoing creation/disable, wired into `ingest_source_service.create_source()`/`delete_source()`: Task 44. | Spec §6.11, §5.11 ("one workstream per configured ingest source... created 1:1 with each row in `intake_sources`"), §15.4 (backfill requirement). The FK-target and nullability deviations are the same class of documented, substance-preserving deviation as Decision #1's PII integer-vs-uuid choice. |
+| 15 | **`routes_to` cross-tenant refusal (spec §5.9, D30) is wired into `approve_version()` (Task 21), extended by Task 46.** "Installed in the same tenant" is defined as: the target `app_id` has a non-superseded `app_install_approvals` row whose `tenant_id` equals the approving call's `tenant_id` (community-agnostic — a tenant-wide **or** any-community approval both count as "installed in this tenant"). A target absent from `app_catalog` entirely is `422 routes_to_target_not_found`; a target that exists but is not installed in this tenant is `422 routes_to_cross_tenant`. Both refusals write an `audit_log` row (`action = "routes_to_refused"`) before raising, so a refusal is exactly as auditable as a success (task brief: "refused at approval time (422 + audit)"). | Spec §5.9's install-time row: "hub-api validates that each target exists in `app_catalog`, is installed in the same tenant as the declaring bundle — a cross-tenant target is refused outright at approval, not merely left unapproved (D30)." `app_install_approvals` is this plan's own, already-existing proxy for "installed" — no new table or cross-service call is needed to answer the question. |
+| 16 | **The usage aggregator (spec §5.12, §6.12, D31) is a Kubernetes CronJob, not an in-process background task, and is gated by the chart value `metering.enabled`, never a PostHog flag.** hub-api's `services/usage_aggregator_service.py` (Task 47) owns its own Valkey consumer group (`hub_api_usage_aggregator`) on `waddles:usage`, `XREADGROUP`s a bounded batch, aggregates in memory, commits one `workstream_usage_hourly` row per distinct `(tenant, community, workstream, stage, app, hour)` group, and only then `XACK`s the entries in that batch — so a crash between commit and ack causes at-least-once redelivery (a duplicate row on the next run), never data loss, which `workstream_usage_hourly`'s own append-only/summed-at-query-time design (spec §6.12) already tolerates by construction. The wire shape of one `waddles:usage` entry is this task's own decision (the spec specifies the transport, not the field names) — documented in full in Task 47's docstring, marked **must match** whichever plan implements the stage-side `XADD` producer (M3 `svc_action`, M4 `svc_process`, M5 `svc_ingest`, and `svc_streaming`'s own future plan). The per-community admin usage view (Task 48) stays **ungated**, following this plan's own established rule (Task 37: "write surfaces are gated; read surfaces are not") — reading usage data can never be blocked by a flag flip, only the recording pipeline can, and that pipeline's gate is the chart value the spec itself names. | Spec §5.12 ("batched and `XADD`ed... Stages are write-only"; "hub-api owns a consumer that reads `waddles:usage` and writes `workstream_usage_hourly`... append-only... corrections are new rows... summed at query time"), §12.3 (`metering.enabled`, a chart value "no charging or enforcement is wired to it"). A long-lived in-process consumer thread inside a horizontally-scaled Quart deployment raises "which replica owns the singleton reader" in a way a CronJob (naturally single-run, `concurrencyPolicy: Forbid`) does not — the same operational shape this plan already uses for `bundle_role_cleanup_job.py` (Task 36). |
+| 17 | **hub-api never touches `security.envelopeBinding.keySecretRef`/`k_binding` — confirmed, not implemented.** Spec §5.11/§12.3 state the binding-MAC key is "held only by the Rust stage services... never by hub-api, never by a bundle, never by the compiler." No task in this plan reads, writes, provisions or rotates that Secret; hub-api's only D30 responsibility is the `workstreams` identity table and its 1:1 lifecycle with `ingest_sources` — the key itself, and its provisioning/rotation, belong to the chart/M6 work across the four Rust stage services (the same ownership split Decision #7 already draws for the Valkey ACL matrix). Likewise, **RLS policies on bundle-reachable tables (`data.tables`) are confirmed out of M2b's scope**, not merely deferred: the spec's own M2b milestone row (§16) lists exactly four hub-api deliverables for D30/D31 — `workstreams`, the usage aggregator, the admin usage view, and `routes_to` refusal — and does not mention RLS; RLS enforcement (`SET LOCAL waddles.tenant`/`waddles.community` driving policies on a bundle's own tables, spec §7.4) is explicitly the Rust stage side's job, confirmed by the M2a plan's own PA4 scope note ("RLS... M3/M4/M5 scope"). `bundle_db_role_service.py` (Task 20) already grants the per-bundle role table-level privileges; it was never the right place for row-level policy DDL, and this plan adds none. | Verifies the task brief's two explicit checks ("hub-api must never be able to read the key if the spec says stage-only — follow the spec exactly"; "RLS policies on bundle-reachable tables") against the spec's own milestone table and the sibling M2a plan, rather than fabricating scope this milestone does not own. Recorded as a Self-Review finding (see below) as well as here, since it is a negative finding — confirming an absence — not a task addition. |
 
 ---
 
@@ -80,6 +84,7 @@ alembic/versions/
   0020_app_versions_and_rbac.py             new (Task 2)
   0021_bundle_install_schema.py             new (Task 3)
   0022_ingest_source_auth.py                new (Task 39)
+  0023_workstreams_and_usage.py             new (Task 42)
 docs/
   rbac-matrix.md                            new (Task 2)
 hub_api/
@@ -111,16 +116,20 @@ hub_api/
     bundle_feature_gate.py                  new (Task 37)
     bundle_telemetry.py                     new (Task 38)
     ingest_source_auth.py                   new (Task 39)
+    workstream_service.py                   new (Task 44)
+    usage_aggregator_service.py             new (Task 47)
+    usage_query_service.py                  new (Task 48)
   blueprints/v1/
     bundle_versions.py                      new (Tasks 11, 17)
     bundle_artifact_callback.py             new (Task 15)
     bundle_approvals.py                     new (Task 22)
     bundle_settings.py                      new (Task 23)
     custom_platforms.py                     new (Task 25)
-    ingest_sources.py                       new (Task 27), modified — auth PUT (Task 40)
+    ingest_sources.py                       new (Task 27), modified — auth PUT (Task 40), workstreamId (Task 45)
     bundle_grants.py                        new (Task 31)
-    distribution.py                         modified — v2/bundles (Task 33), /sources (Task 34)
+    distribution.py                         modified — v2/bundles (Task 33), /sources (Task 34), workstreamId (Task 45)
     bundle_versions.py                      modified — POST .../trip-reenable (Task 35)
+    workstream_usage.py                     new (Task 48)
   tests/
     conftest.py                             modified — bundle_install_db fixture (Task 4)
     test_rbac_live_grants.py                new (Task 5)
@@ -157,14 +166,27 @@ hub_api/
     test_bundle_telemetry.py                new (Task 38)
     test_ingest_source_auth.py              new (Task 39)
     test_ingest_source_auth_api.py          new (Task 40)
-    test_openapi_m2b_paths.py               new (Task 41)
-  pyproject.toml                            modified — per-file ruff ignores (Tasks 33-40) + the final gate (Task 41)
+    test_openapi_m2b_paths.py               new (Task 41), modified — usage route/module (Task 49)
+    test_m2b_logging_conformance.py         new (Task 41), modified — new D30/D31 files (Task 49)
+    test_workstream_fixture_smoke.py        new (Task 43)
+    test_workstream_service.py              new (Task 44)
+    test_ingest_source_service.py           modified — workstream wiring regression (Task 44)
+    test_workstream_id_publication.py       new (Task 45)
+    test_bundle_approval_service.py         modified — routes_to cross-tenant tests (Task 46)
+    test_usage_aggregator_service.py        new (Task 47)
+    test_usage_query_service.py             new (Task 48)
+    test_workstream_usage_blueprint.py      new (Task 48)
+  pyproject.toml                            modified — per-file ruff ignores (Tasks 33-40, 48) + the final gate (Tasks 41, 49)
 k8s/helm/waddlebot/templates/
   hub-api-compiler-rbac.yaml                new (Task 12)
   bundle-role-cleanup-cronjob.yaml          new (Task 36)
+  usage-aggregator-cronjob.yaml             new (Task 47)
 k8s/helm/waddlebot/
   values.yaml                               modified — bundles.compiler.*, sandbox.* keys hub-api needs (Task 12)
   values.yaml                               modified — bundles.roleCleanup.* keys (Task 36)
+  values.yaml                               modified — metering.* keys (Task 47)
+config/postgres/
+  rbac-matrix.yaml                          modified — workstreams, workstream_usage_hourly rows (Task 42)
 ```
 
 ---
@@ -685,7 +707,7 @@ privilege) plus scripts/db/rbac_matrix.py, the single generator every
 later migration in this milestone renders GRANT/REVOKE SQL from -- no
 hand-written GRANT anywhere, per spec D28/Sec11.10.1.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -1013,7 +1035,7 @@ the old/new digest. Grants are generated from
 config/postgres/rbac-matrix.yaml, not hand-written. Activation/
 rollback lives in the separate app_active_versions pointer table.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -1299,7 +1321,7 @@ Grants generated from config/postgres/rbac-matrix.yaml, scoped to
 these six tables only. Seeds the global bundles.allow_prebuilt=true
 default (spec Sec12.3).
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -1646,7 +1668,7 @@ into app.py's existing _bind_reference_tables() call chain, and adds
 the shared file-backed-sqlite fixture every later M2b test in this
 plan depends on.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -1845,7 +1867,7 @@ extra grant both fail. Asserts >= 8 roles and >= 8 tables examined
 (non-vacuous, spec Sec11.10.1). Includes per-role negative/positive
 spot-checks on app_versions as readable examples.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -2011,7 +2033,7 @@ webhook-secret encryption module keyed by its own
 BUNDLE_SECRET_ENCRYPTION_KEY env var, same wire format as the existing
 bot_crypto.py but a separate key/security domain.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -2449,7 +2471,7 @@ created. ingest_not_pluggable, consumes_required/consumes_on_action_
 stage, wildcard_consumes_not_allowed and custom-platform-registration
 are all enforced here.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -2665,7 +2687,7 @@ dedicated bucket/credential set. fetch_object_sha256() is the
 primitive Task 13's artifact-callback cross-check uses: hub-api
 re-hashes the published object rather than trusting a claimed digest.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -2954,7 +2976,7 @@ compiler's own NetworkPolicy has no live DB access, so hub-api snapshots
 registered custom platforms + the two tenant settings + the egress
 denylist into this one env var at Job-creation time.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -3306,7 +3328,7 @@ callback JWT, and launches the compiler Job. app_version_uploads is
 hub-api's own pre-publish lifecycle tracker (app_versions itself has
 no status column, per spec Sec6.10).
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -3606,7 +3628,7 @@ validation, bucket staging and compiler-Job launch via
 bundle_version_service. GET is open to any tenant member. Auto-
 discovered blueprint, no registration edit.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -3719,7 +3741,7 @@ own namespace; the compiler Job's own ServiceAccount (bundle-compiler)
 gets zero RBAC rules, matching D10's two-destination network policy
 (bucket + hub-api callback only, never the K8s API).
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -3998,7 +4020,7 @@ itself using hub-api's own also-granted write privilege -- only ever
 after its own verification succeeded (spec Sec6.10, this plan's
 Decision #3).
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -4092,7 +4114,7 @@ feat(hub-api): record_rejection() -- compiler failure callback (spec Sec9.1 REJE
 Handles VALIDATING/SCANNING/INSPECTING/COMPILING/PUBLISHING failures
 reported by the compiler; never touches app_versions on this path.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -4343,7 +4365,7 @@ The compiler's two callbacks, scope bundles:artifact. Marked "must
 match M2a" -- the payload shapes here are this plan's contract until
 M2a's own plan reconciles against them.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -4632,7 +4654,7 @@ pointed at an older, already-published version -- no separate
 endpoint. Tenant-wide and community-scoped activation are independent
 (community_id=0 sentinel).
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -4764,7 +4786,7 @@ Wires bundle_activation_service into the versions blueprint. 409
 digest_not_verified is a documented, tested response shape for a
 version with no verified app_versions row.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -4954,7 +4976,7 @@ always hash identically on any machine -- the property headless
 approval (Sec9.7.5) depends on. Flags private-host egress, wildcard
 consumes, routes_to and prebuilt artifacts under "unusual" per Sec9.7.1.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -5339,7 +5361,7 @@ one, and refuses a version that hasn't reached PUBLISHED.
 classify_diff() labels widened/narrowed/unchanged/initial for the
 upgrade-diff UI (Sec9.7.4).
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -5525,7 +5547,7 @@ data.tables; svc_process/svc_action are grantee members so the stage
 can SET ROLE. Rejects reserved identity tables. Separate concept from
 Tasks 1-2's fixed app_versions RBAC roles.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -5669,7 +5691,7 @@ Optional db_engine parameter, defaulting to None (skips role
 management in tests/dev). Wires bundle_db_role_service into the
 approval flow per spec Sec11.6.2.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -5968,7 +5990,7 @@ feat(hub-api): GET permissions, POST approve/deny (spec Sec9.7)
 approve's headless path fails closed with 409 permission_hash_mismatch
 plus the current summary/hash in the body, per spec Sec9.7.5.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -6285,7 +6307,7 @@ feat(hub-api): GET/PUT /api/v1/marketplace/settings -- global bundles.allow_preb
 Refactors Task 11's temporary inline _allow_prebuilt() query in
 bundle_versions.py to call the real service.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -6431,7 +6453,7 @@ Read-side helper only -- both settings are already writable through
 the existing PUT /api/v1/tenant/<slug>/settings, no new endpoint.
 Refactors Task 11's temporary inline query in bundle_versions.py.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -6848,7 +6870,7 @@ minting endpoint issuing 24h intake:write JWTs for REST-intake
 integrations. Refactors Task 11's temporary inline query in
 bundle_versions.py.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -7053,7 +7075,7 @@ feat(hub-api): ingest_source_service -- per-tenant ingest source registry (spec 
 Webhook secrets shown once at creation, AES-256-GCM at rest via
 bundle_secret_crypto, never re-exposed plaintext after that.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -7334,7 +7356,7 @@ feat(hub-api): POST/GET/DELETE /api/v1/tenant/{slug}/ingest-sources (spec Sec5.2
 The secret is returned exactly once, at creation; every subsequent
 read omits it entirely.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -7495,7 +7517,7 @@ security.transport.tls is true, matching every Rust service's own
 startup check. hub-api never reads/writes stream entries -- only group
 lifecycle.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -7827,7 +7849,7 @@ Idempotent expand-against-configured-sources, ensure_group per grant,
 revoke_grant destroys the group + marks revoked_at + audit-logs,
 revoke_all_grants_for_scope is the deactivation teardown.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -8182,7 +8204,7 @@ row (legacy is_default builtin) skips gating entirely; one with an
 active version requires a current app_install_approvals row for that
 exact version, else 403 bundle_not_approved (spec Sec9.7.3).
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -8496,7 +8518,7 @@ feat(hub-api): GET grants, POST resolve, DELETE grant (spec Sec9.6)
 Tenant strictly from the JWT, never a path segment, matching the
 spec's literal /api/v1/apps/{app_id}/grants path shape.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -8887,7 +8909,7 @@ stage=process rows. A row with no active version
 yet returns all-None digest fields -- the blueprint (Task 33) is where
 that collapses into the wire null the Rust stages skip on.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -9390,7 +9412,7 @@ than a fresh body every 5 s.
 The v1 /bundles route is untouched and keeps its byte-identical
 five-field body until the M6 cut-over.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -9786,7 +9808,7 @@ rendered Valkey stream key, filterable by communityId/platform/enabled,
 behind the same ETag/304 treatment as v2/bundles. hasSecret is a
 boolean -- the HMAC secret itself is never on this wire.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -10192,7 +10214,7 @@ the version was never approved for the scope, and 409
 digest_not_verified for a digest hub-api never verified. No runtime
 re-enable switch is added anywhere (spec Sec7.5/A7 unchanged).
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -10688,7 +10710,7 @@ is dropped. The sweep reports how many bundles it examined and exits
 non-zero on a zero-examined run, so a job pointed at the wrong database
 fails loudly instead of printing "0 dropped" forever.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -10698,7 +10720,7 @@ EOF
 
 ## Task 37: `bundle_feature_gate.py` — the PostHog flag gate on every M2b write surface
 
-**Depends on:** Tasks 11, 15, 17, 22, 25, 27, 31, 35 (the blueprints being gated). Nothing depends on this task except Task 39's final gate.
+**Depends on:** Tasks 11, 15, 17, 22, 25, 27, 31, 35 (the blueprints being gated). Nothing depends on this task except the closing gates (Task 41, and Task 49 once D30/D31 widened it).
 
 **Files:**
 - Create: `hub_api/services/bundle_feature_gate.py`
@@ -11091,7 +11113,7 @@ must stop new writes, never blind a running Rust stage polling the
 distribution API. allow_prebuilt becomes a real two-gate -- the
 platform setting AND waddles.core.prebuilt-bundles.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -11567,7 +11589,7 @@ deployment; with no provider configured every call is a no-op, so a
 dead exporter never breaks a request. No digest, token or PII appears
 in any span attribute or metric label.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -12271,7 +12293,7 @@ with the old and new mode lists.
 Migration 0022 backfills existing rows with the platform-appropriate
 default, so a deploy never silently breaks a running webhook source.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -12779,7 +12801,7 @@ member: rotating a token or widening a CIDR list must not invalidate
 existing approvals, so permissionHash is provably unchanged by an auth
 edit. No bearer token or password hash appears in any response.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -12789,7 +12811,7 @@ EOF
 
 ## Task 41: OpenAPI coverage, logging conformance, coverage gate, lint and the containerized `make` gates
 
-**Depends on:** every preceding task. Nothing depends on this one — it is the milestone's closing gate.
+**Depends on:** every preceding task (1-40). This was the milestone's closing gate when the plan had 41 tasks; Tasks 42-49 (D30/D31) were folded in afterward, and Task 49 is now the milestone's actual closing gate — it depends on this task and widens its two scanner suites rather than replacing them.
 
 **Files:**
 - Create: `hub_api/tests/test_openapi_m2b_paths.py`
@@ -13118,7 +13140,2550 @@ a companion test proving the scanner's regex actually fires. Both
 suites print their denominators -- a zero-file or zero-path run fails
 rather than reporting clean.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+## Task 42: Migration 0023 — `workstreams` (D30) + `workstream_usage_hourly` (D31) + RBAC matrix extension
+
+**Depends on:** Task 1 (`config/postgres/rbac-matrix.yaml` and `scripts/db/rbac_matrix.py`), Task 3 (migration 0021's `ingest_sources` table, this migration's `down_revision` and FK target).
+
+**Files:**
+- Modify: `config/postgres/rbac-matrix.yaml`
+- Create: `alembic/versions/0023_workstreams_and_usage.py`
+
+**Interfaces:**
+- Produces: table `workstreams(id, tenant_id, community_id, ingest_source_id, platform, source_id, created_at, disabled_at)`, `UNIQUE(ingest_source_id)`, backfilled 1:1 from every existing `ingest_sources` row at migration time (spec §6.11, §5.11, D30). Table `workstream_usage_hourly(id, tenant_id, community_id, workstream_id, stage, app_id, hour, events, invocations, host_calls, actions_delivered, fuel_ms, outbound_bytes, media_minutes, recorded_at)`, no unique constraint on the natural key — a correction is a new row, summed at query time (spec §6.12, D31). Two new `config/postgres/rbac-matrix.yaml` tables: `hub_api` gets full CRUD on `workstreams`; `hub_api` gets **only** `SELECT`/`INSERT` on `workstream_usage_hourly` — no `UPDATE`/`DELETE` for anyone, including `hub_api` (spec §11.10.1's literal wording). Every other service role gets zero privileges on both.
+- Consumes: `scripts/db/rbac_matrix.py`'s `load_matrix`, `render_create_roles_sql`, `render_revoke_public_sql`, `render_grant_sql` (Task 1), loaded via the same `importlib.util.spec_from_file_location` technique as Tasks 2-3.
+
+**Why `ingest_source_id` is a `bigint` FK, not the spec's literal `source_id text` FK.** Spec §6.11 writes `source_id | text | FK intake_sources(source_id), UNIQUE`. In this plan's actual schema (Task 3), `ingest_sources.source_id` is unique only per `(tenant_id, platform, source_id)` (a three-column `UNIQUE`), not globally — two different tenants can register the same `source_id` string on different platforms. A workstream's one-to-one FK therefore has to target `ingest_sources.id` (the real, globally-unique surrogate key), not the non-unique `source_id` column the spec's shorthand assumes. `platform`/`source_id` are denormalized onto `workstreams` anyway (read convenience for the distribution/config views, Task 45), so nothing the spec's readers actually need is lost. `ingest_source_id` is **nullable** with `ON DELETE SET NULL`, never `ON DELETE CASCADE`: `workstream_usage_hourly` rows reference `workstream_id` for the life of the tenant's usage history, and a source being deleted must never cascade-delete the usage history behind it (spec §6.11 says "a disabled workstream mints nothing further" — it says nothing about deleting the row, and deleting it would orphan every `workstream_usage_hourly` row's FK). `services/workstream_service.py` (Task 44) sets `disabled_at` explicitly, before the source row is removed.
+
+- [ ] **Step 1: Extend the RBAC matrix file**
+
+In `config/postgres/rbac-matrix.yaml`, add `workstreams` and `workstream_usage_hourly` to the `tables:` list, immediately after `app_versions_audit_log`:
+
+```yaml
+  - workstreams
+  - workstream_usage_hourly
+```
+
+Then append these rows to the end of the `grants:` list:
+
+```yaml
+  # workstreams (D30): hub-api-owned, 1:1 with ingest_sources. Only hub_api writes.
+  - role: hub_api
+    table: workstreams
+    privileges: [SELECT, INSERT, UPDATE, DELETE]
+  - role: waddles_publisher
+    table: workstreams
+    privileges: []
+  - role: svc_ingest
+    table: workstreams
+    privileges: []
+  - role: svc_process
+    table: workstreams
+    privileges: []
+  - role: svc_action
+    table: workstreams
+    privileges: []
+  - role: svc_streaming
+    table: workstreams
+    privileges: []
+  - role: webui
+    table: workstreams
+    privileges: []
+  - role: migration_runner
+    table: workstreams
+    privileges: [SELECT, INSERT, UPDATE, DELETE]
+
+  # workstream_usage_hourly (D31): append-only. hub_api gets SELECT/INSERT
+  # only -- no UPDATE/DELETE for anyone, including hub_api (spec Sec11.10.1,
+  # Sec5.12 literal wording: "no UPDATE/DELETE for anyone"). migration_runner
+  # keeps this matrix's uniform DDL-time-only grant (never used at runtime,
+  # matching every other table's migration_runner row) so a future column
+  # migration on this table is not a special case.
+  - role: hub_api
+    table: workstream_usage_hourly
+    privileges: [SELECT, INSERT]
+  - role: waddles_publisher
+    table: workstream_usage_hourly
+    privileges: []
+  - role: svc_ingest
+    table: workstream_usage_hourly
+    privileges: []
+  - role: svc_process
+    table: workstream_usage_hourly
+    privileges: []
+  - role: svc_action
+    table: workstream_usage_hourly
+    privileges: []
+  - role: svc_streaming
+    table: workstream_usage_hourly
+    privileges: []
+  - role: webui
+    table: workstream_usage_hourly
+    privileges: []
+  - role: migration_runner
+    table: workstream_usage_hourly
+    privileges: [SELECT, INSERT, UPDATE, DELETE]
+```
+
+- [ ] **Step 2: Write the migration**
+
+```python
+# alembic/versions/0023_workstreams_and_usage.py
+"""workstreams (spec Sec6.11, D30) + workstream_usage_hourly (spec Sec6.12, D31).
+
+`workstreams` is 1:1 with `ingest_sources`, backfilled here so every
+source that existed before this migration has a `workstream_id` the
+moment D30 code ships (spec Sec15.4's literal requirement). Created
+going forward by `services/workstream_service.py` (Task 44) inside
+`ingest_source_service.create_source()`; disabled (never deleted) when
+the owning source is removed.
+
+`workstream_usage_hourly` is written by hub-api's usage aggregator only
+(Task 47) -- SELECT/INSERT, no UPDATE/DELETE for anyone, including
+hub_api (spec Sec5.12: "corrections are new rows for the same key,
+summed at query time, never an UPDATE of a settled hour"). Grants are
+rendered from config/postgres/rbac-matrix.yaml, same generator every
+earlier migration in this plan used.
+
+Revision ID: 0023_workstreams_and_usage
+Revises: 0022_ingest_source_auth
+Create Date: 2026-09-14
+"""
+
+import importlib.util
+import os
+from pathlib import Path
+
+from alembic import op
+
+revision = "0023_workstreams_and_usage"
+down_revision = "0022_ingest_source_auth"
+branch_labels = None
+depends_on = None
+
+_MATRIX_MODULE_PATH = (
+    Path(__file__).resolve().parents[2] / "scripts" / "db" / "rbac_matrix.py"
+)
+_MATRIX_TABLES = frozenset({"workstreams", "workstream_usage_hourly"})
+
+
+def _load_matrix_module():
+    spec = importlib.util.spec_from_file_location("waddles_rbac_matrix_0023", _MATRIX_MODULE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def upgrade() -> None:
+    op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS workstreams (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+            community_id INTEGER REFERENCES communities(id),
+            ingest_source_id BIGINT UNIQUE REFERENCES ingest_sources(id) ON DELETE SET NULL,
+            platform VARCHAR(50) NOT NULL,
+            source_id VARCHAR(255) NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            disabled_at TIMESTAMPTZ
+        )
+        """
+    )
+    op.execute(
+        "COMMENT ON TABLE workstreams IS "
+        "'hub-api-owned, 1:1 with ingest_sources (spec Sec6.11, D30). "
+        "ingest_source_id is nullable/ON DELETE SET NULL so usage history "
+        "in workstream_usage_hourly outlives a deleted source.'"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workstreams_tenant "
+        "ON workstreams (tenant_id, community_id) WHERE disabled_at IS NULL"
+    )
+
+    op.execute(
+        """
+        INSERT INTO workstreams (tenant_id, community_id, ingest_source_id, platform, source_id, created_at)
+        SELECT s.tenant_id, s.community_id, s.id, s.platform, s.source_id, s.created_at
+        FROM ingest_sources s
+        WHERE NOT EXISTS (
+            SELECT 1 FROM workstreams w WHERE w.ingest_source_id = s.id
+        )
+        """
+    )
+    op.execute(
+        "COMMENT ON COLUMN workstreams.ingest_source_id IS "
+        "'Backfilled 1:1 from every pre-existing ingest_sources row (spec Sec15.4); "
+        "NULL only after the owning source has been deleted.'"
+    )
+
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS workstream_usage_hourly (
+            id BIGSERIAL PRIMARY KEY,
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+            community_id INTEGER REFERENCES communities(id),
+            workstream_id UUID NOT NULL REFERENCES workstreams(id),
+            stage VARCHAR(20) NOT NULL
+                CHECK (stage IN ('ingest', 'process', 'action', 'streaming')),
+            app_id VARCHAR(255) REFERENCES app_catalog(app_id),
+            hour TIMESTAMPTZ NOT NULL,
+            events BIGINT NOT NULL DEFAULT 0,
+            invocations BIGINT NOT NULL DEFAULT 0,
+            host_calls BIGINT NOT NULL DEFAULT 0,
+            actions_delivered BIGINT NOT NULL DEFAULT 0,
+            fuel_ms BIGINT NOT NULL DEFAULT 0,
+            outbound_bytes BIGINT NOT NULL DEFAULT 0,
+            media_minutes NUMERIC,
+            recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    op.execute(
+        "COMMENT ON TABLE workstream_usage_hourly IS "
+        "'Append-only (spec Sec6.12, D31) -- no UNIQUE on the natural key, "
+        "a correction is a new row, summed at query time. hub_api has "
+        "SELECT/INSERT only, never UPDATE/DELETE.'"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workstream_usage_hourly_lookup "
+        "ON workstream_usage_hourly (tenant_id, community_id, workstream_id, hour)"
+    )
+
+    matrix_module = _load_matrix_module()
+    matrix_path = os.environ.get(
+        "RBAC_MATRIX_PATH", str(matrix_module.DEFAULT_MATRIX_PATH)
+    )
+    rows = matrix_module.load_matrix(matrix_path)
+
+    for statement in matrix_module.render_revoke_public_sql(sorted(_MATRIX_TABLES)):
+        op.execute(statement)
+    for statement in matrix_module.render_grant_sql(rows, tables=_MATRIX_TABLES):
+        op.execute(statement)
+
+    op.execute("GRANT USAGE ON SEQUENCE workstream_usage_hourly_id_seq TO hub_api;")
+
+
+def downgrade() -> None:
+    op.execute("DROP TABLE IF EXISTS workstream_usage_hourly")
+    op.execute("DROP TABLE IF EXISTS workstreams")
+```
+
+- [ ] **Step 3: Run the migration against a local Postgres to verify it applies and backfills**
+
+Run:
+```bash
+docker run -d --name pg-m2b-workstreams -e POSTGRES_PASSWORD=test -e POSTGRES_DB=waddlebot -p 55436:5432 postgres:17-alpine
+sleep 3
+DATABASE_URL="postgresql://postgres:test@localhost:55436/waddlebot" alembic upgrade 0022_ingest_source_auth
+psql "postgresql://postgres:test@localhost:55436/waddlebot" -c \
+  "INSERT INTO tenants (slug, display_name, is_active) VALUES ('acme', 'Acme', true);"
+psql "postgresql://postgres:test@localhost:55436/waddlebot" -c \
+  "INSERT INTO ingest_sources (tenant_id, platform, source_id, label, enabled) VALUES (1, 'twitch', 'tw-a', 'Twitch A', true);"
+DATABASE_URL="postgresql://postgres:test@localhost:55436/waddlebot" alembic upgrade 0023_workstreams_and_usage
+psql "postgresql://postgres:test@localhost:55436/waddlebot" -c \
+  "SELECT platform, source_id, disabled_at FROM workstreams;"
+docker rm -f pg-m2b-workstreams
+```
+Expected: both `alembic upgrade` invocations exit 0; the final `SELECT` prints exactly one row, `twitch | tw-a | ` (an empty `disabled_at`) — proving migration 0023's `INSERT ... SELECT` backfilled the pre-existing source.
+
+- [ ] **Step 4: Verify the grants landed as expected**
+
+Run:
+```bash
+docker run -d --name pg-m2b-workstreams2 -e POSTGRES_PASSWORD=test -e POSTGRES_DB=waddlebot -p 55437:5432 postgres:17-alpine
+sleep 3
+DATABASE_URL="postgresql://postgres:test@localhost:55437/waddlebot" alembic upgrade head
+psql "postgresql://postgres:test@localhost:55437/waddlebot" -c \
+  "SELECT grantee, privilege_type FROM information_schema.role_table_grants WHERE table_name = 'workstream_usage_hourly' ORDER BY grantee, privilege_type;"
+docker rm -f pg-m2b-workstreams2
+```
+Expected output:
+```
+     grantee      | privilege_type
+-------------------+-----------------
+ hub_api           | INSERT
+ hub_api           | SELECT
+ migration_runner  | DELETE
+ migration_runner  | INSERT
+ migration_runner  | SELECT
+ migration_runner  | UPDATE
+```
+`hub_api` must **not** show `UPDATE` or `DELETE`; no `svc_ingest`/`svc_process`/`svc_action`/`svc_streaming`/`webui`/`waddles_publisher` row at all.
+
+- [ ] **Step 5: Re-run the RBAC live-grants test to confirm the wider matrix still balances**
+
+Run:
+```bash
+docker run -d --name pg-m2b-workstreams3 -e POSTGRES_PASSWORD=test -e POSTGRES_DB=waddlebot -p 55438:5432 postgres:17-alpine
+sleep 3
+DATABASE_URL="postgresql://postgres:test@localhost:55438/waddlebot" alembic upgrade head
+cd hub_api
+TEST_POSTGRES_ADMIN_DSN="postgresql://postgres:test@localhost:55438/waddlebot" \
+  python3 -m pytest tests/test_rbac_live_grants.py::test_live_grants_equal_the_matrix_exactly -v -s
+docker rm -f pg-m2b-workstreams3
+```
+Expected: `1 passed`, stdout now reads `RBAC live-grants check: 8 roles x 11 tables examined` (9 from Task 1 plus `workstreams`/`workstream_usage_hourly`) — the same test, unmodified since Task 5, automatically widening because it reads the matrix live rather than a hardcoded table list.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add config/postgres/rbac-matrix.yaml alembic/versions/0023_workstreams_and_usage.py
+git commit -m "$(cat <<'EOF'
+db(hub-api): workstreams + workstream_usage_hourly tables (spec Sec6.11-6.12, D30/D31)
+
+workstreams is 1:1 with ingest_sources, backfilled here for every
+pre-existing source (spec Sec15.4). workstream_usage_hourly is
+append-only: hub_api gets SELECT/INSERT only, no UPDATE/DELETE for
+anyone, matching the spec's literal Sec11.10.1/Sec5.12 wording.
+ingest_source_id is a nullable ON DELETE SET NULL FK (not the spec's
+literal source_id text FK, which is not globally unique in this
+schema) so workstream_usage_hourly's usage history survives a deleted
+source. Grants generated from config/postgres/rbac-matrix.yaml.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+## Task 43: pydal binder extension for `workstreams`/`workstream_usage_hourly` + smoke test
+
+**Depends on:** Task 4 (`bind_bundle_install_tables`, the function this task extends), Task 42 (migration 0023's DDL, which this binder mirrors).
+
+**Files:**
+- Modify: `hub_api/services/schema.py`
+- Create: `hub_api/tests/test_workstream_fixture_smoke.py`
+
+**Interfaces:**
+- Produces: `bind_bundle_install_tables()` additionally binds `workstreams`/`workstream_usage_hourly` (same idempotent guard as every other table in that function).
+- Consumes: nothing new.
+
+**Why the shared `bundle_install_db` fixture (Task 4) is not seeded with a workstream row here.** Dozens of already-written M2b tests assert exact row counts and index-`[0]` lookups against that fixture's existing seed data (one tenant, one community, one `app_catalog` row) — adding a new pre-seeded `ingest_sources`/`workstreams` row to the shared fixture would silently perturb every one of those counts. This task's own smoke test seeds its own rows instead; Task 44's tests do the same.
+
+- [ ] **Step 1: Extend the binder**
+
+In `hub_api/services/schema.py`, add these two `dal.define_table(...)` calls at the end of the existing `bind_bundle_install_tables` function, immediately after the `platform_settings` table definition (the function's current last statement):
+
+```python
+    dal.define_table(
+        "workstreams",
+        Field("tenant_id", "integer", notnull=True),
+        Field("community_id", "integer"),
+        Field("ingest_source_id", "bigint"),
+        Field("platform", "string", length=50, notnull=True),
+        Field("source_id", "string", length=255, notnull=True),
+        Field("created_at", "datetime"),
+        Field("disabled_at", "datetime"),
+        migrate=migrate,
+    )
+
+    dal.define_table(
+        "workstream_usage_hourly",
+        Field("tenant_id", "integer", notnull=True),
+        Field("community_id", "integer"),
+        Field("workstream_id", "string", length=36, notnull=True),
+        Field("stage", "string", length=20, notnull=True),
+        Field("app_id", "string", length=255),
+        Field("hour", "datetime", notnull=True),
+        Field("events", "bigint", default=0),
+        Field("invocations", "bigint", default=0),
+        Field("host_calls", "bigint", default=0),
+        Field("actions_delivered", "bigint", default=0),
+        Field("fuel_ms", "bigint", default=0),
+        Field("outbound_bytes", "bigint", default=0),
+        Field("media_minutes", "double"),
+        Field("recorded_at", "datetime"),
+        migrate=migrate,
+    )
+```
+
+`workstream_usage_hourly.workstream_id` is a `string` field here, not an integer FK — the real Postgres column is `UUID` (Task 42), while `workstreams.id` in this pydal/sqlite test binder stays the ORM's usual autoincrement integer (pydal has no native UUID field type, Decision #14). Every service function treats `workstream_id` as an opaque string via `str(...)` on both backends, so `"string", length=36` holds either representation without a type mismatch anywhere a test constructs one.
+
+- [ ] **Step 2: Write the smoke test**
+
+```python
+# hub_api/tests/test_workstream_fixture_smoke.py
+"""Smoke test for workstreams/workstream_usage_hourly binding -- proves both tables are queryable.
+
+Seeds its own ingest_sources + workstreams rows rather than relying on
+bundle_install_db's shared seed data, so this test cannot perturb row
+counts any other M2b test already asserts against.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+
+async def test_workstreams_and_usage_tables_are_queryable(bundle_install_db: Any) -> None:
+    dal = bundle_install_db.dal
+    assert "workstreams" in dal.tables
+    assert "workstream_usage_hourly" in dal.tables
+    assert dal(dal.workstreams).count() == 0
+    assert dal(dal.workstream_usage_hourly).count() == 0
+
+
+async def test_a_workstream_row_round_trips(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    source_id = dal.ingest_sources.insert(
+        tenant_id=1, community_id=None, platform="twitch", source_id="smoke-src-1",
+        label="Smoke Source", enabled=True, created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+    )
+    workstream_id = dal.workstreams.insert(
+        tenant_id=1, community_id=None, ingest_source_id=source_id, platform="twitch",
+        source_id="smoke-src-1", created_at=datetime.now(UTC),
+    )
+    dal.commit()
+    row = dal(dal.workstreams.id == workstream_id).select().first()
+    assert row is not None
+    assert row.source_id == "smoke-src-1"
+    assert row.disabled_at is None
+
+
+async def test_a_usage_hourly_row_round_trips(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    source_id = dal.ingest_sources.insert(
+        tenant_id=1, community_id=None, platform="twitch", source_id="smoke-src-2",
+        label="Smoke Source 2", enabled=True, created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+    )
+    workstream_id = dal.workstreams.insert(
+        tenant_id=1, community_id=None, ingest_source_id=source_id, platform="twitch",
+        source_id="smoke-src-2", created_at=datetime.now(UTC),
+    )
+    dal.commit()
+    usage_id = dal.workstream_usage_hourly.insert(
+        tenant_id=1, community_id=None, workstream_id=str(workstream_id), stage="ingest",
+        app_id=None, hour=datetime(2026, 9, 14, 10, 0, 0, tzinfo=UTC), events=5,
+        invocations=0, host_calls=0, actions_delivered=0, fuel_ms=0, outbound_bytes=1024,
+        media_minutes=None, recorded_at=datetime.now(UTC),
+    )
+    dal.commit()
+    row = dal(dal.workstream_usage_hourly.id == usage_id).select().first()
+    assert row is not None
+    assert row.events == 5
+    assert row.workstream_id == str(workstream_id)
+```
+
+- [ ] **Step 3: Run the smoke test**
+
+Run: `cd hub_api && python3 -m pytest tests/test_workstream_fixture_smoke.py -v`
+Expected: `3 passed`
+
+- [ ] **Step 4: Run the full existing hub-api suite to confirm no regression**
+
+Run: `cd hub_api && python3 -m pytest -q`
+Expected: every previously-passing test still passes; the printed summary line's pass count is the pre-existing count plus the 3 new smoke tests. Confirm against your own baseline run before this task, since the exact pre-existing count drifts task to task.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add hub_api/services/schema.py hub_api/tests/test_workstream_fixture_smoke.py
+git commit -m "$(cat <<'EOF'
+feat(hub-api): bind workstreams/workstream_usage_hourly into bind_bundle_install_tables() (D30/D31)
+
+Extends the existing M2b pydal test binder with the two new Task 42
+tables. workstream_id is a string(36) field on both sides -- Postgres
+uses a real UUID (Decision #14), pydal/sqlite has no UUID field type,
+and every service function treats the value as an opaque string on
+both backends. Seeds its own rows in a new, isolated test rather than
+touching the shared bundle_install_db fixture's seed data.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+## Task 44: `workstream_service.py` — creation/disable lifecycle wired into `ingest_source_service` (D30)
+
+**Depends on:** Task 42 (`workstreams` DDL), Task 43 (the pydal binder), Task 26 (`ingest_source_service.create_source`/`delete_source`, both modified here), Task 39 (`create_source`'s current signature, which already gained an `auth` keyword — this task adds no new parameter, only a call at the end of the existing body).
+
+**Files:**
+- Create: `hub_api/services/workstream_service.py`
+- Modify: `hub_api/services/ingest_source_service.py`
+- Test: `hub_api/tests/test_workstream_service.py`
+- Modify: `hub_api/tests/test_ingest_source_service.py`
+
+**Interfaces:**
+- Produces: `async def create_workstream_for_source(async_dal, dal, *, ingest_source_id: int, tenant_id: int, community_id: int | None, platform: str, source_id: str) -> Any` (idempotent on `ingest_source_id` — a retried `create_source()` call never duplicates a workstream row); `async def disable_workstream_for_source(async_dal, dal, *, ingest_source_id: int) -> None` (sets `disabled_at`; a no-op when none exists or it is already disabled); `async def get_workstream_for_source(async_dal, dal, *, ingest_source_id: int) -> Any | None`.
+- Consumes: nothing new.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# hub_api/tests/test_workstream_service.py
+"""Tests for workstream creation/disable lifecycle (spec Sec5.11, Sec6.11, D30)."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+from services.workstream_service import (
+    create_workstream_for_source,
+    disable_workstream_for_source,
+    get_workstream_for_source,
+)
+
+
+async def _seed_source(bundle_install_db: Any, source_id: str = "wsvc-1") -> int:
+    dal = bundle_install_db.dal
+    new_id = dal.ingest_sources.insert(
+        tenant_id=1, community_id=None, platform="twitch", source_id=source_id,
+        label="X", enabled=True, created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+    )
+    dal.commit()
+    return new_id
+
+
+async def test_create_workstream_for_source_creates_exactly_one_row(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    source_id = await _seed_source(bundle_install_db)
+    row = await create_workstream_for_source(
+        async_dal, async_dal.dal, ingest_source_id=source_id, tenant_id=1,
+        community_id=None, platform="twitch", source_id="wsvc-1",
+    )
+    assert row.platform == "twitch"
+    assert row.disabled_at is None
+    assert async_dal.dal(async_dal.dal.workstreams).count() == 1
+
+
+async def test_create_workstream_for_source_is_idempotent(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    source_id = await _seed_source(bundle_install_db)
+    first = await create_workstream_for_source(
+        async_dal, async_dal.dal, ingest_source_id=source_id, tenant_id=1,
+        community_id=None, platform="twitch", source_id="wsvc-1",
+    )
+    second = await create_workstream_for_source(
+        async_dal, async_dal.dal, ingest_source_id=source_id, tenant_id=1,
+        community_id=None, platform="twitch", source_id="wsvc-1",
+    )
+    assert first.id == second.id
+    assert async_dal.dal(async_dal.dal.workstreams).count() == 1
+
+
+async def test_disable_workstream_for_source_sets_disabled_at(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    source_id = await _seed_source(bundle_install_db)
+    await create_workstream_for_source(
+        async_dal, async_dal.dal, ingest_source_id=source_id, tenant_id=1,
+        community_id=None, platform="twitch", source_id="wsvc-1",
+    )
+    await disable_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=source_id)
+    row = await get_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=source_id)
+    assert row is not None
+    assert row.disabled_at is not None
+
+
+async def test_disable_workstream_for_source_is_a_noop_when_none_exists(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    await disable_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=999999)
+
+
+async def test_disable_workstream_for_source_is_idempotent(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    source_id = await _seed_source(bundle_install_db)
+    await create_workstream_for_source(
+        async_dal, async_dal.dal, ingest_source_id=source_id, tenant_id=1,
+        community_id=None, platform="twitch", source_id="wsvc-1",
+    )
+    await disable_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=source_id)
+    await disable_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=source_id)
+    row = await get_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=source_id)
+    assert row.disabled_at is not None
+
+
+async def test_get_workstream_for_source_returns_none_when_absent(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    assert await get_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=999999) is None
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `cd hub_api && python3 -m pytest tests/test_workstream_service.py -v`
+Expected: `ModuleNotFoundError: No module named 'services.workstream_service'`
+
+- [ ] **Step 3: Write the implementation**
+
+```python
+# hub_api/services/workstream_service.py
+"""hub-api-owned workstream lifecycle -- 1:1 with ingest_sources (spec Sec5.11, Sec6.11, D30).
+
+A workstream is created the moment its ingest source is registered and
+disabled (never deleted) the moment that source is removed --
+workstream_usage_hourly rows keep their FK target for the life of the
+tenant's usage history even after the source itself is gone (Task 42's
+migration docstring explains the nullable ingest_source_id FK). Every
+function here is idempotent: a retried create_source()/delete_source()
+call must never raise or duplicate a workstream row.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+
+async def create_workstream_for_source(
+    async_dal: Any,
+    dal: Any,
+    *,
+    ingest_source_id: int,
+    tenant_id: int,
+    community_id: int | None,
+    platform: str,
+    source_id: str,
+) -> Any:
+    """Create the 1:1 workstream for a newly registered ingest source, or return the existing one.
+
+    Idempotent on `ingest_source_id` so a caller that retries
+    `create_source()` after a partial failure never ends up with two
+    workstream rows for the same source.
+    """
+    existing = await async_dal.select_async(
+        dal(dal.workstreams.ingest_source_id == ingest_source_id)
+    )
+    if existing:
+        return existing[0]
+
+    new_id = await async_dal.insert_async(
+        dal.workstreams,
+        tenant_id=tenant_id,
+        community_id=community_id,
+        ingest_source_id=ingest_source_id,
+        platform=platform,
+        source_id=source_id,
+        created_at=datetime.now(UTC),
+    )
+    async_dal.dal.commit()
+    return (await async_dal.select_async(dal(dal.workstreams.id == new_id)))[0]
+
+
+async def disable_workstream_for_source(async_dal: Any, dal: Any, *, ingest_source_id: int) -> None:
+    """Set `disabled_at` on the source's workstream. No-op if none exists or it is already disabled.
+
+    Called before the owning `ingest_sources` row is deleted -- never
+    after, since the FK is `ON DELETE SET NULL` and this function needs
+    `ingest_source_id` to still resolve to the right row.
+    """
+    rows = await async_dal.select_async(
+        dal(
+            (dal.workstreams.ingest_source_id == ingest_source_id)
+            & (dal.workstreams.disabled_at == None)  # noqa: E711 - pydal IS NULL operator
+        )
+    )
+    if not rows:
+        return
+    await async_dal.update_async(dal.workstreams.id == rows[0].id, disabled_at=datetime.now(UTC))
+    async_dal.dal.commit()
+
+
+async def get_workstream_for_source(async_dal: Any, dal: Any, *, ingest_source_id: int) -> Any | None:
+    """The workstream row for a given ingest source, or `None` if it has none."""
+    rows = await async_dal.select_async(dal(dal.workstreams.ingest_source_id == ingest_source_id))
+    return rows[0] if rows else None
+```
+
+- [ ] **Step 4: Run to verify all pass**
+
+Run: `cd hub_api && python3 -m pytest tests/test_workstream_service.py -v`
+Expected: `6 passed`
+
+- [ ] **Step 5: Wire `create_source()`**
+
+In `hub_api/services/ingest_source_service.py`, add the import:
+
+```python
+from services.workstream_service import create_workstream_for_source, disable_workstream_for_source
+```
+
+`create_source()`'s current body (after Tasks 26 and 39) ends:
+
+```python
+    async_dal.dal.commit()
+    row = (await async_dal.select_async(dal(dal.ingest_sources.id == new_id)))[0]
+    return row, plaintext_secret
+```
+
+Replace those three lines with:
+
+```python
+    async_dal.dal.commit()
+    row = (await async_dal.select_async(dal(dal.ingest_sources.id == new_id)))[0]
+    await create_workstream_for_source(
+        async_dal, dal, ingest_source_id=new_id, tenant_id=tenant_id,
+        community_id=community_id, platform=platform, source_id=source_id,
+    )
+    return row, plaintext_secret
+```
+
+- [ ] **Step 6: Wire `delete_source()`**
+
+`delete_source()`'s current body (unchanged since Task 26) is:
+
+```python
+async def delete_source(async_dal: Any, dal: Any, *, tenant_id: int, source_id: str) -> None:
+    """Remove an ingest source by its `source_id`. Raises 404 if absent."""
+    existing = await async_dal.select_async(
+        dal((dal.ingest_sources.tenant_id == tenant_id) & (dal.ingest_sources.source_id == source_id))
+    )
+    if not existing:
+        raise not_found(f"ingest source {source_id!r} not found")
+    await async_dal.delete_async(
+        (dal.ingest_sources.tenant_id == tenant_id) & (dal.ingest_sources.source_id == source_id)
+    )
+    async_dal.dal.commit()
+```
+
+Replace it with:
+
+```python
+async def delete_source(async_dal: Any, dal: Any, *, tenant_id: int, source_id: str) -> None:
+    """Remove an ingest source by its `source_id`. Raises 404 if absent.
+
+    Disables the source's workstream (never deletes it) before the
+    source row itself is removed -- workstream_usage_hourly keeps its
+    FK target for the life of the tenant's usage history (Decision #14).
+    """
+    existing = await async_dal.select_async(
+        dal((dal.ingest_sources.tenant_id == tenant_id) & (dal.ingest_sources.source_id == source_id))
+    )
+    if not existing:
+        raise not_found(f"ingest source {source_id!r} not found")
+    await disable_workstream_for_source(async_dal, dal, ingest_source_id=existing[0].id)
+    await async_dal.delete_async(
+        (dal.ingest_sources.tenant_id == tenant_id) & (dal.ingest_sources.source_id == source_id)
+    )
+    async_dal.dal.commit()
+```
+
+- [ ] **Step 7: Append regression tests to `test_ingest_source_service.py`**
+
+Append these two functions to the end of `hub_api/tests/test_ingest_source_service.py`:
+
+```python
+async def test_create_source_creates_a_workstream(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    row, _ = await create_source(
+        async_dal, async_dal.dal, tenant_id=1, community_id=None,
+        platform="custom:mycrm", source_id="ws-reg-1", label="x", mapping=None,
+    )
+    workstream = async_dal.dal(async_dal.dal.workstreams.ingest_source_id == row.id).select().first()
+    assert workstream is not None
+    assert workstream.source_id == "ws-reg-1"
+    assert workstream.disabled_at is None
+
+
+async def test_delete_source_disables_the_workstream_without_deleting_it(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    row, _ = await create_source(
+        async_dal, dal, tenant_id=1, community_id=None,
+        platform="custom:mycrm", source_id="ws-reg-2", label="x", mapping=None,
+    )
+    await delete_source(async_dal, dal, tenant_id=1, source_id="ws-reg-2")
+    workstream = dal(dal.workstreams.ingest_source_id == row.id).select().first()
+    assert workstream is not None
+    assert workstream.disabled_at is not None
+```
+
+- [ ] **Step 8: Run to verify all pass**
+
+Run: `cd hub_api && python3 -m pytest tests/test_ingest_source_service.py tests/test_ingest_sources_blueprint.py tests/test_distribution_sources_blueprint.py tests/test_ingest_source_auth.py tests/test_ingest_source_auth_api.py -v`
+Expected: every previously-passing test still passes, plus the 2 new regression tests — `create_workstream_for_source`/`disable_workstream_for_source` are additive calls at the end of each function's existing body, so no prior assertion about `create_source`'s or `delete_source`'s return value changes.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add hub_api/services/workstream_service.py hub_api/services/ingest_source_service.py \
+        hub_api/tests/test_workstream_service.py hub_api/tests/test_ingest_source_service.py
+git commit -m "$(cat <<'EOF'
+feat(hub-api): create/disable the 1:1 workstream inside create_source()/delete_source() (spec Sec5.11, D30)
+
+workstream_service.create_workstream_for_source() runs at the end of
+create_source(), idempotent on ingest_source_id. delete_source() now
+disables the workstream (sets disabled_at) before removing the source
+row -- workstream_usage_hourly's FK target survives the deletion, per
+this plan's Decision #14.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+## Task 45: Publish `workstreamId` — distribution `/sources`, the tenant config view, and the consent screen (D30)
+
+**Depends on:** Task 44 (`workstream_service.get_workstream_for_source`, and every `ingest_sources` row now has a 1:1 workstream), Task 34 (`DistributionSource`/`DistributionSourceDTO`, `list_sources_for_distribution`), Task 27 (`blueprints/v1/ingest_sources.py`'s `SourceDTO`/`list_sources` handler), Task 40 (`source_auth_for_consent`, the `auth` fields these same dataclasses/functions already carry — this task adds one more sibling field to each, never touching `auth`'s own shape or the `permissionHash` computation).
+
+**Files:**
+- Modify: `hub_api/services/ingest_source_service.py`
+- Modify: `hub_api/blueprints/v1/distribution.py`
+- Modify: `hub_api/blueprints/v1/ingest_sources.py`
+- Test: `hub_api/tests/test_workstream_id_publication.py`
+
+**Interfaces:**
+- Produces: `DistributionSource.workstream_id: str | None` (last field); `DistributionSourceDTO.workstreamId: str | None = None` (last field); tenant config view `SourceDTO.workstreamId: str | None = None` (last field); `source_auth_for_consent(...)`'s returned dict entries gain a `"workstreamId"` key.
+- Consumes: `services.workstream_service.get_workstream_for_source` (Task 44).
+
+Spec basis (D30, spec §5.11): "Shown on the source's config view (§10.3) and on the consent screen (§9.7.1) alongside the source it reads." svc-ingest mints `workstream_id` from its own `intake_sources`/`workstreams` lookup (spec §5.11's Minting paragraph), so the distribution `/sources` endpoint svc-ingest polls must carry it too — without it, the ingest-side minting code (plan M5, once it lands D30) has nowhere to read the id from at runtime.
+
+`workstreamId` is never part of `permissionHash` — like `sourceAuth` (Task 40), it is a sibling of `summary` on the consent response, never a member, because a workstream's presence never changes what permissions a bundle is asking for.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# hub_api/tests/test_workstream_id_publication.py
+"""workstreamId appears on the distribution /sources feed, the tenant config view, and the consent screen (D30)."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from quart import Quart
+
+from tests.conftest import TENANT_SLUG, make_user_token
+
+
+def _app(bundle_install_db: Any, module_path: str) -> Quart:
+    import importlib
+
+    module = importlib.import_module(module_path)
+    app = Quart(__name__)
+    app.config["async_dal"] = bundle_install_db
+    app.config["dal"] = bundle_install_db.dal
+    for bp in module.BLUEPRINTS:
+        app.register_blueprint(bp)
+    return app
+
+
+async def test_distribution_sources_carries_a_workstream_id(bundle_install_db: Any) -> None:
+    from services.ingest_source_service import create_source
+
+    await create_source(
+        bundle_install_db, bundle_install_db.dal, tenant_id=1, community_id=None,
+        platform="twitch", source_id="ws-tw-1", label="Twitch WS test", mapping=None,
+    )
+    app = _app(bundle_install_db, "blueprints.v1.distribution")
+    token = make_user_token(user_id=1, scope="distribution:read", tenant=TENANT_SLUG)
+    response = await app.test_client().get(
+        "/api/v1/distribution/sources", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    by_id = {s["sourceId"]: s for s in (await response.get_json())["sources"]}
+    assert by_id["ws-tw-1"]["workstreamId"] is not None
+    assert isinstance(by_id["ws-tw-1"]["workstreamId"], str)
+
+
+async def test_tenant_config_view_carries_a_workstream_id(bundle_install_db: Any) -> None:
+    from services.ingest_source_service import create_source
+
+    await create_source(
+        bundle_install_db, bundle_install_db.dal, tenant_id=1, community_id=None,
+        platform="twitch", source_id="ws-tw-2", label="Twitch WS test 2", mapping=None,
+    )
+    app = _app(bundle_install_db, "blueprints.v1.ingest_sources")
+    token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
+    response = await app.test_client().get(
+        f"/api/v1/tenant/{TENANT_SLUG}/ingest-sources", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    by_id = {s["sourceId"]: s for s in (await response.get_json())["sources"]}
+    assert by_id["ws-tw-2"]["workstreamId"] is not None
+
+
+async def test_consent_screen_carries_a_workstream_id_without_moving_the_hash(bundle_install_db: Any) -> None:
+    from services.ingest_source_service import create_source
+
+    await create_source(
+        bundle_install_db, bundle_install_db.dal, tenant_id=1, community_id=None,
+        platform="twitch", source_id="ws-tw-3", label="Twitch WS test 3", mapping=None,
+    )
+    dal = bundle_install_db.dal
+    manifest = {
+        "schema_version": 2, "app_id": "waddles.socials.music.default", "name": "Music Station",
+        "version": "3.0.1", "feature": "waddles.socials.music", "module": "socials",
+        "provider": "builtin", "language": "python", "artifact": "source",
+        "stages": {"process": {"entry": "x:y",
+                               "consumes": [{"platform": "twitch", "event_types": ["chat.message"]}]}},
+    }
+    dal.app_version_uploads.insert(
+        app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
+        artifact_kind="source", language="python", status="PUBLISHED", manifest_json=manifest,
+    )
+    dal.commit()
+    app = _app(bundle_install_db, "blueprints.v1.bundle_approvals")
+    token = make_user_token(user_id=1, scope="platform:admin", tenant=TENANT_SLUG)
+    response = await app.test_client().get(
+        "/api/v1/apps/waddles.socials.music.default/versions/3.0.1/permissions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    body = await response.get_json()
+    assert response.status_code == 200
+    entry = next(e for e in body["sourceAuth"] if e["sourceId"] == "ws-tw-3")
+    assert entry["workstreamId"] is not None
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `cd hub_api && python3 -m pytest tests/test_workstream_id_publication.py -v`
+Expected: `KeyError: 'workstreamId'` on all three tests.
+
+- [ ] **Step 3: Add `workstream_id` to `DistributionSource` and `list_sources_for_distribution`**
+
+In `hub_api/services/ingest_source_service.py`, add the import:
+
+```python
+from services.workstream_service import get_workstream_for_source
+```
+
+Add `workstream_id: str | None` as the **last** field of the `DistributionSource` dataclass (after `auth`).
+
+In `list_sources_for_distribution`'s loop over `rows`, immediately before the `results.append(DistributionSource(...))` call, add:
+
+```python
+        workstream = await get_workstream_for_source(async_dal, dal, ingest_source_id=row.id)
+```
+
+and add `workstream_id=str(workstream.id) if workstream is not None else None,` as the last keyword argument of that `DistributionSource(...)` construction.
+
+- [ ] **Step 4: Add `workstreamId` to `source_auth_for_consent`**
+
+In the same file, `source_auth_for_consent`'s loop over `rows` currently builds each `entries.append({...})` dict from `row`. Add, immediately before that `entries.append(...)` call:
+
+```python
+        workstream = await get_workstream_for_source(async_dal, dal, ingest_source_id=row.id)
+```
+
+and add `"workstreamId": str(workstream.id) if workstream is not None else None,` as a new key in that dict.
+
+- [ ] **Step 5: Publish it on the distribution DTO**
+
+In `hub_api/blueprints/v1/distribution.py`, add `workstreamId: str | None = None` as the last field of `DistributionSourceDTO`. In `list_distribution_sources`'s `DistributionSourceDTO(...)` construction, add `workstreamId=s.workstream_id,` as the last keyword argument. In the same handler's `etag_seed` list comprehension, add `"workstreamId": d.workstreamId` to the `config={...}` dict passed to each `DistributionBundleV2DTO(...)`.
+
+- [ ] **Step 6: Publish it on the tenant config view**
+
+In `hub_api/blueprints/v1/ingest_sources.py`, add the import:
+
+```python
+from services.workstream_service import get_workstream_for_source
+```
+
+Add `workstreamId: str | None = None` as the last field of `SourceDTO`. Replace the `list_sources` handler's body with:
+
+```python
+@ingest_sources_bp.route("", methods=["GET"])
+@tenant_middleware  # type: ignore[untyped-decorator]
+@validate_response(SourceListResponse)
+async def list_sources(tenant_slug: str) -> SourceListResponse | tuple[dict[str, object], int]:
+    """List every ingest source for this tenant. Never includes a secret field."""
+    async_dal, dal = _dal()
+    try:
+        tenant_id = _tenant_id(tenant_slug)
+    except ApiError as exc:
+        return _err(exc)
+    rows = await svc.list_sources(async_dal, dal, tenant_id=tenant_id)
+    sources: list[SourceDTO] = []
+    for r in rows:
+        workstream = await get_workstream_for_source(async_dal, dal, ingest_source_id=r.id)
+        sources.append(
+            SourceDTO(
+                platform=r.platform, sourceId=r.source_id, label=r.label,
+                communityId=r.community_id, enabled=bool(r.enabled), auth=dict(r.auth or {}),
+                workstreamId=str(workstream.id) if workstream is not None else None,
+            )
+        )
+    return SourceListResponse(success=True, sources=sources)
+```
+
+- [ ] **Step 7: Run to verify all pass**
+
+Run: `cd hub_api && python3 -m pytest tests/test_workstream_id_publication.py -v`
+Expected: `3 passed`
+
+- [ ] **Step 8: Confirm zero regression on every touched surface**
+
+Run:
+```bash
+cd hub_api && python3 -m pytest \
+  tests/test_ingest_source_service.py tests/test_ingest_sources_blueprint.py \
+  tests/test_distribution_sources_blueprint.py tests/test_ingest_source_auth_api.py \
+  tests/test_bundle_approvals_blueprint.py tests/test_permission_summary_service.py -v
+```
+Expected: every previously-passing test still passes — `permissionHash`-related tests in particular must be untouched, since `workstreamId` is a sibling of `summary`/`sourceAuth`, never a member.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add hub_api/services/ingest_source_service.py hub_api/blueprints/v1/distribution.py \
+        hub_api/blueprints/v1/ingest_sources.py hub_api/tests/test_workstream_id_publication.py
+git commit -m "$(cat <<'EOF'
+feat(hub-api): publish workstreamId -- distribution /sources, tenant config view, consent screen (spec Sec5.11, D30)
+
+svc-ingest mints workstream_id from its own source lookup at runtime,
+so the distribution /sources feed it polls must carry it. Also shown
+on the tenant's ingest-source config view and, as a sibling of summary
+and sourceAuth (never a member), on the bundle consent screen --
+permissionHash is unaffected.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+## Task 46: `routes_to` cross-tenant refusal wired into `approve_version()` (spec §5.9, D30)
+
+**Depends on:** Task 21 (`approve_version`, the function this task extends), Task 7 (`BundleManifestV2.routes_to`, already parsed and available on `manifest`).
+
+**Files:**
+- Modify: `hub_api/services/bundle_approval_service.py`
+- Modify: `hub_api/tests/test_bundle_approval_service.py`
+
+**Interfaces:**
+- Produces: `approve_version(...)` refuses `422 routes_to_target_not_found` when a declared `routes_to` target does not exist in `app_catalog`, and `422 routes_to_cross_tenant` when it exists but is not installed in the approving call's tenant — both refusals write an `audit_log` row (`action = "routes_to_refused"`) before raising. No new parameter; every existing caller and test keeps its exact current behaviour when `manifest.routes_to` is empty.
+- Consumes: nothing new — uses `dal.app_catalog`/`dal.app_install_approvals`/`dal.audit_log`, all already bound.
+
+**"Installed in the same tenant" is defined here** (this plan's Decision #15) as: the target `app_id` has a non-superseded `app_install_approvals` row whose `tenant_id` equals the approving call's `tenant_id` — community-agnostic, since a tenant-wide or any-community install of the target both count as "installed in this tenant." This is spec §5.9's install-time row: "hub-api validates that each target exists in `app_catalog`, is installed in the same tenant as the declaring bundle — a cross-tenant target is refused outright at approval, not merely left unapproved (D30)."
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `hub_api/tests/test_bundle_approval_service.py` (add `from datetime import UTC, datetime` and `from services.errors import ApiError` at the top of the file only if they are not already imported there):
+
+```python
+async def _seed_uploaded_version_with_routes_to(dal: Any, *, routes_to: list[str]) -> None:
+    manifest = {
+        "schema_version": 2, "app_id": "waddles.socials.music.default", "name": "Music Station",
+        "version": "3.0.2", "feature": "waddles.socials.music", "module": "socials",
+        "provider": "builtin", "language": "python", "artifact": "source",
+        "routes_to": routes_to,
+        "stages": {"process": {"entry": "x:y", "consumes": []}},
+    }
+    dal.app_version_uploads.insert(
+        app_id="waddles.socials.music.default", version="3.0.2", tenant_id=1,
+        artifact_kind="source", language="python", status="PUBLISHED", manifest_json=manifest,
+    )
+    dal.commit()
+
+
+async def test_approve_version_refuses_a_routes_to_target_that_does_not_exist(bundle_install_db: Any) -> None:
+    dal = bundle_install_db.dal
+    await _seed_uploaded_version_with_routes_to(dal, routes_to=["waddles.nope.default"])
+    with pytest.raises(ApiError) as excinfo:
+        await approve_version(
+            bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.2",
+            tenant_id=1, community_id=None, approved_by=1,
+        )
+    assert excinfo.value.status_code == 422
+    assert excinfo.value.code == "routes_to_target_not_found"
+
+
+async def test_approve_version_refuses_a_cross_tenant_routes_to_target(bundle_install_db: Any) -> None:
+    dal = bundle_install_db.dal
+    other_tenant_id = dal.tenants.insert(slug="other-corp", display_name="Other Corp", is_active=True)
+    dal.app_catalog.insert(
+        app_id="waddles.socials.forums.default", name="Forums", manifest_version="3.0.0",
+        module="socials", feature="waddles.socials.forums", provider="builtin",
+        execution_model="native", is_default=False,
+        platform_compatibility={"tested_with": "3.0.0", "min_version": None, "max_version": None},
+        status="active", stages={},
+    )
+    dal.app_install_approvals.insert(
+        tenant_id=other_tenant_id, community_id=None, app_id="waddles.socials.forums.default",
+        version="1.0.0", permission_hash="sha256:" + "b" * 64, summary_json={}, approved_by=1,
+        approved_at=datetime.now(UTC),
+    )
+    dal.commit()
+    await _seed_uploaded_version_with_routes_to(dal, routes_to=["waddles.socials.forums.default"])
+    with pytest.raises(ApiError) as excinfo:
+        await approve_version(
+            bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.2",
+            tenant_id=1, community_id=None, approved_by=1,
+        )
+    assert excinfo.value.status_code == 422
+    assert excinfo.value.code == "routes_to_cross_tenant"
+
+
+async def test_approve_version_allows_a_same_tenant_routes_to_target(bundle_install_db: Any) -> None:
+    dal = bundle_install_db.dal
+    dal.app_catalog.insert(
+        app_id="waddles.socials.forums.default", name="Forums", manifest_version="3.0.0",
+        module="socials", feature="waddles.socials.forums", provider="builtin",
+        execution_model="native", is_default=False,
+        platform_compatibility={"tested_with": "3.0.0", "min_version": None, "max_version": None},
+        status="active", stages={},
+    )
+    dal.app_install_approvals.insert(
+        tenant_id=1, community_id=None, app_id="waddles.socials.forums.default",
+        version="1.0.0", permission_hash="sha256:" + "b" * 64, summary_json={}, approved_by=1,
+        approved_at=datetime.now(UTC),
+    )
+    dal.commit()
+    await _seed_uploaded_version_with_routes_to(dal, routes_to=["waddles.socials.forums.default"])
+    result = await approve_version(
+        bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.2",
+        tenant_id=1, community_id=None, approved_by=1,
+    )
+    assert result.app_id == "waddles.socials.music.default"
+
+
+async def test_approve_version_audits_a_routes_to_refusal(bundle_install_db: Any) -> None:
+    dal = bundle_install_db.dal
+    await _seed_uploaded_version_with_routes_to(dal, routes_to=["waddles.nope.default"])
+    with pytest.raises(ApiError):
+        await approve_version(
+            bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.2",
+            tenant_id=1, community_id=None, approved_by=1,
+        )
+    audit_row = dal(dal.audit_log.action == "routes_to_refused").select().first()
+    assert audit_row is not None
+    assert audit_row.details["target_app_id"] == "waddles.nope.default"
+    assert audit_row.details["reason"] == "routes_to_target_not_found"
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `cd hub_api && python3 -m pytest tests/test_bundle_approval_service.py -k routes_to -v`
+Expected: every new test fails — `manifest.routes_to` is parsed (Task 7) but never checked, so all four cases (including the "allowed" one, since nothing raises today either way) currently either pass by accident or fail on the missing audit row; after Step 3 every one asserts its documented behaviour precisely.
+
+- [ ] **Step 3: Add the check**
+
+In `hub_api/services/bundle_approval_service.py`, append these two functions (after the existing imports, before `approve_version`):
+
+```python
+async def _audit_routes_to_refusal(
+    async_dal: Any, *, actor_id: int, app_id: str, version: str, target_app_id: str, reason: str
+) -> None:
+    """Record a routes_to refusal -- D30 requires the refusal itself to be auditable, not only a success."""
+    dal = async_dal.dal
+    try:
+        await async_dal.insert_async(
+            dal.audit_log, user_id=actor_id, action="routes_to_refused",
+            target_type="app_install_approvals", target_id=f"{app_id}@{version}",
+            details={"target_app_id": target_app_id, "reason": reason},
+            created_at=datetime.now(UTC),
+        )
+        async_dal.dal.commit()
+    except Exception:  # noqa: BLE001, S110 -- audit logging failure must not break the refusal itself
+        pass
+
+
+async def _validate_routes_to(
+    async_dal: Any, dal: Any, *, routes_to: tuple[str, ...], tenant_id: int,
+    approved_by: int, app_id: str, version: str,
+) -> None:
+    """Refuse a routes_to target that does not exist, or exists in a different tenant (spec Sec5.9, D30)."""
+    for target_app_id in routes_to:
+        catalog_rows = await async_dal.select_async(dal(dal.app_catalog.app_id == target_app_id))
+        if not catalog_rows:
+            await _audit_routes_to_refusal(
+                async_dal, actor_id=approved_by, app_id=app_id, version=version,
+                target_app_id=target_app_id, reason="routes_to_target_not_found",
+            )
+            raise ApiError(
+                f"routes_to target {target_app_id!r} does not exist in the app catalog",
+                422, "routes_to_target_not_found",
+            )
+        installed = await async_dal.select_async(
+            dal(
+                (dal.app_install_approvals.app_id == target_app_id)
+                & (dal.app_install_approvals.tenant_id == tenant_id)
+                & (dal.app_install_approvals.superseded_by == None)  # noqa: E711 - pydal IS NULL operator
+            )
+        )
+        if not installed:
+            await _audit_routes_to_refusal(
+                async_dal, actor_id=approved_by, app_id=app_id, version=version,
+                target_app_id=target_app_id, reason="routes_to_cross_tenant",
+            )
+            raise ApiError(
+                f"routes_to target {target_app_id!r} is not installed in this tenant",
+                422, "routes_to_cross_tenant",
+            )
+```
+
+Then, in `approve_version()`, immediately after the line `manifest = _reparse_trusted(upload_rows[0].manifest_json)`, insert:
+
+```python
+    if manifest.routes_to:
+        await _validate_routes_to(
+            async_dal, dal, routes_to=manifest.routes_to, tenant_id=tenant_id,
+            approved_by=approved_by, app_id=app_id, version=version,
+        )
+```
+
+Nothing else in `approve_version()` changes — a manifest with no `routes_to` (the common case) skips this block entirely.
+
+- [ ] **Step 4: Run to verify all pass**
+
+Run: `cd hub_api && python3 -m pytest tests/test_bundle_approval_service.py -v`
+Expected: every previously-passing test in this file still passes, plus the 5 new tests from Step 1.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add hub_api/services/bundle_approval_service.py hub_api/tests/test_bundle_approval_service.py
+git commit -m "$(cat <<'EOF'
+feat(hub-api): refuse a cross-tenant routes_to target at approval (spec Sec5.9, D30)
+
+approve_version() now validates every manifest.routes_to entry before
+recording the approval: a target absent from app_catalog is 422
+routes_to_target_not_found, one that exists but has no non-superseded
+app_install_approvals row for this tenant is 422 routes_to_cross_tenant.
+Both refusals write an audit_log row (routes_to_refused) before
+raising, so the refusal is exactly as auditable as a success.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+## Task 47: `usage_aggregator_service.py` — the `waddles:usage` consumer writing `workstream_usage_hourly` (spec §5.12, D31)
+
+**Depends on:** Task 42 (`workstream_usage_hourly` DDL), Task 43 (the pydal binder), Task 28 (`valkey_admin_client.build_client`, `ensure_group`), Task 38 (`bundle_telemetry.get_meter`, `bundle_span` — this task only calls these existing exports, it does not modify `bundle_telemetry.py`).
+
+**Files:**
+- Create: `hub_api/services/usage_aggregator_service.py`
+- Create: `k8s/helm/waddlebot/templates/usage-aggregator-cronjob.yaml`
+- Modify: `k8s/helm/waddlebot/values.yaml`
+- Test: `hub_api/tests/test_usage_aggregator_service.py`
+
+**Interfaces:**
+- Produces: `USAGE_STREAM = "waddles:usage"`, `USAGE_CONSUMER_GROUP = "hub_api_usage_aggregator"`; `@dataclass(slots=True, frozen=True) UsageDelta(tenant_id, community_id, workstream_id, stage, app_id, hour, events, invocations, host_calls, actions_delivered, fuel_ms, outbound_bytes, media_minutes)`; `def parse_usage_entry(fields: dict[Any, Any]) -> UsageDelta` (raises `ValueError` on a malformed entry); `@dataclass(slots=True, frozen=True) AggregationResult(examined: int, written: int, skipped: int)`; `async def run_usage_aggregation_batch(async_dal, dal, redis_client, *, batch_size: int = 500, consumer_name: str = "hub-api-1") -> AggregationResult`; `async def main() -> int` (the CronJob entrypoint, `python -m services.usage_aggregator_service`).
+- Consumes: `services.valkey_admin_client.{build_client, ensure_group}` (Task 28); `services.bundle_telemetry.{bundle_span, get_meter}` (Task 38).
+
+**Wire shape of one `waddles:usage` entry** (this task's own decision — the spec specifies the transport and the recorded fields, §5.12, not the field names on the wire; **must match** whichever plan implements the stage-side `XADD` producer: M3 `svc_action`, M4 `svc_process`, M5 `svc_ingest`, and `svc_streaming`'s own future plan): `tenant_id` (decimal string), `community_id` (decimal string, or the literal `"_tenant"` for tenant-wide, mirroring the stream-key segment convention §6.2), `workstream_id` (opaque string), `stage` (one of `ingest`/`process`/`action`/`streaming`), `app_id` (string, or `""`/absent for ingest-stage entries with no bundle), `hour` (an RFC3339 timestamp truncated to the hour), `events`/`invocations`/`host_calls`/`actions_delivered`/`fuel_ms`/`outbound_bytes` (decimal strings, default `"0"` when absent), `media_minutes` (decimal string, `svc-streaming` only, absent elsewhere).
+
+**At-least-once, by design, never data loss.** Each batch is committed to Postgres before its entries are `XACK`ed, so a crash between commit and ack causes a duplicate row on the next run, never a lost one — `workstream_usage_hourly` already tolerates this by being append-only and summed at query time (spec §6.12), and "no charging, quota or enforcement ships now" (spec §5.12) makes an occasional duplicated correction row a non-issue today.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# hub_api/tests/test_usage_aggregator_service.py
+"""Tests for the waddles:usage consumer -- parsing, aggregation, and the CronJob entrypoint (spec Sec5.12, D31)."""
+
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from services.usage_aggregator_service import (
+    USAGE_CONSUMER_GROUP,
+    USAGE_STREAM,
+    AggregationResult,
+    parse_usage_entry,
+    run_usage_aggregation_batch,
+)
+
+
+def _entry(**overrides: str) -> dict[str, str]:
+    base = {
+        "tenant_id": "1", "community_id": "_tenant", "workstream_id": "ws-1", "stage": "ingest",
+        "app_id": "", "hour": "2026-09-14T10:00:00+00:00", "events": "3", "invocations": "0",
+        "host_calls": "0", "actions_delivered": "0", "fuel_ms": "0", "outbound_bytes": "512",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_parse_usage_entry_decodes_a_well_formed_entry() -> None:
+    delta = parse_usage_entry(_entry())
+    assert delta.tenant_id == 1
+    assert delta.community_id is None
+    assert delta.workstream_id == "ws-1"
+    assert delta.stage == "ingest"
+    assert delta.app_id is None
+    assert delta.events == 3
+    assert delta.media_minutes is None
+
+
+def test_parse_usage_entry_decodes_byte_fields() -> None:
+    raw = {k.encode(): v.encode() for k, v in _entry().items()}
+    delta = parse_usage_entry(raw)
+    assert delta.tenant_id == 1
+
+
+def test_parse_usage_entry_parses_a_real_community_id() -> None:
+    delta = parse_usage_entry(_entry(community_id="7", app_id="waddles.socials.music.default"))
+    assert delta.community_id == 7
+    assert delta.app_id == "waddles.socials.music.default"
+
+
+def test_parse_usage_entry_parses_media_minutes_for_streaming() -> None:
+    delta = parse_usage_entry(_entry(stage="streaming", media_minutes="4.5"))
+    assert delta.media_minutes == 4.5
+
+
+def test_parse_usage_entry_rejects_an_unknown_stage() -> None:
+    with pytest.raises(ValueError, match="malformed"):
+        parse_usage_entry(_entry(stage="nope"))
+
+
+def test_parse_usage_entry_rejects_a_missing_required_field() -> None:
+    entry = _entry()
+    del entry["tenant_id"]
+    with pytest.raises(ValueError, match="malformed"):
+        parse_usage_entry(entry)
+
+
+def test_parse_usage_entry_rejects_a_non_numeric_field() -> None:
+    with pytest.raises(ValueError, match="malformed"):
+        parse_usage_entry(_entry(events="not-a-number"))
+
+
+async def test_run_usage_aggregation_batch_writes_one_row_per_group(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    redis_client = AsyncMock()
+    redis_client.xreadgroup.return_value = [
+        (USAGE_STREAM, [
+            (b"1-1", {b"tenant_id": b"1", b"community_id": b"_tenant", b"workstream_id": b"ws-1",
+                      b"stage": b"ingest", b"app_id": b"", b"hour": b"2026-09-14T10:00:00+00:00",
+                      b"events": b"2", b"invocations": b"0", b"host_calls": b"0",
+                      b"actions_delivered": b"0", b"fuel_ms": b"0", b"outbound_bytes": b"100"}),
+            (b"1-2", {b"tenant_id": b"1", b"community_id": b"_tenant", b"workstream_id": b"ws-1",
+                      b"stage": b"ingest", b"app_id": b"", b"hour": b"2026-09-14T10:00:00+00:00",
+                      b"events": b"3", b"invocations": b"0", b"host_calls": b"0",
+                      b"actions_delivered": b"0", b"fuel_ms": b"0", b"outbound_bytes": b"50"}),
+        ]),
+    ]
+    result = await run_usage_aggregation_batch(async_dal, dal, redis_client)
+    assert result == AggregationResult(examined=2, written=1, skipped=0)
+    row = dal(dal.workstream_usage_hourly.workstream_id == "ws-1").select().first()
+    assert row.events == 5
+    assert row.outbound_bytes == 150
+    redis_client.xack.assert_called_once_with(USAGE_STREAM, USAGE_CONSUMER_GROUP, b"1-1", b"1-2")
+
+
+async def test_run_usage_aggregation_batch_acks_and_skips_a_malformed_entry(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    redis_client = AsyncMock()
+    redis_client.xreadgroup.return_value = [
+        (USAGE_STREAM, [(b"2-1", {b"tenant_id": b"1", b"stage": b"bogus"})]),
+    ]
+    result = await run_usage_aggregation_batch(async_dal, dal, redis_client)
+    assert result == AggregationResult(examined=1, written=0, skipped=1)
+    redis_client.xack.assert_called_once_with(USAGE_STREAM, USAGE_CONSUMER_GROUP, b"2-1")
+
+
+async def test_run_usage_aggregation_batch_with_nothing_to_read_examines_zero(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    redis_client = AsyncMock()
+    redis_client.xreadgroup.return_value = []
+    result = await run_usage_aggregation_batch(async_dal, dal, redis_client)
+    assert result == AggregationResult(examined=0, written=0, skipped=0)
+    redis_client.xack.assert_not_called()
+
+
+async def test_run_usage_aggregation_batch_groups_two_different_workstreams_separately(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    redis_client = AsyncMock()
+    redis_client.xreadgroup.return_value = [
+        (USAGE_STREAM, [
+            (b"3-1", {b"tenant_id": b"1", b"community_id": b"_tenant", b"workstream_id": b"ws-a",
+                      b"stage": b"process", b"app_id": b"waddles.socials.music.default",
+                      b"hour": b"2026-09-14T11:00:00+00:00", b"events": b"1", b"invocations": b"1",
+                      b"host_calls": b"0", b"actions_delivered": b"0", b"fuel_ms": b"10",
+                      b"outbound_bytes": b"0"}),
+            (b"3-2", {b"tenant_id": b"1", b"community_id": b"_tenant", b"workstream_id": b"ws-b",
+                      b"stage": b"process", b"app_id": b"waddles.socials.music.default",
+                      b"hour": b"2026-09-14T11:00:00+00:00", b"events": b"1", b"invocations": b"1",
+                      b"host_calls": b"0", b"actions_delivered": b"0", b"fuel_ms": b"20",
+                      b"outbound_bytes": b"0"}),
+        ]),
+    ]
+    result = await run_usage_aggregation_batch(async_dal, dal, redis_client)
+    assert result == AggregationResult(examined=2, written=2, skipped=0)
+
+
+async def test_main_propagates_a_redis_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prove the gate can fail: a Redis outage must not be swallowed into a silent zero-examined pass."""
+    from services import usage_aggregator_service as job
+
+    monkeypatch.setenv("DATABASE_URL", "sqlite://usage-aggregator-test.db")
+
+    async def _raise_on_read(*_args: Any, **_kwargs: Any) -> Any:
+        raise ConnectionError("valkey unreachable")
+
+    mock_client = AsyncMock()
+    mock_client.xreadgroup.side_effect = _raise_on_read
+    with (
+        patch.object(job, "build_client", return_value=mock_client),
+        patch.object(job, "ensure_group", new_callable=AsyncMock),
+        patch.object(job, "_build_dals", return_value=(object(), object())),
+        pytest.raises(ConnectionError),
+    ):
+        await job.main()
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `cd hub_api && python3 -m pytest tests/test_usage_aggregator_service.py -v`
+Expected: `ModuleNotFoundError: No module named 'services.usage_aggregator_service'`
+
+- [ ] **Step 3: Write the implementation**
+
+```python
+# hub_api/services/usage_aggregator_service.py
+"""hub-api's `waddles:usage` consumer -- writes workstream_usage_hourly (spec Sec5.12, Sec6.12, D31).
+
+Stages (`svc_ingest`, `svc_process`, `svc_action`, `svc_streaming`) are
+XADD-only producers onto `waddles:usage` (spec Sec11.10.2) -- hub-api is
+the one and only reader, through its own consumer group. Every batch is
+committed to Postgres BEFORE the entries it covers are XACKed, so a
+crash between commit and XACK causes at-least-once redelivery (a
+Postgres row gets written twice on the next run) rather than
+at-most-once data loss -- acceptable per spec Sec5.12 ("no charging,
+quota or enforcement ships now") and consistent with
+`workstream_usage_hourly` being append-only/summed-at-query-time by
+design: a duplicated correction row is exactly the shape the table
+already tolerates.
+
+Wire shape of one `waddles:usage` XADD entry (this task's own decision;
+must match whichever plan implements the stage-side producer -- M3
+svc_action, M4 svc_process, M5 svc_ingest, and svc_streaming's own
+future plan): `tenant_id` (decimal string), `community_id` (decimal
+string, or the literal "_tenant" for tenant-wide), `workstream_id`
+(opaque string), `stage` (one of ingest/process/action/streaming),
+`app_id` (string, or "" for ingest-stage entries with no bundle),
+`hour` (RFC3339, truncated to the hour), `events`/`invocations`/
+`host_calls`/`actions_delivered`/`fuel_ms`/`outbound_bytes` (decimal
+strings, default "0"), `media_minutes` (decimal string, svc-streaming
+only, absent elsewhere).
+
+Runs as a Kubernetes CronJob (`k8s/helm/waddlebot/templates/
+usage-aggregator-cronjob.yaml`), entrypoint `python -m
+services.usage_aggregator_service` -- bounded per-invocation batches
+under `concurrencyPolicy: Forbid`, the same CronJob shape this plan
+already established for `bundle_role_cleanup_job.py` (Task 36).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+
+from flask_core.database import AsyncDAL
+
+from services.bundle_telemetry import bundle_span, get_meter
+from services.schema import bind_bundle_install_tables
+from services.valkey_admin_client import build_client, ensure_group
+
+USAGE_STREAM = "waddles:usage"
+USAGE_CONSUMER_GROUP = "hub_api_usage_aggregator"
+_TENANT_WIDE_SENTINEL = "_tenant"
+_VALID_STAGES = frozenset({"ingest", "process", "action", "streaming"})
+
+_meter = get_meter()
+_batches_counter = _meter.create_counter(
+    "waddles_hub_usage_batches_total", description="usage aggregator batch runs, by result"
+)
+_rows_written_histogram = _meter.create_histogram(
+    "waddles_hub_usage_rows_written", description="workstream_usage_hourly rows written per batch"
+)
+_entries_skipped_counter = _meter.create_counter(
+    "waddles_hub_usage_entries_skipped_total", description="waddles:usage entries acked but unparseable"
+)
+
+
+@dataclass(slots=True, frozen=True)
+class UsageDelta:
+    """One decoded `waddles:usage` entry."""
+
+    tenant_id: int
+    community_id: int | None
+    workstream_id: str
+    stage: str
+    app_id: str | None
+    hour: datetime
+    events: int
+    invocations: int
+    host_calls: int
+    actions_delivered: int
+    fuel_ms: int
+    outbound_bytes: int
+    media_minutes: float | None
+
+
+def _decode(value: Any) -> str:
+    return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+
+def parse_usage_entry(fields: dict[Any, Any]) -> UsageDelta:
+    """Decode one `XREADGROUP` entry's field map into a `UsageDelta`. Raises `ValueError` if malformed."""
+    decoded = {_decode(k): _decode(v) for k, v in fields.items()}
+    try:
+        stage = decoded["stage"]
+        if stage not in _VALID_STAGES:
+            raise ValueError(f"unknown stage {stage!r}")
+        community_raw = decoded.get("community_id", _TENANT_WIDE_SENTINEL)
+        community_id = None if community_raw == _TENANT_WIDE_SENTINEL else int(community_raw)
+        app_id = decoded.get("app_id") or None
+        media_raw = decoded.get("media_minutes")
+        return UsageDelta(
+            tenant_id=int(decoded["tenant_id"]),
+            community_id=community_id,
+            workstream_id=decoded["workstream_id"],
+            stage=stage,
+            app_id=app_id,
+            hour=datetime.fromisoformat(decoded["hour"]),
+            events=int(decoded.get("events", "0")),
+            invocations=int(decoded.get("invocations", "0")),
+            host_calls=int(decoded.get("host_calls", "0")),
+            actions_delivered=int(decoded.get("actions_delivered", "0")),
+            fuel_ms=int(decoded.get("fuel_ms", "0")),
+            outbound_bytes=int(decoded.get("outbound_bytes", "0")),
+            media_minutes=float(media_raw) if media_raw is not None else None,
+        )
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"malformed waddles:usage entry: {exc}") from exc
+
+
+@dataclass(slots=True, frozen=True)
+class AggregationResult:
+    """What one batch did. `examined` is the denominator a zero-written run is judged against."""
+
+    examined: int
+    written: int
+    skipped: int
+
+
+def _group_key(delta: UsageDelta) -> tuple[int, int | None, str, str, str | None, datetime]:
+    return (delta.tenant_id, delta.community_id, delta.workstream_id, delta.stage, delta.app_id, delta.hour)
+
+
+async def run_usage_aggregation_batch(
+    async_dal: Any,
+    dal: Any,
+    redis_client: Any,
+    *,
+    batch_size: int = 500,
+    consumer_name: str = "hub-api-1",
+) -> AggregationResult:
+    """One bounded read-aggregate-write-ack pass over `waddles:usage`. Never blocks (`BLOCK` is unused)."""
+    async with bundle_span("hub.usage.aggregate_batch", stream=USAGE_STREAM):
+        response = await redis_client.xreadgroup(
+            USAGE_CONSUMER_GROUP, consumer_name, {USAGE_STREAM: ">"}, count=batch_size
+        )
+        if not response:
+            _batches_counter.add(1, {"result": "empty"})
+            return AggregationResult(examined=0, written=0, skipped=0)
+
+        entries = response[0][1]
+        groups: dict[tuple[int, int | None, str, str, str | None, datetime], list[UsageDelta]] = defaultdict(list)
+        to_ack: list[Any] = []
+        skipped = 0
+        for entry_id, fields in entries:
+            to_ack.append(entry_id)
+            try:
+                delta = parse_usage_entry(fields)
+            except ValueError:
+                skipped += 1
+                _entries_skipped_counter.add(1)
+                continue
+            groups[_group_key(delta)].append(delta)
+
+        now = datetime.now(UTC)
+        written = 0
+        for (tenant_id, community_id, workstream_id, stage, app_id, hour), deltas in groups.items():
+            await async_dal.insert_async(
+                dal.workstream_usage_hourly,
+                tenant_id=tenant_id, community_id=community_id, workstream_id=workstream_id,
+                stage=stage, app_id=app_id, hour=hour,
+                events=sum(d.events for d in deltas),
+                invocations=sum(d.invocations for d in deltas),
+                host_calls=sum(d.host_calls for d in deltas),
+                actions_delivered=sum(d.actions_delivered for d in deltas),
+                fuel_ms=sum(d.fuel_ms for d in deltas),
+                outbound_bytes=sum(d.outbound_bytes for d in deltas),
+                media_minutes=(
+                    sum(d.media_minutes for d in deltas if d.media_minutes is not None)
+                    if any(d.media_minutes is not None for d in deltas) else None
+                ),
+                recorded_at=now,
+            )
+            written += 1
+        async_dal.dal.commit()
+
+        if to_ack:
+            await redis_client.xack(USAGE_STREAM, USAGE_CONSUMER_GROUP, *to_ack)
+
+        _batches_counter.add(1, {"result": "processed"})
+        _rows_written_histogram.record(written)
+        return AggregationResult(examined=len(entries), written=written, skipped=skipped)
+
+
+def _build_dals() -> tuple[Any, Any]:
+    """Open the job's own DAL connection from `DATABASE_URL` and bind the tables it writes."""
+    async_dal = AsyncDAL(os.environ["DATABASE_URL"], pool_size=1)
+    dal = async_dal.dal
+    bind_bundle_install_tables(dal)
+    return async_dal, dal
+
+
+async def main() -> int:
+    """CronJob entrypoint: ensure the consumer group exists, drain up to 20 batches, print denominators.
+
+    An idle stream (zero entries examined) is the expected steady state
+    between bursts of traffic, not a failure -- unlike Task 36's
+    orphan-role sweeper, which examines a catalog table that is always
+    populated once the system has any installed bundle. A genuine
+    "pointed at the wrong place" failure here (an unreachable Valkey, a
+    missing DATABASE_URL) raises an exception instead of returning a
+    silent zero, which is what the test above proves.
+    """
+    async_dal, dal = _build_dals()
+    redis_client = build_client()
+    await ensure_group(redis_client, stream=USAGE_STREAM, group=USAGE_CONSUMER_GROUP)
+
+    total_examined = 0
+    total_written = 0
+    total_skipped = 0
+    for _ in range(20):
+        result = await run_usage_aggregation_batch(async_dal, dal, redis_client)
+        total_examined += result.examined
+        total_written += result.written
+        total_skipped += result.skipped
+        if result.examined == 0:
+            break
+
+    print(
+        f"usage aggregation: examined={total_examined} written={total_written} skipped={total_skipped}"
+    )
+    if total_examined == 0:
+        print(
+            "usage aggregation: zero entries examined this run -- normal when the stream is idle "
+            "between bursts of traffic",
+            file=sys.stderr,
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(main()))
+```
+
+- [ ] **Step 4: Run to verify all pass**
+
+Run: `cd hub_api && python3 -m pytest tests/test_usage_aggregator_service.py -v`
+Expected: `12 passed`
+
+- [ ] **Step 5: Add the CronJob manifest**
+
+```yaml
+# k8s/helm/waddlebot/templates/usage-aggregator-cronjob.yaml
+{{- if .Values.metering.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "waddlebot.fullname" . }}-usage-aggregator
+  labels:
+    {{- include "waddlebot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: usage-aggregator
+spec:
+  schedule: {{ .Values.metering.aggregatorSchedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 60
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 600
+      template:
+        metadata:
+          labels:
+            {{- include "waddlebot.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: usage-aggregator
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "waddlebot.fullname" . }}-hub-api
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: usage-aggregator
+              image: "{{ .Values.hubApi.image.repository }}:{{ .Values.hubApi.image.tag }}"
+              imagePullPolicy: {{ .Values.hubApi.image.pullPolicy }}
+              command: ["python", "-m", "services.usage_aggregator_service"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.hubApi.database.secretName }}
+                      key: {{ .Values.hubApi.database.secretKey }}
+                - name: VALKEY_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.metering.valkeySecretName }}
+                      key: {{ .Values.metering.valkeySecretKey }}
+                - name: SECURITY_TRANSPORT_TLS
+                  value: {{ .Values.metering.valkeyTls | quote }}
+                - name: OTEL_EXPORTER_OTLP_ENDPOINT
+                  value: {{ .Values.observability.otlpEndpoint | quote }}
+                - name: OTEL_SERVICE_NAME
+                  value: waddles-usage-aggregator
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+{{- end }}
+```
+
+- [ ] **Step 6: Add the values keys**
+
+Add to `k8s/helm/waddlebot/values.yaml` as a new top-level block:
+
+```yaml
+metering:
+  # hub-api's usage aggregator: reads waddles:usage (its own consumer
+  # group, XACK after commit), writes workstream_usage_hourly (spec
+  # Sec5.12, D31). No charging/quota is wired to this -- spec Sec5.12
+  # "Not billed yet". Read surfaces (Task 48's usage API) are never
+  # gated by this value; only the recording pipeline is.
+  enabled: true
+  # Every minute -- Kubernetes CronJob's finest granularity;
+  # concurrencyPolicy: Forbid means a slow run simply skips the next
+  # tick rather than overlapping with itself.
+  aggregatorSchedule: "*/1 * * * *"
+  # Same Valkey the four Rust stage services XADD onto; a read-capable
+  # credential distinct from any stage's write-only ACL user (spec
+  # Sec11.10.2: stages are +xadd only, only hub-api's ACL user reads).
+  valkeySecretName: waddlebot-valkey-usage-reader
+  valkeySecretKey: url
+  valkeyTls: "true"
+```
+
+- [ ] **Step 7: Validate the chart renders**
+
+Run:
+```bash
+helm lint ./k8s/helm/waddlebot
+helm template waddlebot ./k8s/helm/waddlebot --values ./k8s/helm/waddlebot/alpha.yml \
+  --show-only templates/usage-aggregator-cronjob.yaml
+```
+Expected: `helm lint` reports `1 chart(s) linted, 0 chart(s) failed`, and the template renders one `CronJob` whose `spec.jobTemplate.spec.template.spec.securityContext.runAsNonRoot` is `true` and whose container command is `["python", "-m", "services.usage_aggregator_service"]`.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add hub_api/services/usage_aggregator_service.py hub_api/tests/test_usage_aggregator_service.py \
+        k8s/helm/waddlebot/templates/usage-aggregator-cronjob.yaml k8s/helm/waddlebot/values.yaml
+git commit -m "$(cat <<'EOF'
+feat(hub-api): usage_aggregator_service -- the waddles:usage consumer writing workstream_usage_hourly (spec Sec5.12, D31)
+
+Own consumer group (hub_api_usage_aggregator), commits every batch to
+Postgres before XACKing its entries -- a crash between the two causes
+at-least-once redelivery, never data loss, which the append-only,
+summed-at-query-time workstream_usage_hourly table already tolerates.
+Runs as a CronJob gated by the chart value metering.enabled, not a
+PostHog flag (spec Sec12.3). Wire shape of one waddles:usage entry is
+this task's own decision, documented in the module docstring and
+marked must-match for the stage-side XADD producer plans (M3/M4/M5).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+## Task 48: `usage_query_service.py` + `blueprints/v1/workstream_usage.py` — the per-community admin usage API (spec §5.12, D31)
+
+**Depends on:** Task 42 (`workstream_usage_hourly` DDL), Task 43 (the pydal binder), Task 47 (the aggregator that populates the rows this API reads).
+
+**Files:**
+- Create: `hub_api/services/usage_query_service.py`
+- Create: `hub_api/blueprints/v1/workstream_usage.py`
+- Test: `hub_api/tests/test_usage_query_service.py`
+- Test: `hub_api/tests/test_workstream_usage_blueprint.py`
+- Modify: `hub_api/pyproject.toml`
+
+**Interfaces:**
+- Produces: `MAX_USAGE_PAGE_SIZE = 200`; `@dataclass(slots=True, frozen=True) UsageRow(tenant_id, community_id, workstream_id, stage, app_id, hour, events, invocations, host_calls, actions_delivered, fuel_ms, outbound_bytes, media_minutes)`; `async def query_usage(async_dal, dal, *, tenant_id: int, community_id: int | None = None, workstream_id: str | None = None, stage: str | None = None, app_id: str | None = None, hour_from: datetime | None = None, hour_to: datetime | None = None, limit: int = 50, offset: int = 0) -> tuple[list[UsageRow], int]` (returns `(page, total)`, summed by natural key per spec §5.12/§6.12, raises `ApiError(..., 422, ...)` on an invalid filter); `GET /api/v1/tenant/{slug}/usage` (scope `tenant:admin`), DTOs `UsageRowDTO`, `UsageMetaDTO`, `UsageListResponse(success, rows, meta)`.
+- Consumes: nothing new.
+
+**Ungated by design.** This view is read-only, so it follows this plan's established rule (Task 37: "write surfaces are gated; read surfaces are not") — no new PostHog flag. The recording pipeline behind it is gated instead, by the chart value `metering.enabled` (Task 47), exactly as the spec names it (§12.3).
+
+- [ ] **Step 1: Write the failing test for the query service**
+
+```python
+# hub_api/tests/test_usage_query_service.py
+"""Tests for the per-community usage query -- filters, aggregation-at-query-time, pagination (D31)."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+
+from services.errors import ApiError
+from services.usage_query_service import query_usage
+
+
+def _seed_row(dal: Any, **overrides: Any) -> None:
+    base = {
+        "tenant_id": 1, "community_id": None, "workstream_id": "ws-1", "stage": "ingest",
+        "app_id": None, "hour": datetime(2026, 9, 14, 10, 0, tzinfo=UTC), "events": 1,
+        "invocations": 0, "host_calls": 0, "actions_delivered": 0, "fuel_ms": 0,
+        "outbound_bytes": 100, "media_minutes": None, "recorded_at": datetime.now(UTC),
+    }
+    base.update(overrides)
+    dal.workstream_usage_hourly.insert(**base)
+    dal.commit()
+
+
+async def test_query_usage_with_no_rows_returns_an_empty_page(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    rows, total = await query_usage(async_dal, async_dal.dal, tenant_id=1)
+    assert rows == []
+    assert total == 0
+
+
+async def test_query_usage_sums_two_correction_rows_for_the_same_natural_key(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    _seed_row(dal, events=2, outbound_bytes=100)
+    _seed_row(dal, events=3, outbound_bytes=50)
+    rows, total = await query_usage(async_dal, dal, tenant_id=1)
+    assert total == 1
+    assert rows[0].events == 5
+    assert rows[0].outbound_bytes == 150
+
+
+async def test_query_usage_filters_by_community(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    _seed_row(dal, workstream_id="ws-a", community_id=1)
+    _seed_row(dal, workstream_id="ws-b", community_id=2)
+    rows, total = await query_usage(async_dal, dal, tenant_id=1, community_id=1)
+    assert total == 1
+    assert rows[0].workstream_id == "ws-a"
+
+
+async def test_query_usage_filters_by_workstream(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    _seed_row(dal, workstream_id="ws-a")
+    _seed_row(dal, workstream_id="ws-b")
+    rows, total = await query_usage(async_dal, dal, tenant_id=1, workstream_id="ws-b")
+    assert total == 1
+    assert rows[0].workstream_id == "ws-b"
+
+
+async def test_query_usage_filters_by_date_range(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    _seed_row(dal, workstream_id="ws-early", hour=datetime(2026, 9, 10, 0, 0, tzinfo=UTC))
+    _seed_row(dal, workstream_id="ws-late", hour=datetime(2026, 9, 20, 0, 0, tzinfo=UTC))
+    rows, total = await query_usage(
+        async_dal, dal, tenant_id=1,
+        hour_from=datetime(2026, 9, 15, 0, 0, tzinfo=UTC), hour_to=datetime(2026, 9, 25, 0, 0, tzinfo=UTC),
+    )
+    assert total == 1
+    assert rows[0].workstream_id == "ws-late"
+
+
+async def test_query_usage_paginates(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    for i in range(5):
+        _seed_row(dal, workstream_id=f"ws-{i}", hour=datetime(2026, 9, 14, i, 0, tzinfo=UTC))
+    page1, total = await query_usage(async_dal, dal, tenant_id=1, limit=2, offset=0)
+    page2, _ = await query_usage(async_dal, dal, tenant_id=1, limit=2, offset=2)
+    assert total == 5
+    assert len(page1) == 2
+    assert len(page2) == 2
+    assert {r.workstream_id for r in page1} != {r.workstream_id for r in page2}
+
+
+async def test_query_usage_never_returns_another_tenants_rows(bundle_install_db: Any) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    _seed_row(dal, tenant_id=1, workstream_id="ws-mine")
+    _seed_row(dal, tenant_id=2, workstream_id="ws-other")
+    rows, total = await query_usage(async_dal, dal, tenant_id=1)
+    assert total == 1
+    assert rows[0].workstream_id == "ws-mine"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "code"),
+    [
+        ({"stage": "nonsense"}, "invalid_stage"),
+        ({"limit": 0}, "invalid_limit"),
+        ({"limit": 500}, "invalid_limit"),
+        ({"offset": -1}, "invalid_offset"),
+        (
+            {"hour_from": datetime(2026, 9, 20, tzinfo=UTC), "hour_to": datetime(2026, 9, 1, tzinfo=UTC)},
+            "invalid_date_range",
+        ),
+        ({"workstream_id": "   "}, "invalid_workstream_id"),
+    ],
+)
+async def test_query_usage_rejects_every_invalid_filter(
+    bundle_install_db: Any, kwargs: dict[str, Any], code: str
+) -> None:
+    async_dal = bundle_install_db
+    with pytest.raises(ApiError) as excinfo:
+        await query_usage(async_dal, async_dal.dal, tenant_id=1, **kwargs)
+    assert excinfo.value.code == code
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `cd hub_api && python3 -m pytest tests/test_usage_query_service.py -v`
+Expected: `ModuleNotFoundError: No module named 'services.usage_query_service'`
+
+- [ ] **Step 3: Write `usage_query_service.py`**
+
+```python
+# hub_api/services/usage_query_service.py
+"""Per-community admin usage query (spec Sec5.12, Sec6.12, D31) -- read-only, no charging/quota.
+
+`workstream_usage_hourly` allows more than one row per natural key (a
+correction is a new row, spec Sec6.12) -- this module sums by
+`(tenant_id, community_id, workstream_id, stage, app_id, hour)` at
+query time, exactly as the spec's design intends, rather than exposing
+raw, possibly-duplicated rows to an admin.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
+from services.errors import ApiError
+
+MAX_USAGE_PAGE_SIZE = 200
+_VALID_STAGES = frozenset({"ingest", "process", "action", "streaming"})
+
+
+@dataclass(slots=True, frozen=True)
+class UsageRow:
+    """One aggregated `(tenant, community, workstream, stage, app)` usage bucket for one hour."""
+
+    tenant_id: int
+    community_id: int | None
+    workstream_id: str
+    stage: str
+    app_id: str | None
+    hour: datetime
+    events: int
+    invocations: int
+    host_calls: int
+    actions_delivered: int
+    fuel_ms: int
+    outbound_bytes: int
+    media_minutes: float | None
+
+
+def _validate_filters(
+    *, workstream_id: str | None, stage: str | None, hour_from: datetime | None,
+    hour_to: datetime | None, limit: int, offset: int,
+) -> None:
+    if workstream_id is not None and not workstream_id.strip():
+        raise ApiError("workstreamId must not be blank", 422, "invalid_workstream_id")
+    if stage is not None and stage not in _VALID_STAGES:
+        raise ApiError(f"stage must be one of {sorted(_VALID_STAGES)}", 422, "invalid_stage")
+    if hour_from is not None and hour_to is not None and hour_from > hour_to:
+        raise ApiError("from must not be after to", 422, "invalid_date_range")
+    if limit < 1 or limit > MAX_USAGE_PAGE_SIZE:
+        raise ApiError(f"limit must be between 1 and {MAX_USAGE_PAGE_SIZE}", 422, "invalid_limit")
+    if offset < 0:
+        raise ApiError("offset must not be negative", 422, "invalid_offset")
+
+
+async def query_usage(
+    async_dal: Any,
+    dal: Any,
+    *,
+    tenant_id: int,
+    community_id: int | None = None,
+    workstream_id: str | None = None,
+    stage: str | None = None,
+    app_id: str | None = None,
+    hour_from: datetime | None = None,
+    hour_to: datetime | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[UsageRow], int]:
+    """The tenant's usage, optionally scoped to one community, summed by natural key, paginated.
+
+    Aggregation and pagination both happen in Python after the filtered
+    rows are fetched -- an admin reporting view bounded by tenant (and
+    usually by a community/date-range filter too), never a hot path, so
+    this trades a little raw-row overhead for a query pydal's
+    query-builder can express without a second, aggregate-specific
+    code path (never raw SQL, per this plan's Global Constraints).
+    """
+    _validate_filters(
+        workstream_id=workstream_id, stage=stage, hour_from=hour_from, hour_to=hour_to,
+        limit=limit, offset=offset,
+    )
+    query = dal.workstream_usage_hourly.tenant_id == tenant_id
+    if community_id is not None:
+        query &= dal.workstream_usage_hourly.community_id == community_id
+    if workstream_id is not None:
+        query &= dal.workstream_usage_hourly.workstream_id == workstream_id
+    if stage is not None:
+        query &= dal.workstream_usage_hourly.stage == stage
+    if app_id is not None:
+        query &= dal.workstream_usage_hourly.app_id == app_id
+    if hour_from is not None:
+        query &= dal.workstream_usage_hourly.hour >= hour_from
+    if hour_to is not None:
+        query &= dal.workstream_usage_hourly.hour < hour_to
+
+    raw_rows = await async_dal.select_async(dal(query))
+
+    grouped: dict[tuple[int, int | None, str, str, str | None, datetime], dict[str, Any]] = {}
+    for row in raw_rows:
+        key = (row.tenant_id, row.community_id, row.workstream_id, row.stage, row.app_id, row.hour)
+        bucket = grouped.setdefault(
+            key,
+            {"events": 0, "invocations": 0, "host_calls": 0, "actions_delivered": 0,
+             "fuel_ms": 0, "outbound_bytes": 0, "media_minutes": None},
+        )
+        bucket["events"] += row.events
+        bucket["invocations"] += row.invocations
+        bucket["host_calls"] += row.host_calls
+        bucket["actions_delivered"] += row.actions_delivered
+        bucket["fuel_ms"] += row.fuel_ms
+        bucket["outbound_bytes"] += row.outbound_bytes
+        if row.media_minutes is not None:
+            bucket["media_minutes"] = (bucket["media_minutes"] or 0) + row.media_minutes
+
+    results = [
+        UsageRow(
+            tenant_id=key[0], community_id=key[1], workstream_id=key[2], stage=key[3],
+            app_id=key[4], hour=key[5], **bucket,
+        )
+        for key, bucket in sorted(grouped.items(), key=lambda item: (item[0][5], item[0][2], item[0][3]))
+    ]
+    total = len(results)
+    return results[offset : offset + limit], total
+```
+
+- [ ] **Step 4: Run to verify the query-service tests pass**
+
+Run: `cd hub_api && python3 -m pytest tests/test_usage_query_service.py -v`
+Expected: `13 passed` (7 named tests + 6 parametrized invalid-filter cases).
+
+- [ ] **Step 5: Write the failing test for the blueprint**
+
+```python
+# hub_api/tests/test_workstream_usage_blueprint.py
+"""Blueprint tests for GET /api/v1/tenant/{slug}/usage (spec Sec5.12, D31)."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+from quart import Quart
+
+from blueprints.v1.workstream_usage import BLUEPRINTS
+from tests.conftest import TENANT_SLUG, make_user_token
+
+
+@pytest.fixture
+def app(bundle_install_db: Any) -> Quart:
+    dal = bundle_install_db.dal
+    dal.workstream_usage_hourly.insert(
+        tenant_id=1, community_id=None, workstream_id="ws-1", stage="ingest", app_id=None,
+        hour=datetime(2026, 9, 14, 10, 0, tzinfo=UTC), events=4, invocations=0, host_calls=0,
+        actions_delivered=0, fuel_ms=0, outbound_bytes=200, media_minutes=None,
+        recorded_at=datetime.now(UTC),
+    )
+    dal.commit()
+    quart_app = Quart(__name__)
+    quart_app.config["async_dal"] = bundle_install_db
+    quart_app.config["dal"] = dal
+    for bp in BLUEPRINTS:
+        quart_app.register_blueprint(bp)
+    return quart_app
+
+
+async def test_usage_requires_tenant_admin(app: Quart) -> None:
+    token = make_user_token(user_id=1, scope="", tenant=TENANT_SLUG)
+    response = await app.test_client().get(
+        f"/api/v1/tenant/{TENANT_SLUG}/usage", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 403
+
+
+async def test_usage_returns_the_seeded_row(app: Quart) -> None:
+    token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
+    response = await app.test_client().get(
+        f"/api/v1/tenant/{TENANT_SLUG}/usage", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    body = await response.get_json()
+    assert body["meta"]["total"] == 1
+    assert body["rows"][0]["workstreamId"] == "ws-1"
+    assert body["rows"][0]["events"] == 4
+
+
+async def test_usage_filters_by_workstream_id(app: Quart) -> None:
+    token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
+    response = await app.test_client().get(
+        f"/api/v1/tenant/{TENANT_SLUG}/usage?workstreamId=nope", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    body = await response.get_json()
+    assert body["meta"]["total"] == 0
+    assert body["rows"] == []
+
+
+async def test_usage_rejects_an_invalid_stage(app: Quart) -> None:
+    token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
+    response = await app.test_client().get(
+        f"/api/v1/tenant/{TENANT_SLUG}/usage?stage=bogus", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 422
+    assert (await response.get_json())["error"]["code"] == "invalid_stage"
+
+
+async def test_usage_rejects_an_out_of_range_limit(app: Quart) -> None:
+    token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
+    response = await app.test_client().get(
+        f"/api/v1/tenant/{TENANT_SLUG}/usage?limit=9999", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 422
+    assert (await response.get_json())["error"]["code"] == "invalid_limit"
+
+
+async def test_usage_paginates_via_query_params(app: Quart) -> None:
+    dal = app.config["dal"]
+    for i in range(3):
+        dal.workstream_usage_hourly.insert(
+            tenant_id=1, community_id=None, workstream_id=f"ws-extra-{i}", stage="ingest", app_id=None,
+            hour=datetime(2026, 9, 14, 12 + i, 0, tzinfo=UTC), events=1, invocations=0, host_calls=0,
+            actions_delivered=0, fuel_ms=0, outbound_bytes=0, media_minutes=None,
+            recorded_at=datetime.now(UTC),
+        )
+    dal.commit()
+    token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
+    response = await app.test_client().get(
+        f"/api/v1/tenant/{TENANT_SLUG}/usage?limit=2&offset=0", headers={"Authorization": f"Bearer {token}"}
+    )
+    body = await response.get_json()
+    assert body["meta"]["total"] == 4
+    assert len(body["rows"]) == 2
+
+
+async def test_usage_never_returns_another_tenants_rows(app: Quart) -> None:
+    dal = app.config["dal"]
+    other_tenant_id = dal.tenants.insert(slug="other-corp", display_name="Other", is_active=True)
+    dal.workstream_usage_hourly.insert(
+        tenant_id=other_tenant_id, community_id=None, workstream_id="ws-other", stage="ingest", app_id=None,
+        hour=datetime(2026, 9, 14, 10, 0, tzinfo=UTC), events=99, invocations=0, host_calls=0,
+        actions_delivered=0, fuel_ms=0, outbound_bytes=0, media_minutes=None, recorded_at=datetime.now(UTC),
+    )
+    dal.commit()
+    token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
+    response = await app.test_client().get(
+        f"/api/v1/tenant/{TENANT_SLUG}/usage", headers={"Authorization": f"Bearer {token}"}
+    )
+    body = await response.get_json()
+    assert all(r["events"] != 99 for r in body["rows"])
+```
+
+- [ ] **Step 6: Run to verify failure**
+
+Run: `cd hub_api && python3 -m pytest tests/test_workstream_usage_blueprint.py -v`
+Expected: `ModuleNotFoundError: No module named 'blueprints.v1.workstream_usage'`
+
+- [ ] **Step 7: Write `blueprints/v1/workstream_usage.py`**
+
+```python
+# hub_api/blueprints/v1/workstream_usage.py
+"""v1 `workstream_usage` group -- per-community admin usage view (spec Sec5.12, Sec6.12, D31).
+
+Read-only, ungated by a PostHog flag on purpose -- this milestone's
+established rule is "write surfaces are gated, read surfaces are not"
+(Task 37), so a flag flip mid-rollout never blinds an admin already
+looking at usage data. Gated instead by `metering.enabled` (a chart
+value, not a PostHog flag, spec Sec12.3) -- when metering is off the
+aggregator (Task 47) simply never runs and this view returns empty
+pages, never an error.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any, cast
+
+from flask_core.api_utils import error_response
+from flask_core.authz import require_scope
+from flask_core.tenancy import get_tenant_context, tenant_middleware
+from quart import Blueprint, current_app, request
+from quart_schema import validate_response
+
+from services.errors import ApiError
+from services.tenant_service import require_matching_tenant
+from services.usage_query_service import query_usage
+
+workstream_usage_bp = Blueprint(
+    "v1_workstream_usage", __name__, url_prefix="/api/v1/tenant/<tenant_slug>/usage"
+)
+
+
+def _dal() -> tuple[Any, Any]:
+    return current_app.config["async_dal"], current_app.config["dal"]
+
+
+def _err(exc: ApiError) -> tuple[dict[str, object], int]:
+    return cast(tuple[dict[str, object], int], error_response(exc.message, exc.status_code, exc.code))
+
+
+def _tenant_id(tenant_slug: str) -> int:
+    ctx = get_tenant_context(request)
+    assert ctx is not None  # nosec B101
+    require_matching_tenant(tenant_slug, ctx.tenant_slug)
+    return cast(int, ctx.tenant_id)
+
+
+def _parse_int(raw: str | None, *, field_name: str, code: str) -> int | None:
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ApiError(f"{field_name} must be an integer", 422, code) from exc
+
+
+def _parse_datetime(raw: str | None, *, field_name: str, code: str) -> datetime | None:
+    if raw is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise ApiError(f"{field_name} must be an RFC3339 timestamp", 422, code) from exc
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+@dataclass(slots=True, frozen=True)
+class UsageRowDTO:
+    """One aggregated usage bucket on the wire."""
+
+    communityId: int | None
+    workstreamId: str
+    stage: str
+    appId: str | None
+    hour: str
+    events: int
+    invocations: int
+    hostCalls: int
+    actionsDelivered: int
+    fuelMs: int
+    outboundBytes: int
+    mediaMinutes: float | None
+
+
+@dataclass(slots=True, frozen=True)
+class UsageMetaDTO:
+    """Pagination metadata."""
+
+    total: int
+    limit: int
+    offset: int
+
+
+@dataclass(slots=True, frozen=True)
+class UsageListResponse:
+    """Response DTO for `GET .../usage`."""
+
+    success: bool
+    rows: list[UsageRowDTO] = field(default_factory=list)
+    meta: UsageMetaDTO = field(default_factory=lambda: UsageMetaDTO(total=0, limit=0, offset=0))
+
+
+@workstream_usage_bp.route("", methods=["GET"])
+@tenant_middleware  # type: ignore[untyped-decorator]
+@require_scope("tenant:admin")  # type: ignore[untyped-decorator]
+@validate_response(UsageListResponse)
+async def list_usage(tenant_slug: str) -> UsageListResponse | tuple[dict[str, object], int]:
+    """Per-community usage, summed by `(community, workstream, stage, app, hour)`, paginated."""
+    async_dal, dal = _dal()
+    try:
+        tenant_id = _tenant_id(tenant_slug)
+        community_id = _parse_int(
+            request.args.get("communityId"), field_name="communityId", code="invalid_community_id"
+        )
+        limit = _parse_int(request.args.get("limit"), field_name="limit", code="invalid_limit") or 50
+        offset = _parse_int(request.args.get("offset"), field_name="offset", code="invalid_offset") or 0
+        hour_from = _parse_datetime(request.args.get("from"), field_name="from", code="invalid_date_range")
+        hour_to = _parse_datetime(request.args.get("to"), field_name="to", code="invalid_date_range")
+        rows, total = await query_usage(
+            async_dal, dal, tenant_id=tenant_id, community_id=community_id,
+            workstream_id=request.args.get("workstreamId"), stage=request.args.get("stage"),
+            app_id=request.args.get("appId"), hour_from=hour_from, hour_to=hour_to,
+            limit=limit, offset=offset,
+        )
+    except ApiError as exc:
+        return _err(exc)
+
+    return UsageListResponse(
+        success=True,
+        rows=[
+            UsageRowDTO(
+                communityId=r.community_id, workstreamId=r.workstream_id, stage=r.stage, appId=r.app_id,
+                hour=r.hour.isoformat(), events=r.events, invocations=r.invocations, hostCalls=r.host_calls,
+                actionsDelivered=r.actions_delivered, fuelMs=r.fuel_ms, outboundBytes=r.outbound_bytes,
+                mediaMinutes=r.media_minutes,
+            )
+            for r in rows
+        ],
+        meta=UsageMetaDTO(total=total, limit=limit, offset=offset),
+    )
+
+
+BLUEPRINTS: list[Blueprint] = [workstream_usage_bp]
+```
+
+- [ ] **Step 8: Run to verify all pass**
+
+Run: `cd hub_api && python3 -m pytest tests/test_workstream_usage_blueprint.py -v`
+Expected: `7 passed`
+
+- [ ] **Step 9: Add the ruff per-file ignore**
+
+Append to `hub_api/pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]`:
+
+```toml
+"blueprints/v1/workstream_usage.py" = ["N815"]
+```
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add hub_api/services/usage_query_service.py hub_api/blueprints/v1/workstream_usage.py \
+        hub_api/tests/test_usage_query_service.py hub_api/tests/test_workstream_usage_blueprint.py \
+        hub_api/pyproject.toml
+git commit -m "$(cat <<'EOF'
+feat(hub-api): GET /api/v1/tenant/{slug}/usage -- per-community admin usage view (spec Sec5.12, D31)
+
+query_usage() sums workstream_usage_hourly by natural key at query
+time (corrections are new rows, never an UPDATE, per spec Sec6.12) and
+supports date-range, community, workstream, stage and app filters plus
+limit/offset pagination -- every filter combination, an invalid value,
+and the empty-result case are covered. Read-only and ungated by a
+PostHog flag, following this plan's established write/read gating
+split (Task 37); the recording pipeline behind it is gated instead by
+the chart value metering.enabled (Task 47).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+## Task 49: M2b D30/D31 closing gate — OpenAPI coverage, logging conformance, and the coverage/lint/make re-run for the workstream/usage surface
+
+**Depends on:** every preceding task (1-48), including Task 41's original closing gate. Nothing depends on this one — it is the milestone's final closing gate.
+
+**Files:**
+- Modify: `hub_api/tests/test_openapi_m2b_paths.py`
+- Modify: `hub_api/tests/test_m2b_logging_conformance.py`
+- Modify: `hub_api/pyproject.toml`
+
+**Interfaces:**
+- Produces: nothing consumed by another task — a leaf verification that widens Task 41's counts to cover Tasks 42-48's new surface.
+- Consumes: nothing new.
+
+- [ ] **Step 1: Widen the OpenAPI rule/module lists**
+
+In `hub_api/tests/test_openapi_m2b_paths.py`, add this entry to the `_M2B_RULES` list:
+
+```python
+    "/api/v1/tenant/<slug>/usage",
+```
+
+and this entry to the `_M2B_MODULES` list:
+
+```python
+    "blueprints.v1.workstream_usage",
+```
+
+- [ ] **Step 2: Run to verify all pass with the wider surface**
+
+Run: `cd hub_api && python3 -m pytest tests/test_openapi_m2b_paths.py -v -s`
+Expected: `3 passed`, stdout now reading `openapi check: blueprints registered = 9`, `openapi check: rules examined = <N>` where N ≥ 22, `openapi check: generated paths examined = <M>` where M ≥ 22.
+
+- [ ] **Step 3: Widen the logging-conformance file list**
+
+In `hub_api/tests/test_m2b_logging_conformance.py`, add these four entries to the `_M2B_FILES` list:
+
+```python
+    "services/workstream_service.py",
+    "services/usage_aggregator_service.py",
+    "services/usage_query_service.py",
+    "blueprints/v1/workstream_usage.py",
+```
+
+Add `"services/usage_aggregator_service.py"` to the `_PRINT_ALLOWED` set (its `main()` prints its own CronJob stdout/stderr report, the same carve-out `bundle_role_cleanup_job.py` already has):
+
+```python
+_PRINT_ALLOWED = {"services/bundle_role_cleanup_job.py", "services/usage_aggregator_service.py"}
+```
+
+- [ ] **Step 4: Run to verify all pass with the wider scan**
+
+Run: `cd hub_api && python3 -m pytest tests/test_m2b_logging_conformance.py -v -s`
+Expected: `2 passed`, stdout now reading `logging conformance: files scanned = 33`.
+
+- [ ] **Step 5: Add the remaining ruff per-file ignore, if not already present**
+
+Confirm `hub_api/pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]` contains the line Task 48 added:
+
+```toml
+"blueprints/v1/workstream_usage.py" = ["N815"]
+```
+
+- [ ] **Step 6: Run the linter and confirm it still passes**
+
+Run:
+```bash
+cd hub_api && python3 -m ruff check . && python3 -m ruff format --check .
+```
+Expected: `All checks passed!` and `<N> files already formatted`.
+
+- [ ] **Step 7: Run `mypy --strict` over every M2b module, including the six added by Tasks 44-48**
+
+Run:
+```bash
+cd hub_api && python3 -m mypy --strict \
+  services/bundle_secret_crypto.py services/bundle_manifest_v2.py services/bundle_storage_service.py \
+  services/compiler_job_service.py services/bundle_version_service.py services/bundle_artifact_service.py \
+  services/bundle_activation_service.py services/permission_summary_service.py \
+  services/bundle_approval_service.py services/bundle_db_role_service.py \
+  services/platform_settings_service.py services/tenant_bundle_settings.py \
+  services/custom_platform_service.py services/ingest_source_service.py services/ingest_source_auth.py \
+  services/valkey_admin_client.py services/stream_grant_service.py \
+  services/bundle_trip_reenable_service.py services/bundle_role_cleanup_job.py \
+  services/bundle_feature_gate.py services/bundle_telemetry.py services/rbac_matrix.py \
+  services/workstream_service.py services/usage_aggregator_service.py services/usage_query_service.py \
+  blueprints/v1/bundle_versions.py blueprints/v1/bundle_artifact_callback.py \
+  blueprints/v1/bundle_approvals.py blueprints/v1/bundle_settings.py \
+  blueprints/v1/custom_platforms.py blueprints/v1/ingest_sources.py \
+  blueprints/v1/bundle_grants.py blueprints/v1/distribution.py blueprints/v1/workstream_usage.py
+```
+Expected: `Success: no issues found in 34 source files`.
+
+- [ ] **Step 8: Run the full M2b suite with the coverage gate**
+
+Run:
+```bash
+cd hub_api && python3 -m pytest tests/ \
+  --cov=services --cov=blueprints --cov-report=term-missing --cov-fail-under=90 -q
+```
+Expected: every test passes and the final line reads `Required test coverage of 90% reached.` — record the reported total-statements number; a run whose denominator is `0 statements` is a failure, not a pass.
+
+- [ ] **Step 9: Run the containerized build**
+
+Run:
+```bash
+docker build -f hub_api/Dockerfile -t waddlebot/hub-api:m2b-local .
+```
+Expected: the build completes and the final stage's `USER` is non-root. Verify:
+```bash
+docker run --rm --entrypoint sh waddlebot/hub-api:m2b-local -c 'id -u'
+```
+Expected: a non-zero uid (never `0`).
+
+- [ ] **Step 10: Run the repo's containerized `make` gates**
+
+Run, from the repository root, in this order, stopping at the first failure:
+```bash
+make lint
+make test-security
+make test
+make pre-commit
+```
+Expected:
+- `make lint` → `scripts/lint.sh` completes with exit `0` and prints the number of files it checked.
+- `make test-security` → `scripts/security-scan.sh` completes with exit `0` and reports, per scanner, how many files/packages were examined. A scanner reporting zero examined items is a FAILURE — fix the path, do not accept the clean result (`critical-rules.md` Verification Integrity).
+- `make test` → `tests/k8s/alpha/05-unit-tests.sh` runs every suite and prints a non-zero `TOTAL_PASSED`.
+- `make pre-commit` → `=== Pre-commit complete ===` after lint, security and test all pass.
+
+If `make lint` or `make test-security` completes suspiciously fast or reports no denominator, audit the target once by making it fail on purpose (append an unused import, re-run, confirm a non-zero exit, revert) before treating it as green.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add hub_api/tests/test_openapi_m2b_paths.py hub_api/tests/test_m2b_logging_conformance.py \
+        hub_api/pyproject.toml
+git commit -m "$(cat <<'EOF'
+test(hub-api): M2b closing gate, widened for the D30/D31 workstream/usage surface
+
+Extends Task 41's OpenAPI-path and logging-conformance suites to cover
+the six modules and one route Tasks 42-48 added -- blueprints
+registered 8 -> 9, files scanned 29 -> 33. Re-runs mypy --strict,
+the coverage gate, the containerized build and every make gate over
+the now-complete M2b surface.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -13155,16 +15720,25 @@ Run before declaring the plan finished. Findings from the pass that produced thi
 | §9.7.4 upgrade diff, narrowing auto-approve | Task 19 (`classify_diff`) | ✅ |
 | §9.7.5 headless approval fails closed on hash mismatch | Task 19 | ✅ |
 | §10.3/§10.4 generic intake registry + `intake:write` JWT | Tasks 25, 26, 27 | ✅ |
-| Per-source `auth` second factor + origin policy (third spec review) | Tasks 39, 40 | ✅ |
-| §11.10 D28 RBAC matrix, generated grants, live-grants equality CI test (≥8 roles, ≥8 tables) | Tasks 1, 2, 5 | ✅ |
-| §12.3 settings `bundles.allow_prebuilt`, `bundles.egress.allowPrivateHosts`, `allow_wildcard_consumes` | Tasks 23, 24 | ✅ |
+| §4.1.1/§10.1/§10.3 D29 per-source `auth`: HMAC + mandatory second factor for generic webhooks, Twitch/Kick origin policy, secrets never returned, audit on change, published through the config/distribution API | Tasks 39, 40 | ✅ |
+| §11.10 D28 RBAC matrix, generated grants, live-grants equality CI test (≥8 roles, ≥8 tables — widened to 11 tables by Task 42) | Tasks 1, 2, 5, 42 | ✅ |
+| §5.11/§6.11/§15.4 D30 `workstreams` table, 1:1 with `ingest_sources`, backfilled for pre-existing sources, created/disabled going forward | Task 42 (schema+backfill), Task 44 (lifecycle) | ✅ |
+| §5.11/§9.7.1/§10.3 D30 workstream shown on the source config view, the distribution `/sources` feed, and the consent screen | Task 45 | ✅ |
+| §5.9 D30 `routes_to` cross-tenant refusal wired into version approval (422 + audit) | Task 46 | ✅ |
+| §12.3 D30 envelope binding key (`security.envelopeBinding.keySecretRef`) never read, written or provisioned by hub-api | Decision #17 (verified, no task — see Findings #12) | ✅ documented |
+| §5.11 D30 RLS policies on bundle-reachable (`data.tables`) tables | Confirmed out of M2b scope — see Findings #12 | N/A (correctly excluded) |
+| §5.12/§6.12/§11.10.1/§11.10.2 D31 `workstream_usage_hourly`: append-only, `hub_api` SELECT/INSERT only, no `UPDATE`/`DELETE` for anyone | Task 42 | ✅ |
+| §5.12 D31 usage aggregator: own Valkey consumer group on `waddles:usage`, commit-then-XACK, stages remain XADD-only | Task 47 | ✅ |
+| §5.12/§6.12 D31 per-community admin usage view/API, filter coverage (date range, community, workstream, pagination, invalid filters, empty results) | Task 48 | ✅ |
 | §13.5 feature flags | Task 37 | ✅ |
 | §19 Q1 trip re-enable | Task 35, Decision #10 | ✅ |
 | §19 Q3 per-bundle role lifecycle | Tasks 21, 36, Decision #10b | ✅ |
-| Observability: logs + metrics + traces, env-configurable endpoint | Tasks 38, 41 | ✅ |
-| Coverage ≥ 90 %, ruff, mypy --strict, containerized `make` gates | Task 41 | ✅ |
+| Observability: logs + metrics + traces, env-configurable endpoint | Tasks 38, 41, 47 (usage aggregator metrics reuse Task 38's `get_meter()`/`bundle_span`) | ✅ |
+| Coverage ≥ 90 %, ruff, mypy --strict, containerized `make` gates | Task 41 (original 41-task surface), Task 49 (widened for D30/D31) | ✅ |
 
 The one ⚠️ is deliberate and already documented in Task 19's scope note: cross-checking the permission summary against the **component's actual imports** needs M2a's compiler to report an import list on the artifact callback. hub-api derives capabilities from the manifest's declared shape until that field exists; the follow-on is a one-function change in `_derive_capabilities`, not a redesign.
+
+**Name consistency with M2a/M5.** `waddles_publisher` (the trusted publisher role `app_versions` grants privileges to) and the compiler artifact-callback shape are unchanged from Tasks 6-15 and still match the M2a plan's own naming. The `auth` wire shape (Decision #13) and the new `workstreamId` field (Decision #14, Task 45) are both plain camelCase/snake_case siblings published through the same `/api/v1/distribution/sources` endpoint M5 polls — `workstreamId`'s presence is additive to that endpoint's existing shape, so it does not change any field M5 already depended on. The `waddles:usage` entry wire shape (Decision #16, Task 47) is a **new** cross-plan surface with no prior name to match; it is marked **must match** for whichever plan first implements the stage-side `XADD` producer (M3, M4, M5, or a future svc-streaming plan), the same marking convention Decision #13 already established.
 
 ### Placeholder scan
 
@@ -13197,5 +15771,7 @@ Expected: exactly **two** hits, both in Task 38's wiring steps (`...  # the exis
 | 8 | Tasks 1-32 (written before this pass) carried `**Files:**` and `**Interfaces:**` blocks but no `**Depends on:**` line, so a worker picking up a task in isolation had no statement of what must already exist. | Added a `**Depends on:**` line to every one of Tasks 1-32, derived from each task's own `Consumes` list and the migration chain. All 41 tasks now carry one. |
 | 9 | A mid-flight requirement arrived from the user's third spec review — every ingest source needs a caller-auth second factor (generic webhooks) or an origin policy (Twitch/Kick), published to svc_ingest. Nothing in the plan modelled it: `ingest_sources` had only the HMAC secret. | Added Decision #13 (the exact wire shape, marked *must match plan M5*), Task 39 (migration 0022 + `ingest_source_auth.py` + service wiring + the audit row) and Task 40 (publication through `/distribution/sources`, the tenant config view, the consent view, and the auth `PUT`). |
 | 10 | Several tasks' "Expected: `N` passed" lines were miscounted against their own parametrized cases — a worker would have seen a mismatch and assumed a real failure. | Recounted every new task's test list; corrected Tasks 33 (13→14), 36 (9→10), 37 (13→11) and 39 (31→35). |
+| 11 | D30 (workstream identity/end-to-end trace/tenant wall) and D31 (workstream usage metering) arrived from the spec's third user review after this plan's original 41 tasks were written. Nothing in Tasks 1-41 modeled a `workstreams` table, a usage-metering consumer, an admin usage view, or a `routes_to` tenant check — the spec's own M2b milestone row (§16) names all four as this milestone's D30/D31 deliverables, and none existed. | Added Tasks 42-49: migration 0023 + RBAC extension (42), the pydal binder (43), workstream create/disable lifecycle wired into `ingest_source_service` (44), `workstreamId` publication on the config view/distribution feed/consent screen (45), `routes_to` cross-tenant refusal in `approve_version()` (46), the `waddles:usage` aggregator + its CronJob (47), the per-community usage API with full filter coverage (48), and a widened closing gate (49). Decisions #14-#17 record the schema deviations and scope boundaries this required. |
+| 12 | The task brief that triggered this pass asked two open questions to verify, not assume: whether hub-api ever touches the envelope binding key (`security.envelopeBinding.keySecretRef`), and whether RLS policies on bundle-reachable tables belong to this milestone. Neither is mentioned in the spec's own M2b milestone row (§16), and `bundle_db_role_service.py` (Task 20) already only grants table-level privileges, never RLS. | Confirmed both are **not** M2b's job — the binding key is stage-only by spec §5.11/§12.3's explicit wording, and RLS enforcement is the Rust stage side's job per spec §7.4, corroborated by the M2a plan's own PA4 scope note ("RLS... M3/M4/M5 scope"). Recorded as Decision #17 and in the spec-coverage table above rather than fabricating a task for scope this milestone does not own. |
 
 ---
