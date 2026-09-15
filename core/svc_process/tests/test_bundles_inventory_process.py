@@ -8,31 +8,51 @@ from typing import Any
 import pytest
 from flask_core import PlatformEvent, bundle_context, reset_bundle_dal_for_tests, set_bundle_dal
 from penguin_dal import AsyncDB
+from sqlalchemy import event
 from sqlalchemy import text as sa_text
 
 from bundles.inventory_process import transform
 
 
-def _translate_sql_for_sqlite(sql: str) -> str:
-    """Translate PostgreSQL SQL to SQLite."""
-    # Replace CAST(:metadata AS jsonb) with :metadata
-    sqlite_sql = sql.replace("CAST(:metadata AS jsonb)", ":metadata")
-
-    # Replace NOW() with a timestamp literal
-    timestamp = datetime.now(UTC).isoformat()
-    sqlite_sql = sqlite_sql.replace("NOW()", f"'{timestamp}'")
-
-    return sqlite_sql
-
-
 @pytest.fixture
 async def dal():
-    """In-memory penguin_dal.AsyncDB with a minimal `inventory_items` table."""
-    from sqlalchemy import text
+    """In-memory penguin_dal.AsyncDB with a minimal `inventory_items` table.
 
+    Registers a SQLite `NOW()` function and wraps raw_sql_rows/raw_sql_write to
+    translate `CAST(:metadata AS jsonb)` to plain `:metadata` so the bundle's
+    Postgres-flavored SQL can execute against SQLite. Happy-path tests use these
+    real, wrapped helpers. DB-failure-injection tests can monkeypatch further.
+    """
     from bundles import inventory_process
 
     db = AsyncDB("sqlite://", pool_size=1, echo=False)
+
+    @event.listens_for(db.engine.sync_engine, "connect")
+    def _register_now(dbapi_conn, connection_record):
+        """Register SQLite NOW() function to return current UTC timestamp."""
+        dbapi_conn.create_function("NOW", 0, lambda: datetime.now(UTC).isoformat())
+
+    # Wrap raw_sql_rows and raw_sql_write to translate SQL for SQLite compatibility
+    original_raw_sql_rows = inventory_process.raw_sql_rows
+    original_raw_sql_write = inventory_process.raw_sql_write
+
+    def _translate_sql(sql: str) -> str:
+        """Translate PostgreSQL-specific SQL to SQLite-compatible SQL."""
+        return sql.replace("CAST(:metadata AS jsonb)", ":metadata")
+
+    async def wrapped_raw_sql_rows(dal_param: Any, sql: str, params: Any = None) -> Any:
+        """Wrap raw_sql_rows to translate SQL before execution."""
+        translated_sql = _translate_sql(sql)
+        return await original_raw_sql_rows(dal_param, translated_sql, params)
+
+    async def wrapped_raw_sql_write(dal_param: Any, sql: str, params: Any = None) -> Any:
+        """Wrap raw_sql_write to translate SQL before execution."""
+        translated_sql = _translate_sql(sql)
+        return await original_raw_sql_write(dal_param, translated_sql, params)
+
+    inventory_process.raw_sql_rows = wrapped_raw_sql_rows
+    inventory_process.raw_sql_write = wrapped_raw_sql_write
+
     async with db.engine.begin() as conn:
         await conn.execute(
             sa_text(
@@ -43,35 +63,6 @@ async def dal():
             )
         )
     await db.reflect()
-
-    # Monkey-patch raw_sql_rows and raw_sql_write to handle SQLite
-    original_raw_sql_rows = inventory_process.raw_sql_rows
-    original_raw_sql_write = inventory_process.raw_sql_write
-
-    async def patched_raw_sql_rows(dal_param: Any, sql: str, params: Any = None) -> Any:
-        from penguin_dal import Row, Rows
-
-        sqlite_sql = _translate_sql_for_sqlite(sql)
-        async with dal_param.engine.connect() as conn:
-            result = await conn.execute(text(sqlite_sql), params or {})
-            rows = [Row(dict(mapping)) for mapping in result.mappings().all()]
-            return Rows(rows)
-
-    async def patched_raw_sql_write(dal_param: Any, sql: str, params: Any = None) -> Any:
-        from penguin_dal import Row, Rows
-
-        sqlite_sql = _translate_sql_for_sqlite(sql)
-        async with dal_param.engine.begin() as conn:
-            result = await conn.execute(text(sqlite_sql), params or {})
-            # For INSERT/UPDATE/DELETE without RETURNING, result.returns_rows will be False
-            if result.returns_rows:
-                rows = [Row(dict(mapping)) for mapping in result.mappings().all()]
-                return Rows(rows)
-            else:
-                return Rows([])
-
-    inventory_process.raw_sql_rows = patched_raw_sql_rows
-    inventory_process.raw_sql_write = patched_raw_sql_write
 
     set_bundle_dal(db)
     yield db
