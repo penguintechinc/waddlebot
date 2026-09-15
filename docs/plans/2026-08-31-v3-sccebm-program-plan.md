@@ -85,7 +85,7 @@ hub-api (not a container).
 | `svc-presentation` | core overlays (full_screen/media/crawler) + music station + bundles' `presentation` component | RustLang |
 | `svc-streaming` | RTC + HLS/RTMP/AV1 record/forward/transcode (absorbs svc-rtc + video_proxy) | RustLang |
 | `hub-api` | admin/tenancy control plane + **marketplace module** + gRPC + REST + **MCP** | Python/Quart |
-| `hub-webui` | SPA assets, static-serve + `/api` proxy for ReactJS webui | Python/Quart + ReactJS |
+| `hub-webui` | SPA assets, static-serve + `/api` proxy for ReactJS webui | ExpressScript + ReactJS |
 
 Container topology is a **packaging** decision, decoupled from the logical Core→Module→Feature→App
 model (`2026-08-26-v3-scbm-apps-design.md:486-490`). Modules cut across stages vertically; the

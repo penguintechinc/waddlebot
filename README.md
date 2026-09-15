@@ -41,7 +41,7 @@ for exactly what's real vs. scaffolded.
 
   svc-core   identity · security · credentials · entitlement (RustLang, gRPC :50203, every stage depends on it)
   hub-api    admin + tenancy + marketplace + billing + gRPC/REST/MCP  (Python/Quart control plane)
-  hub-webui  Python/Quart backend serving the ReactJS webui SPA
+  hub-webui  ExpressScript + ReactJS (static-serve/proxy)
 ```
 
 | Container | Carries | Language | Port |
@@ -51,7 +51,7 @@ for exactly what's real vs. scaffolded.
 | `svc-action` | Outbound actions/interactions/3rd-party calls; bundles' `action` component + target adapters | RustLang | 8202 |
 | `svc-core` | Identity, security, credentials, entitlement — called synchronously by every other stage | RustLang, gRPC | 8203 / grpc 50203 |
 | `hub-api` | Admin, tenancy, marketplace, billing, AI routing control plane + gRPC + REST + MCP | Python/Quart | 8204 / grpc 50204 |
-| `hub-webui` | SPA assets, static-serve + `/api` proxy for the ReactJS webui | Python/Quart + ReactJS | 8205 |
+| `hub-webui` | SPA assets, static-serve + `/api` proxy for the ReactJS webui | ExpressScript + ReactJS | 8205 |
 | `svc-presentation` | Core overlays (`full_screen`/`media`/`crawler`) + Music Station + bundles' `presentation` component | RustLang | 8207 |
 | `svc-streaming` | RTC + HLS/RTMP/AV1 record/forward/transcode control plane | RustLang | 8208 / grpc 50208 |
 
@@ -250,8 +250,8 @@ helm install waddlebot ./k8s/helm/waddlebot -n waddlebot --create-namespace \
 ## Technology Stack
 
 **Services (`svc-*`):** RustLang
-**Control Plane (`hub-api`, `hub-webui`):** Python 3.13, Quart (async)
-**Frontend (`webui`):** ReactJS (React 18), Vite, TailwindCSS v4
+**Control Plane (`hub-api`):** Python 3.13, Quart (async)
+**Web UI (`hub-webui`):** ExpressScript + ReactJS (React 18), Vite, TailwindCSS v4
 **Infrastructure:** Docker, Kubernetes (Helm v3), GitHub Actions
 **Data & Caching:** PostgreSQL, Valkey, MinIO (S3), Qdrant (vectors)
 

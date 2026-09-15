@@ -67,7 +67,7 @@ Full deployment and first-run walkthrough: [Quick Start](QUICKSTART.md).
 
   svc-core   identity · security · credentials · entitlement (RustLang, gRPC, every stage depends on it)
   hub-api    admin + tenancy + marketplace + billing + gRPC/REST/MCP (Python/Quart control plane)
-  hub-webui  Python/Quart backend serving the ReactJS webui
+  hub-webui  ExpressScript + ReactJS (static-serve/proxy)
 ```
 
 Messages crossing a stage boundary are typed `flask_core.stream_pipeline` dataclasses
@@ -85,7 +85,7 @@ Full detail, per-container table, typed stage contract, and current build status
 | `svc-presentation` | Overlays + Music Station for OBS browser sources | RustLang |
 | `svc-streaming` | RTC + broadcast media control plane | RustLang |
 | `hub-api` | Admin, tenancy, marketplace, billing, AI routing, MCP | Python/Quart |
-| `hub-webui` | Community/admin web portal backend & static server | Python/Quart + ReactJS |
+| `hub-webui` | Community/admin web portal static-serve & proxy | ExpressScript + ReactJS |
 
 ## Why Waddles?
 
@@ -96,7 +96,7 @@ Full detail, per-container table, typed stage contract, and current build status
 
 **For developers**
 - Author an App Bundle against a documented per-stage contract instead of a monolith
-- RustLang across `svc-*` containers; Python/Quart for `hub-api` and `hub-webui` serving the ReactJS webui
+- RustLang across `svc-*` containers; Python/Quart for `hub-api`; ExpressScript + ReactJS for `hub-webui`
 - OpenAPI-generated REST, gRPC, and MCP surfaces on `hub-api`
 
 **For streamers**

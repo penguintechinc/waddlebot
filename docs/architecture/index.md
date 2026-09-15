@@ -30,7 +30,7 @@ lifecycle and coexistence model.
 | `svc-action` | Outbound actions + standardized target adapters | RustLang |
 | `svc-core` | Identity, security, credentials, entitlement (gRPC) | RustLang |
 | `hub-api` | Admin, tenancy, marketplace, billing, MCP | Python/Quart |
-| `hub-webui` | SPA assets, static-serve + `/api` proxy for ReactJS webui | Python/Quart + ReactJS |
+| `hub-webui` | SPA assets, static-serve + `/api` proxy for ReactJS webui | ExpressScript + ReactJS |
 | `svc-presentation` | Overlays + Music Station | RustLang |
 | `svc-streaming` | RTC + broadcast media control plane | RustLang |
 

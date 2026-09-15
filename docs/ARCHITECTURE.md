@@ -30,7 +30,7 @@ hub-api**, not its own container.
 | `svc-action` | Outbound actions/interactions/3rd-party calls; bundles' `action` component + target adapters | RustLang | 8202 | — |
 | `svc-core` | Identity, security, credentials, entitlement — synchronous gRPC, every stage depends on it | RustLang | 8203 | 50203 |
 | `hub-api` | Admin, tenancy, marketplace, billing, AI routing, MCP — control plane | Python/Quart | 8204 | 50204 |
-| `hub-webui` | SPA assets, static-serve + `/api` proxy for the ReactJS webui | Python/Quart + ReactJS | 8205 | — |
+| `hub-webui` | SPA assets, static-serve + `/api` proxy for the ReactJS webui | ExpressScript + ReactJS | 8205 | — |
 | `svc-presentation` | Core overlays (`full_screen`/`media`/`crawler`) + Music Station + bundles' `presentation` component | RustLang | 8207 | — |
 | `svc-streaming` | RTC + HLS/RTMP/AV1 record/forward/transcode control plane | RustLang | 8208 | 50208 |
 
@@ -255,8 +255,8 @@ Read this before assuming a container is production-ready:
 ## Technology stack
 
 **Services (`svc-*`):** RustLang
-**Control Plane (`hub-api`, `hub-webui`):** Python 3.13, Quart (async)
-**Frontend (`webui`):** ReactJS (React 18), Vite, TailwindCSS v4
+**Control Plane (`hub-api`):** Python 3.13, Quart (async)
+**Web UI (`hub-webui`):** ExpressScript + ReactJS (React 18), Vite, TailwindCSS v4
 **Infrastructure:** Docker, Kubernetes (Helm v3), GitHub Actions
 **Data & Caching:** PostgreSQL, Valkey, MinIO (S3), Qdrant (vectors)
 

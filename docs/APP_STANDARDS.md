@@ -21,7 +21,7 @@ The v2.2.x release consolidated 51 containers into 22 services by grouping relat
 
 **Admin Services** (separate, 2 services):
 - `hub-api` — Admin/management API (Python/Quart)
-- `hub-webui` — Admin portal frontend (Python/Quart + ReactJS)
+- `hub-webui` — Admin portal frontend (ExpressScript + ReactJS)
 
 **Infrastructure** (separate):
 - `migrations` — Database schema management container
