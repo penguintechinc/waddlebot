@@ -2705,8 +2705,10 @@ EOF
 - Test: `hub_api/tests/test_bundle_storage_service.py`
 
 **Interfaces:**
-- Produces: `services.bundle_storage_service.stage_upload(app_id: str, version: str, *, manifest_bytes: bytes, source_bytes: bytes | None, component_bytes: bytes | None) -> StagedUpload` (dataclass: `manifest_key, source_key, component_key`); `fetch_object_sha256(key: str) -> str` (returns `"sha256:" + 64 hex`, used by Task 13's digest cross-check); `BUCKET_NAME` env-driven constant function `bucket_name() -> str`.
+- Produces: `services.bundle_storage_service.stage_upload(app_id: str, version: str, *, manifest_bytes: bytes, source_bytes: bytes | None, component_bytes: bytes | None) -> StagedUpload` (dataclass: `manifest_key, source_key, component_key`); `fetch_object_sha256(key: str) -> str` (returns `"sha256:" + 64 hex`, used by Task 13's digest cross-check); `fetch_sidecar_json(key: str) -> dict[str, Any]` (downloads and `json.loads`s the compiler's signed 12-field sidecar object at `key`, spec Sec9.4 — Task 13's fallback-insert path reads `built_at`/`scan_status`/`size_bytes` off the returned dict; parse-only, no Ed25519 signature check — hub-api does not hold `BUNDLE_SIGNING_PUBLIC_KEY`, and the property this plan's own security boundary actually depends on, the `artifact_digest`, is independently re-derived by `fetch_object_sha256` against the component bytes themselves, never trusted from the sidecar); `BUCKET_NAME` env-driven constant function `bucket_name() -> str`.
 - Consumes: nothing new (`boto3`, already a pinned dependency via `storage_service.py`'s precedent).
+
+**Seam ruling (pre-flight M2a scan, finding #1):** M2a's compiler notification callback carries only `component_key`/`sidecar_key` plus the digest fields — it does not repeat `built_at`/`scan_status`/`size_bytes` in the callback body (those live in the sidecar object itself, spec Sec9.4's 12-field schema). `fetch_sidecar_json` is the one new primitive Task 13 needs to read them for its fallback-insert path without inventing a second, wire-level copy of fields the sidecar already carries.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2771,6 +2773,25 @@ async def test_fetch_object_sha256_hashes_the_downloaded_bytes() -> None:
         digest = await fetch_object_sha256("bundles/waddles.socials.music.default/3.0.0/deadbeef.wasm")
     assert digest == expected
     mock_client.get_object.assert_called_once()
+
+
+async def test_fetch_sidecar_json_parses_the_downloaded_object() -> None:
+    from services.bundle_storage_service import fetch_sidecar_json
+
+    sidecar_bytes = (
+        b'{"schema_version": 1, "app_id": "waddles.socials.music.default", '
+        b'"version": "3.0.1", "digest": "sha256:' + b"a" * 64 + b'", "size_bytes": 2048, '
+        b'"language": "python", "artifact_kind": "source", "scan_status": "scanned", '
+        b'"wit_world": "waddle:bundle/stage@1.0.0", "built_at": "2026-09-14T12:00:00.000Z", '
+        b'"builder": "bundle-compiler@1.0.0", "signature": "ZmFrZQ=="}'
+    )
+    mock_client = MagicMock()
+    mock_client.get_object.return_value = {"Body": MagicMock(read=MagicMock(return_value=sidecar_bytes))}
+    with patch("services.bundle_storage_service._client", return_value=mock_client):
+        sidecar = await fetch_sidecar_json("bundles/waddles.socials.music.default/3.0.1/deadbeef.json")
+    assert sidecar["built_at"] == "2026-09-14T12:00:00.000Z"
+    assert sidecar["scan_status"] == "scanned"
+    assert sidecar["size_bytes"] == 2048
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -2806,7 +2827,7 @@ import asyncio
 import hashlib
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import boto3
 from botocore.client import Config as BotoConfig
@@ -2885,12 +2906,36 @@ async def fetch_object_sha256(key: str) -> str:
         return "sha256:" + hashlib.sha256(body).hexdigest()
 
     return await asyncio.to_thread(_get_and_hash)
+
+
+async def fetch_sidecar_json(key: str) -> dict[str, Any]:
+    """Download and parse the compiler's signed 12-field sidecar object at `key` (spec Sec9.4).
+
+    Parse-only -- hub-api does not hold `BUNDLE_SIGNING_PUBLIC_KEY` (spec
+    Sec12.1: the public half is a data-plane-pod secret), so no Ed25519
+    signature check happens here. The one property this plan's own
+    security boundary depends on -- the artifact's digest -- is never
+    read from this object; it is independently re-derived by
+    `fetch_object_sha256` against the component bytes themselves
+    (Task 13). This helper exists only to recover the sidecar's
+    build-time metadata (`built_at`, `scan_status`, `size_bytes`) for
+    Task 13's fallback-insert path, since M2a's actual callback body
+    does not repeat them (pre-flight M2a seam scan, finding #1).
+    """
+    import json
+
+    def _get_and_parse() -> dict[str, Any]:
+        response = _client().get_object(Bucket=bucket_name(), Key=key)
+        body = response["Body"].read()
+        return cast(dict[str, Any], json.loads(body))
+
+    return await asyncio.to_thread(_get_and_parse)
 ```
 
 - [ ] **Step 4: Run to verify all pass**
 
 Run: `cd hub_api && python3 -m pytest tests/test_bundle_storage_service.py -v`
-Expected: `3 passed`
+Expected: `4 passed`
 
 - [ ] **Step 5: Commit**
 
@@ -2903,6 +2948,9 @@ Same boto3/asyncio.to_thread pattern as storage_service.py, a
 dedicated bucket/credential set. fetch_object_sha256() is the
 primitive Task 13's artifact-callback cross-check uses: hub-api
 re-hashes the published object rather than trusting a claimed digest.
+fetch_sidecar_json() recovers the sidecar's build-time metadata for
+Task 13's fallback-insert path (pre-flight M2a seam scan, finding #1) --
+parse-only, no signature check; the digest itself is never read from it.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
@@ -2921,9 +2969,13 @@ EOF
 - Test: `hub_api/tests/test_compiler_job_service.py`
 
 **Interfaces:**
-- Produces: `services.compiler_job_service.build_job_spec(...) -> dict[str, Any]` (a plain dict shaped like the K8s Job manifest, easy to assert against without a live cluster), `create_compiler_job(batch_api: Any, *, namespace: str, app_id: str, version: str, artifact_kind: str, language: str, staged: StagedUpload, validation_context: dict[str, Any], callback_token: str) -> str` (returns the created Job's `metadata.name`).
+- Produces: `services.compiler_job_service.build_job_spec(...) -> dict[str, Any]` (a plain dict shaped like the K8s Job manifest, easy to assert against without a live cluster), `create_compiler_job(batch_api: Any, core_api: Any, *, namespace: str, app_id: str, version: str, artifact_kind: str, language: str, staged: StagedUpload, manifest_bytes: bytes, source_bytes: bytes | None, component_bytes: bytes | None, validation_context: dict[str, Any], callback_token: str) -> str` (returns the created Job's `metadata.name`).
 - Consumes: `services.bundle_storage_service.StagedUpload` (Task 8).
 - **Must match M2a** — the compiler binary reads exactly the env vars this task sets. The `VALIDATION_CONTEXT_JSON` env var's shape (below) is the boundary contract between M2b (hub-api, this plan) and M2a (the compiler): `{"known_custom_platforms": list[str], "allow_wildcard_consumes": bool, "allow_prebuilt": bool, "egress_denylist": list[str]}`. If M2a's plan defines a different shape, reconcile there — this plan's version is the one hub-api ships until that reconciliation happens.
+
+**Seam ruling (pre-flight M2a scan, finding #3, binding — supersedes this task's earlier single-container draft):** spec D27/§9.2 (binding; §16 table line 245: "hub-api, which creates the Job") requires the compiler Job to split into an untrusted `build` initContainer (zero credentials, zero network) and a trusted `publisher` container (bucket/DB/signing credentials, network to bucket + hub-api callback only), sharing one `emptyDir`. The single-container draft violated this — every env var, including the machine JWT `callback_token`, would have landed on the same container that runs bundle-supplied build code. `build_job_spec` now emits both containers with strictly disjoint env: `build` gets only `APP_ID`/`VERSION`/`ARTIFACT_KIND`/`LANGUAGE` plus a read-only `bundle-source` volume mount (see below) — no bucket, DB, signing or callback credential of any kind; `publisher` gets everything credential-bearing. M2a's own plan (`docs/plan-m2a-compiler-sdks` Task 21) drafted a ConfigMap-templated Job body for the same purpose — flagged to that plan's coordinator as now redundant (this task builds the Job directly, self-sufficient, never reading that ConfigMap); M2a's Task 21 NetworkPolicy portion (label-selector based, no ConfigMap dependency) is unaffected and still applies.
+
+**D10's "zero network" for `build` also means it cannot pull the staged manifest/source bytes over any wire of its own** — those bytes must already be sitting in the shared volume before the container starts. `create_compiler_job` solves this by creating a per-Job, read-only Kubernetes Secret (`{job_name}-source`, keys `manifest.yaml` + `source.tar.zst`/`component.wasm`) directly via the Kubernetes API immediately before creating the Job, then setting an `ownerReference` from that Secret to the Job so Kubernetes' cascading GC removes it whenever the Job is removed (`ttlSecondsAfterFinished` included) — `build` mounts it read-only and makes no network call to populate it. This is bounded by the etcd object-size limit (~1 MiB per Secret): large bundle sources are a known, explicitly out-of-scope-here follow-up (flagged in the ledger), not silently mishandled — a bundle whose staged source exceeds the limit fails the Secret creation with a clear `413`-mapped error, never a silent truncation.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2954,6 +3006,14 @@ _VALIDATION_CONTEXT = {
 }
 
 
+def _build_container(spec: dict) -> dict:
+    return next(c for c in spec["spec"]["template"]["spec"]["initContainers"] if c["name"] == "build")
+
+
+def _publisher_container(spec: dict) -> dict:
+    return next(c for c in spec["spec"]["template"]["spec"]["containers"] if c["name"] == "publisher")
+
+
 def test_build_job_spec_sets_gvisor_runtime_class(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SANDBOX_RUNTIME_CLASS_NAME", "runsc")
     spec = build_job_spec(
@@ -2968,32 +3028,50 @@ def test_build_job_spec_network_policy_relevant_fields() -> None:
         app_id="waddles.socials.music.default", version="3.0.0", artifact_kind="source",
         language="python", staged=_STAGED, validation_context=_VALIDATION_CONTEXT, callback_token="tok",
     )
-    container = spec["spec"]["template"]["spec"]["containers"][0]
-    security_context = container["securityContext"]
-    assert security_context["allowPrivilegeEscalation"] is False
-    assert security_context["readOnlyRootFilesystem"] is True
-    assert security_context["capabilities"]["drop"] == ["ALL"]
+    for container in (_build_container(spec), _publisher_container(spec)):
+        security_context = container["securityContext"]
+        assert security_context["allowPrivilegeEscalation"] is False
+        assert security_context["readOnlyRootFilesystem"] is True
+        assert security_context["capabilities"]["drop"] == ["ALL"]
     assert spec["spec"]["backoffLimit"] == 0
     assert spec["spec"]["activeDeadlineSeconds"] == 900
 
 
-def test_build_job_spec_env_vars_carry_the_validation_context() -> None:
+def test_build_container_carries_no_credential_or_callback_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D27: the untrusted build initContainer holds zero credentials -- the whole point of the split."""
     spec = build_job_spec(
         app_id="waddles.socials.music.default", version="3.0.0", artifact_kind="source",
         language="python", staged=_STAGED, validation_context=_VALIDATION_CONTEXT, callback_token="tok",
     )
-    container = spec["spec"]["template"]["spec"]["containers"][0]
-    env = {e["name"]: e["value"] for e in container["env"]}
-    assert env["APP_ID"] == "waddles.socials.music.default"
-    assert env["VERSION"] == "3.0.0"
-    assert env["ARTIFACT_KIND"] == "source"
-    assert env["LANGUAGE"] == "python"
-    assert env["MANIFEST_KEY"] == _STAGED.manifest_key
-    assert env["SOURCE_KEY"] == _STAGED.source_key
-    assert "COMPONENT_KEY" not in env
-    parsed_context = json.loads(env["VALIDATION_CONTEXT_JSON"])
+    build_env_names = {e["name"] for e in _build_container(spec)["env"]}
+    forbidden = {
+        "HUB_API_CALLBACK_TOKEN", "HUB_API_CALLBACK_URL", "PUBLISHER_DATABASE_URL",
+        "BUNDLE_BUCKET_ACCESS_KEY_ID", "BUNDLE_BUCKET_SECRET_ACCESS_KEY",
+        "BUNDLE_SIGNING_PRIVATE_KEY_FILE", "VALIDATION_CONTEXT_JSON",
+    }
+    assert build_env_names.isdisjoint(forbidden)
+    assert build_env_names == {"APP_ID", "VERSION", "ARTIFACT_KIND", "LANGUAGE"}
+    build_volume_mounts = {m["name"] for m in _build_container(spec)["volumeMounts"]}
+    assert build_volume_mounts == {"work", "bundle-source"}
+    assert next(m for m in _build_container(spec)["volumeMounts"] if m["name"] == "bundle-source")["readOnly"] is True
+
+
+def test_publisher_container_carries_every_credential_env_var() -> None:
+    spec = build_job_spec(
+        app_id="waddles.socials.music.default", version="3.0.0", artifact_kind="source",
+        language="python", staged=_STAGED, validation_context=_VALIDATION_CONTEXT, callback_token="tok",
+    )
+    container = _publisher_container(spec)
+    env_by_name = {e["name"]: e for e in container["env"]}
+    assert env_by_name["HUB_API_CALLBACK_TOKEN"]["value"] == "tok"  # nosec B105 -- test fixture value, not a real secret
+    assert env_by_name["BUNDLE_BUCKET_ACCESS_KEY_ID"]["valueFrom"]["secretKeyRef"]["key"] == "accessKeyId"
+    assert env_by_name["BUNDLE_BUCKET_SECRET_ACCESS_KEY"]["valueFrom"]["secretKeyRef"]["key"] == "secretAccessKey"
+    assert env_by_name["PUBLISHER_DATABASE_URL"]["valueFrom"]["secretKeyRef"]["key"] == "databaseUrl"
+    assert env_by_name["BUNDLE_SIGNING_PRIVATE_KEY_FILE"]["value"] == "/etc/waddles/signing/privateKey"
+    parsed_context = json.loads(env_by_name["VALIDATION_CONTEXT_JSON"]["value"])
     assert parsed_context == _VALIDATION_CONTEXT
-    assert env["HUB_API_CALLBACK_TOKEN"] == "tok"  # nosec B105 -- test fixture value, not a real secret
+    signing_mount = next(m for m in container["volumeMounts"] if m["name"] == "signing-key")
+    assert signing_mount["readOnly"] is True
 
 
 def test_build_job_spec_names_the_job_deterministically() -> None:
@@ -3006,44 +3084,62 @@ def test_build_job_spec_names_the_job_deterministically() -> None:
     assert len(name) <= 63  # K8s object-name limit
 
 
-async def test_create_compiler_job_calls_batch_api_and_returns_job_name() -> None:
+async def test_create_compiler_job_creates_source_secret_then_job_then_owns_it() -> None:
     mock_batch_api = MagicMock()
     mock_batch_api.create_namespaced_job.return_value = MagicMock(
-        metadata=MagicMock(name="bundle-compile-abc123")
+        metadata=MagicMock(name="bundle-compile-abc123", uid="job-uid-1")
     )
+    mock_core_api = MagicMock()
     job_name = await create_compiler_job(
-        mock_batch_api, namespace="waddles", app_id="waddles.socials.music.default",
-        version="3.0.0", artifact_kind="source", language="python",
-        staged=_STAGED, validation_context=_VALIDATION_CONTEXT, callback_token="tok",
+        mock_batch_api, mock_core_api, namespace="waddles", app_id="waddles.socials.music.default",
+        version="3.0.0", artifact_kind="source", language="python", staged=_STAGED,
+        manifest_bytes=b"schema_version: 2\n", source_bytes=b"fake-tarball-bytes", component_bytes=None,
+        validation_context=_VALIDATION_CONTEXT, callback_token="tok",
     )
     assert job_name == "bundle-compile-abc123"
+    mock_core_api.create_namespaced_secret.assert_called_once()
+    secret_body = mock_core_api.create_namespaced_secret.call_args.kwargs["body"]
+    assert secret_body["metadata"]["name"] == "bundle-compile-abc123-source"
+    assert "manifest.yaml" in secret_body["data"]
+    assert "source.tar.zst" in secret_body["data"]
     mock_batch_api.create_namespaced_job.assert_called_once()
     assert mock_batch_api.create_namespaced_job.call_args.kwargs["namespace"] == "waddles"
+    mock_core_api.patch_namespaced_secret.assert_called_once()
+    owner_refs = mock_core_api.patch_namespaced_secret.call_args.kwargs["body"]["metadata"]["ownerReferences"]
+    assert owner_refs[0]["uid"] == "job-uid-1"
 ```
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `cd hub_api && python3 -m pytest tests/test_compiler_job_service.py -v`
-Expected: `ModuleNotFoundError: No module named 'services.compiler_job_service'`
+Expected: `ModuleNotFoundError: No module named 'services.compiler_job_service'` (7 test functions collected once the module exists)
 
 - [ ] **Step 3: Write the implementation**
 
 ```python
 # hub_api/services/compiler_job_service.py
-"""Build and launch the bundle-compiler Kubernetes Job (spec Sec4.6, Sec9.2).
+"""Build and launch the bundle-compiler Kubernetes Job (spec Sec4.6, Sec9.2, D27).
 
-One Job per uploaded version, gVisor-sandboxed, network-restricted to
-the bucket and this callback (D10) -- the NetworkPolicy itself is a
-chart concern (Task 12), this module only builds the Job's pod spec so
-the two agree on image/env/security context.
+One Job per uploaded version, two containers sharing one `emptyDir`
+with sharply different trust (D27, pre-flight M2a seam scan finding
+#3): an untrusted `build` initContainer (gVisor, zero credentials,
+zero network -- the whole reason it gets neither a bucket key, a DB
+URL, the signing key, nor the hub-api callback token) and a trusted
+`publisher` container (default runtime, holds every credential, the
+only one that ever talks to the bucket/Postgres/hub-api). The digest
+is measured in `publisher`, never in the container that ran
+bundle-supplied build code (D27's whole point). The NetworkPolicy
+itself is a chart concern (Task 12 / M2a Task 21's NetworkPolicy
+template); this module only builds the pod spec so the two agree on
+image/env/security context.
 
-**Must match M2a**: the compiler binary reads exactly the env vars this
-module sets, including `VALIDATION_CONTEXT_JSON`'s shape -- the
+**Must match M2a**: the compiler binary reads exactly the env vars
+this module sets, including `VALIDATION_CONTEXT_JSON`'s shape -- the
 snapshot of tenant-dependent validation state (registered custom
 platforms, the two boolean settings, the egress denylist) the Job has
-no other way to see, since its own NetworkPolicy denies it a live query
-back to hub-api's DB (D10: "no network except the bucket and the
-hub-api callback").
+no other way to see, since `build`'s NetworkPolicy denies it a live
+query back to hub-api's DB (D10: "no network except the bucket and the
+hub-api callback" -- that network belongs to `publisher` only).
 """
 
 from __future__ import annotations
@@ -3073,7 +3169,14 @@ def build_job_spec(
     validation_context: dict[str, Any],
     callback_token: str,
 ) -> dict[str, Any]:
-    """Build the plain-dict Job manifest `create_namespaced_job` sends as `body=`."""
+    """Build the plain-dict Job manifest `create_namespaced_job` sends as `body=`.
+
+    `staged` is retained on the signature for the manifest/source-key
+    metadata the `build` container's args reference on the shared
+    `/work` mount name, but the actual staged bytes reach `build`
+    through the `bundle-source` Secret volume `create_compiler_job`
+    creates immediately before this Job -- never a network fetch.
+    """
     image = os.environ.get(
         "BUNDLE_COMPILER_IMAGE", "ghcr.io/penguintechinc/waddles/bundle-compiler:latest"
     )
@@ -3081,24 +3184,52 @@ def build_job_spec(
     hub_api_callback_url = os.environ.get(
         "HUB_API_CALLBACK_URL", "https://hub-api.waddles.svc.cluster.local:8204"
     )
+    bucket_secret = os.environ.get("BUNDLE_BUCKET_EXISTING_SECRET", "waddles-bundle-bucket")
+    signing_secret = os.environ.get("BUNDLE_SIGNING_SECRET", "waddles-bundle-signing")
+    publisher_db_secret = os.environ.get("PUBLISHER_DATABASE_SECRET", "waddles-publisher-db")
 
-    env = [
+    name = _job_name(app_id, version)
+    source_secret_name = f"{name}-source"
+
+    build_env = [
         {"name": "APP_ID", "value": app_id},
         {"name": "VERSION", "value": version},
         {"name": "ARTIFACT_KIND", "value": artifact_kind},
         {"name": "LANGUAGE", "value": language},
-        {"name": "MANIFEST_KEY", "value": staged.manifest_key},
+    ]
+    # D27: build carries no bucket/DB/signing/callback credential of any
+    # kind -- only the metadata it needs to select a build recipe. The
+    # staged manifest/source bytes arrive via the bundle-source Secret
+    # volume mount below, never a key it fetches itself.
+
+    publisher_env = [
+        {"name": "APP_ID", "value": app_id},
+        {"name": "VERSION", "value": version},
+        {"name": "ARTIFACT_KIND", "value": artifact_kind},
+        {"name": "LANGUAGE", "value": language},
         {"name": "BUCKET_NAME", "value": bucket_name()},
+        {
+            "name": "BUNDLE_BUCKET_ENDPOINT",
+            "value": os.environ.get("BUNDLE_BUCKET_ENDPOINT", "http://minio.waddles.svc.cluster.local:9000"),
+        },
+        {
+            "name": "BUNDLE_BUCKET_ACCESS_KEY_ID",
+            "valueFrom": {"secretKeyRef": {"name": bucket_secret, "key": "accessKeyId"}},
+        },
+        {
+            "name": "BUNDLE_BUCKET_SECRET_ACCESS_KEY",
+            "valueFrom": {"secretKeyRef": {"name": bucket_secret, "key": "secretAccessKey"}},
+        },
+        {
+            "name": "PUBLISHER_DATABASE_URL",
+            "valueFrom": {"secretKeyRef": {"name": publisher_db_secret, "key": "databaseUrl"}},
+        },
         {"name": "HUB_API_CALLBACK_URL", "value": hub_api_callback_url},
         {"name": "HUB_API_CALLBACK_TOKEN", "value": callback_token},
+        {"name": "BUNDLE_SIGNING_PRIVATE_KEY_FILE", "value": "/etc/waddles/signing/privateKey"},
         {"name": "VALIDATION_CONTEXT_JSON", "value": json.dumps(validation_context, sort_keys=True)},
     ]
-    if staged.source_key is not None:
-        env.append({"name": "SOURCE_KEY", "value": staged.source_key})
-    if staged.component_key is not None:
-        env.append({"name": "COMPONENT_KEY", "value": staged.component_key})
 
-    name = _job_name(app_id, version)
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -3121,19 +3252,49 @@ def build_job_spec(
                         "fsGroup": 10001,
                         "seccompProfile": {"type": "RuntimeDefault"},
                     },
-                    "containers": [
+                    "volumes": [
+                        {"name": "work", "emptyDir": {}},
+                        {"name": "bundle-source", "secret": {"secretName": source_secret_name}},
+                        {"name": "signing-key", "secret": {"secretName": signing_secret}},
+                    ],
+                    "initContainers": [
                         {
-                            "name": "bundle-compiler",
+                            "name": "build",
                             "image": image,
-                            "env": env,
-                            "resources": {
-                                "limits": {"cpu": "2000m", "memory": "4Gi"},
-                            },
+                            "args": ["build", "--bundle", "/input/source.tar.zst",
+                                     "--manifest", "/input/manifest.yaml", "--out", "/work"],
+                            "env": build_env,
+                            "resources": {"limits": {"cpu": "2000m", "memory": "4Gi"}},
                             "securityContext": {
                                 "allowPrivilegeEscalation": False,
                                 "readOnlyRootFilesystem": True,
                                 "capabilities": {"drop": ["ALL"]},
                             },
+                            "volumeMounts": [
+                                {"name": "work", "mountPath": "/work"},
+                                {"name": "bundle-source", "mountPath": "/input", "readOnly": True},
+                            ],
+                        }
+                    ],
+                    "containers": [
+                        {
+                            "name": "publisher",
+                            "image": image,
+                            "args": ["publish", "--component", "/work/component.wasm",
+                                     "--manifest", "/input/manifest.yaml",
+                                     "--language", language, "--artifact-kind", artifact_kind],
+                            "env": publisher_env,
+                            "resources": {"limits": {"cpu": "1000m", "memory": "1Gi"}},
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "readOnlyRootFilesystem": True,
+                                "capabilities": {"drop": ["ALL"]},
+                            },
+                            "volumeMounts": [
+                                {"name": "work", "mountPath": "/work"},
+                                {"name": "bundle-source", "mountPath": "/input", "readOnly": True},
+                                {"name": "signing-key", "mountPath": "/etc/waddles/signing", "readOnly": True},
+                            ],
                         }
                     ],
                 },
@@ -3144,6 +3305,7 @@ def build_job_spec(
 
 async def create_compiler_job(
     batch_api: Any,
+    core_api: Any,
     *,
     namespace: str,
     app_id: str,
@@ -3151,24 +3313,78 @@ async def create_compiler_job(
     artifact_kind: str,
     language: str,
     staged: StagedUpload,
+    manifest_bytes: bytes,
+    source_bytes: bytes | None,
+    component_bytes: bytes | None,
     validation_context: dict[str, Any],
     callback_token: str,
 ) -> str:
-    """Create the Job via `batch_api.create_namespaced_job`. Returns the created Job's name.
+    """Create the per-Job source Secret, then the Job, then own the Secret by the Job.
 
-    `batch_api` is a `kubernetes.client.BatchV1Api`-shaped object,
-    passed in rather than constructed here so tests inject a mock and
-    the caller (Task 10) controls in-cluster vs. kubeconfig auth.
+    `batch_api`/`core_api` are `kubernetes.client.BatchV1Api`/`CoreV1Api`
+    -shaped objects, passed in rather than constructed here so tests
+    inject mocks and the caller (Task 10) controls in-cluster vs.
+    kubeconfig auth.
+
+    D10/D27: `build` has zero network, so it cannot fetch the staged
+    manifest/source bytes itself -- they must already be in the pod
+    before it starts. hub-api already holds them in memory from the
+    original upload request (Task 10, before `stage_upload` even wrote
+    them to the bucket), so it packages them directly into a per-Job
+    Secret via the Kubernetes API (not a network call from inside the
+    sandbox) and points the Job's `bundle-source` volume at it.
+    `ownerReferences` ties the Secret's lifetime to the Job so
+    Kubernetes' cascading GC removes both together
+    (`ttlSecondsAfterFinished` included). Bounded by the etcd
+    object-size limit (~1 MiB) -- a bundle whose staged bytes exceed it
+    fails Secret creation with a clear error; large-bundle support is a
+    documented follow-up, not solved here.
     """
     import asyncio
+    import base64
 
     job_spec = build_job_spec(
         app_id=app_id, version=version, artifact_kind=artifact_kind, language=language,
         staged=staged, validation_context=validation_context, callback_token=callback_token,
     )
+    job_name = str(job_spec["metadata"]["name"])
+    secret_name = f"{job_name}-source"
+    secret_data = {"manifest.yaml": base64.b64encode(manifest_bytes).decode("ascii")}
+    if source_bytes is not None:
+        secret_data["source.tar.zst"] = base64.b64encode(source_bytes).decode("ascii")
+    if component_bytes is not None:
+        secret_data["component.wasm"] = base64.b64encode(component_bytes).decode("ascii")
 
     def _create() -> Any:
-        return batch_api.create_namespaced_job(namespace=namespace, body=job_spec)
+        core_api.create_namespaced_secret(
+            namespace=namespace,
+            body={
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "type": "Opaque",
+                "metadata": {"name": secret_name},
+                "data": secret_data,
+            },
+        )
+        job = batch_api.create_namespaced_job(namespace=namespace, body=job_spec)
+        core_api.patch_namespaced_secret(
+            name=secret_name,
+            namespace=namespace,
+            body={
+                "metadata": {
+                    "ownerReferences": [
+                        {
+                            "apiVersion": "batch/v1",
+                            "kind": "Job",
+                            "name": job_name,
+                            "uid": job.metadata.uid,
+                            "blockOwnerDeletion": False,
+                        }
+                    ]
+                }
+            },
+        )
+        return job
 
     result = await asyncio.to_thread(_create)
     return str(result.metadata.name)
@@ -3177,21 +3393,30 @@ async def create_compiler_job(
 - [ ] **Step 4: Run to verify all pass**
 
 Run: `cd hub_api && python3 -m pytest tests/test_compiler_job_service.py -v`
-Expected: `5 passed`
+Expected: `7 passed`
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add hub_api/services/compiler_job_service.py hub_api/tests/test_compiler_job_service.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): compiler_job_service -- launch the gVisor-sandboxed bundle-compiler K8s Job
+feat(hub-api): compiler_job_service -- launch the D27 two-container bundle-compiler K8s Job
 
 One Job per uploaded version, backoffLimit=0, activeDeadlineSeconds=900,
-rootless/no-new-privileges/read-only-rootfs/drop-ALL (spec Sec4.6,
-Sec9.2). VALIDATION_CONTEXT_JSON is the M2a boundary contract: the
-compiler's own NetworkPolicy has no live DB access, so hub-api snapshots
-registered custom platforms + the two tenant settings + the egress
-denylist into this one env var at Job-creation time.
+rootless/no-new-privileges/read-only-rootfs/drop-ALL on both containers
+(spec Sec4.6, Sec9.2, D27). Untrusted build initContainer carries zero
+credentials (gVisor, zero network); trusted publisher container holds
+the bucket/DB/signing/callback secrets and never runs bundle code
+(pre-flight M2a seam scan, finding #3 -- corrects the earlier
+single-container draft, which would have leaked the callback JWT into
+the sandbox that runs bundle-supplied build code). Staged manifest/
+source bytes reach the build container via a per-Job Secret hub-api
+creates directly through the Kubernetes API (never a network fetch
+build itself makes), owned by the Job for cascading GC.
+VALIDATION_CONTEXT_JSON is the M2a boundary contract: build's own
+NetworkPolicy has no live DB access, so hub-api snapshots registered
+custom platforms + the two tenant settings + the egress denylist into
+this one env var at Job-creation time.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
@@ -3210,8 +3435,8 @@ EOF
 - Test: `hub_api/tests/test_bundle_version_service.py`
 
 **Interfaces:**
-- Produces: state constants `STATUS_UPLOADED, STATUS_VALIDATING, STATUS_SCANNING, STATUS_INSPECTING, STATUS_COMPILING, STATUS_ADDRESSING, STATUS_PUBLISHING, STATUS_PUBLISHED, STATUS_REJECTED`; `async def create_version(install_dal, *, tenant_id: int, app_id: str, requested_by: int, manifest_bytes: bytes, source_bytes: bytes | None, component_bytes: bytes | None, batch_api: Any, namespace: str, known_custom_platforms: frozenset[str], allow_wildcard_consumes: bool, allow_prebuilt: bool) -> Any` (the inserted row, re-selected); `async def get_version(install_dal, *, app_id: str, version: str) -> Any` (raises `not_found()`); `async def list_versions(install_dal, *, app_id: str) -> list[Any]`. `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `app_version_uploads` is one of this plan's own new tables (R52), so this module never touches the pre-existing pydal `async_dal`/`dal` pair.
-- Consumes: `services.bundle_manifest_v2.parse_bundle_manifest_v2`/`ManifestV2Error` (Task 7), `services.bundle_storage_service.stage_upload` (Task 8), `services.compiler_job_service.create_compiler_job` (Task 9), `services.errors.{ApiError, bad_request, conflict, not_found, forbidden}` (existing), `flask_core.auth.create_jwt_token`/`flask_core.secrets.require_secret_key` (existing).
+- Produces: state constants `STATUS_UPLOADED, STATUS_VALIDATING, STATUS_SCANNING, STATUS_INSPECTING, STATUS_COMPILING, STATUS_ADDRESSING, STATUS_PUBLISHING, STATUS_PUBLISHED, STATUS_REJECTED`; `async def create_version(install_dal, *, tenant_id: int, app_id: str, requested_by: int, manifest_bytes: bytes, source_bytes: bytes | None, component_bytes: bytes | None, batch_api: Any, core_api: Any, namespace: str, known_custom_platforms: frozenset[str], allow_wildcard_consumes: bool, allow_prebuilt: bool) -> Any` (the inserted row, re-selected); `async def get_version(install_dal, *, app_id: str, version: str) -> Any` (raises `not_found()`); `async def list_versions(install_dal, *, app_id: str) -> list[Any]`. `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `app_version_uploads` is one of this plan's own new tables (R52), so this module never touches the pre-existing pydal `async_dal`/`dal` pair.
+- Consumes: `services.bundle_manifest_v2.parse_bundle_manifest_v2`/`ManifestV2Error` (Task 7), `services.bundle_storage_service.stage_upload` (Task 8), `services.compiler_job_service.create_compiler_job` (Task 9 — **signature widened** by that task's D27 two-container fix: now takes `core_api` plus the raw `manifest_bytes`/`source_bytes`/`component_bytes` this function already holds, to populate the per-Job source Secret), `services.errors.{ApiError, bad_request, conflict, not_found, forbidden}` (existing), `flask_core.auth.create_jwt_token`/`flask_core.secrets.require_secret_key` (existing).
 
 `BUNDLE_MAX_SOURCE_BYTES = 16_777_216`, `BUNDLE_MAX_COMPONENT_BYTES = 33_554_432` (spec §9.2) are module constants here.
 
@@ -3260,8 +3485,14 @@ _MANIFEST = {
 
 def _mock_batch_api() -> Any:
     mock = MagicMock()
-    mock.create_namespaced_job.return_value = MagicMock(metadata=MagicMock(name="bundle-compile-abc"))
+    mock.create_namespaced_job.return_value = MagicMock(
+        metadata=MagicMock(name="bundle-compile-abc", uid="job-uid-1")
+    )
     return mock
+
+
+def _mock_core_api() -> Any:
+    return MagicMock()
 
 
 async def test_create_version_happy_path(install_dal: Any) -> None:
@@ -3276,7 +3507,7 @@ async def test_create_version_happy_path(install_dal: Any) -> None:
             tenant_id=1, app_id="waddles.socials.music.default", requested_by=1,
             manifest_bytes=yaml.safe_dump(_MANIFEST).encode(),
             source_bytes=b"fake-tarball", component_bytes=None,
-            batch_api=_mock_batch_api(), namespace="waddles",
+            batch_api=_mock_batch_api(), core_api=_mock_core_api(), namespace="waddles",
             known_custom_platforms=frozenset(), allow_wildcard_consumes=False, allow_prebuilt=True,
         )
     assert row.status == STATUS_VALIDATING
@@ -3295,7 +3526,8 @@ async def test_create_version_rejects_duplicate(install_dal: Any) -> None:
         await create_version(
             install_dal, tenant_id=1, app_id="waddles.socials.music.default", requested_by=1,
             manifest_bytes=yaml.safe_dump(_MANIFEST).encode(),
-            source_bytes=b"x", component_bytes=None, batch_api=_mock_batch_api(), namespace="waddles",
+            source_bytes=b"x", component_bytes=None,
+            batch_api=_mock_batch_api(), core_api=_mock_core_api(), namespace="waddles",
             known_custom_platforms=frozenset(), allow_wildcard_consumes=False, allow_prebuilt=True,
         )
     assert exc.value.status_code == 409
@@ -3308,7 +3540,8 @@ async def test_create_version_rejects_bad_manifest(install_dal: Any) -> None:
             install_dal, tenant_id=1,
             app_id="waddles.socials.music.default", requested_by=1,
             manifest_bytes=yaml.safe_dump(bad_manifest).encode(),
-            source_bytes=b"x", component_bytes=None, batch_api=_mock_batch_api(), namespace="waddles",
+            source_bytes=b"x", component_bytes=None,
+            batch_api=_mock_batch_api(), core_api=_mock_core_api(), namespace="waddles",
             known_custom_platforms=frozenset(), allow_wildcard_consumes=False, allow_prebuilt=True,
         )
     assert exc.value.status_code == 400
@@ -3322,7 +3555,7 @@ async def test_create_version_rejects_oversize_source(install_dal: Any) -> None:
             app_id="waddles.socials.music.default", requested_by=1,
             manifest_bytes=yaml.safe_dump(_MANIFEST).encode(),
             source_bytes=b"x" * (16_777_216 + 1), component_bytes=None,
-            batch_api=_mock_batch_api(), namespace="waddles",
+            batch_api=_mock_batch_api(), core_api=_mock_core_api(), namespace="waddles",
             known_custom_platforms=frozenset(), allow_wildcard_consumes=False, allow_prebuilt=True,
         )
     assert exc.value.status_code == 413
@@ -3336,7 +3569,8 @@ async def test_create_version_rejects_prebuilt_when_disallowed(install_dal: Any)
             install_dal, tenant_id=1,
             app_id="waddles.socials.music.default", requested_by=1,
             manifest_bytes=yaml.safe_dump(prebuilt_manifest).encode(),
-            source_bytes=None, component_bytes=b"x", batch_api=_mock_batch_api(), namespace="waddles",
+            source_bytes=None, component_bytes=b"x",
+            batch_api=_mock_batch_api(), core_api=_mock_core_api(), namespace="waddles",
             known_custom_platforms=frozenset(), allow_wildcard_consumes=False, allow_prebuilt=False,
         )
     assert exc.value.status_code == 403
@@ -3438,6 +3672,7 @@ async def create_version(
     source_bytes: bytes | None,
     component_bytes: bytes | None,
     batch_api: Any,
+    core_api: Any,
     namespace: str,
     known_custom_platforms: frozenset[str],
     allow_wildcard_consumes: bool,
@@ -3489,8 +3724,9 @@ async def create_version(
 
     callback_token = _mint_callback_token("global")
     job_name = await create_compiler_job(
-        batch_api, namespace=namespace, app_id=app_id, version=manifest.version,
+        batch_api, core_api, namespace=namespace, app_id=app_id, version=manifest.version,
         artifact_kind=manifest.artifact, language=manifest.language, staged=staged,
+        manifest_bytes=manifest_bytes, source_bytes=source_bytes, component_bytes=component_bytes,
         validation_context={
             "known_custom_platforms": sorted(known_custom_platforms),
             "allow_wildcard_consumes": allow_wildcard_consumes,
@@ -3630,8 +3866,14 @@ async def test_post_version_requires_platform_admin_scope(app: Quart) -> None:
 async def test_post_version_happy_path(app: Quart) -> None:
     token = make_token(scope="platform:admin")
     mock_batch_api = MagicMock()
-    mock_batch_api.create_namespaced_job.return_value = MagicMock(metadata=MagicMock(name="bundle-compile-abc"))
-    with patch("blueprints.v1.bundle_versions._batch_api", return_value=mock_batch_api):
+    mock_batch_api.create_namespaced_job.return_value = MagicMock(
+        metadata=MagicMock(name="bundle-compile-abc", uid="job-uid-1")
+    )
+    mock_core_api = MagicMock()
+    with (
+        patch("blueprints.v1.bundle_versions._batch_api", return_value=mock_batch_api),
+        patch("blueprints.v1.bundle_versions._core_api", return_value=mock_core_api),
+    ):
         client = app.test_client()
         response = await client.post(
             "/api/v1/apps/waddles.socials.music.default/versions",
@@ -3719,6 +3961,17 @@ def _batch_api() -> Any:
     return client.BatchV1Api()
 
 
+def _core_api() -> Any:
+    """The K8s `CoreV1Api` client -- Task 9's D27 fix uses it to create the per-Job source Secret."""
+    from kubernetes import client, config
+
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+    return client.CoreV1Api()
+
+
 async def _allow_prebuilt(install_dal: AsyncDB) -> bool:
     """Temporary inline query against the new `platform_settings` table -- superseded by `platform_settings_service` in Task 23."""
     row = (await install_dal(install_dal.platform_settings.key == "bundles.allow_prebuilt").select()).first()
@@ -3790,7 +4043,8 @@ async def post_version(app_id: str) -> tuple[dict[str, object], int]:
             install_dal,
             tenant_id=ctx.tenant_id, app_id=app_id, requested_by=caller_id,
             manifest_bytes=manifest_bytes, source_bytes=source_bytes, component_bytes=component_bytes,
-            batch_api=_batch_api(), namespace=current_app.config.get("K8S_NAMESPACE", "waddles"),
+            batch_api=_batch_api(), core_api=_core_api(),
+            namespace=current_app.config.get("K8S_NAMESPACE", "waddles"),
             known_custom_platforms=await _known_custom_platforms(install_dal, ctx.tenant_id),
             allow_wildcard_consumes=_allow_wildcard_consumes(dal, ctx.tenant_id),
             allow_prebuilt=await _allow_prebuilt(install_dal),
@@ -3883,8 +4137,10 @@ EOF
 - Modify: `k8s/helm/waddlebot/values.yaml`
 
 **Interfaces:**
-- Produces: `ServiceAccount hub-api` gains a bound `Role`/`RoleBinding` permitting `batch/v1` Job `create`/`get`/`list`/`watch`/`delete` in its own namespace; `ServiceAccount bundle-compiler` (the Job's own identity, per Task 9's `serviceAccountName: bundle-compiler`) with **no** RBAC rules at all (it never talks to the K8s API — its job is bucket + hub-api callback only, per D10). New `values.yaml` keys: `bundles.compiler.image`, `bundles.compiler.activeDeadlineSeconds`, `bundles.compiler.resources.limits`, `sandbox.runtimeClassName`, `sandbox.gvisor.enabled` (these last two are read by `compiler_job_service.py`'s `SANDBOX_RUNTIME_CLASS_NAME` env var, set from this chart value — the chart wiring for the *executor's* own gVisor posture is M3/M4/M6 scope, not this plan's).
+- Produces: `ServiceAccount hub-api` gains a bound `Role`/`RoleBinding` permitting `batch/v1` Job `create`/`get`/`list`/`watch`/`delete` **and `v1` Secret `create`/`get`/`patch`/`delete`** (the per-Job source Secret, Task 9's D27 fix) in its own namespace; `ServiceAccount bundle-compiler` (the Job's own identity, per Task 9's `serviceAccountName: bundle-compiler`) with **no** RBAC rules at all (it never talks to the K8s API — its job is bucket + hub-api callback only, per D10, and it never sees the Secret's contents through the API either, only the mounted volume). New `values.yaml` keys: `bundles.compiler.image`, `bundles.compiler.activeDeadlineSeconds`, `bundles.compiler.build.resources`/`bundles.compiler.publisher.resources` (split per-container limits, D27), `bundles.signingPublicKeySecret` (spec's own canonical name, Sec12.3), `bundles.compiler.publisherDatabaseSecret`, `sandbox.runtimeClassName`, `sandbox.gvisor.enabled` (these last two are read by `compiler_job_service.py`'s `SANDBOX_RUNTIME_CLASS_NAME` env var, set from this chart value — the chart wiring for the *executor's* own gVisor posture is M3/M4/M6 scope, not this plan's).
 - Consumes: nothing new.
+
+**Seam ruling (pre-flight M2a scan, finding #3):** widens the original single-container-shaped values keys to match Task 9's D27 two-container Job spec — `bundles.compiler.resources.limits` splits into `.build.resources`/`.publisher.resources` (different workloads, different limits: `build` runs the toolchain, `publisher` only hashes/signs/uploads/writes one row), and `bundles.signingPublicKeySecret`/`bundles.compiler.publisherDatabaseSecret` are added since the publisher container now mounts/references them directly.
 
 - [ ] **Step 1: Write the RBAC template**
 
@@ -3904,6 +4160,15 @@ rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    # The per-Job source Secret (Task 9, D27): hub-api creates it, patches
+    # an ownerReference onto it, and lets Kubernetes GC delete it with the
+    # Job. Scoped to "secrets" broadly because Role cannot scope by name
+    # pattern -- the Namespace boundary plus hub-api's own least-privilege
+    # ServiceAccount (no other secret-bearing workload shares it) is the
+    # containing control.
+    verbs: ["create", "get", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -3938,16 +4203,28 @@ bundles:
   compiler:
     image: ghcr.io/penguintechinc/waddles/bundle-compiler:latest
     activeDeadlineSeconds: 900
-    resources:
-      limits:
-        cpu: "2000m"
-        memory: "4Gi"
+    # D27: build (untrusted, runs bundle code) and publisher (trusted,
+    # holds every credential) get independent resource limits -- build
+    # runs the actual per-language toolchain, publisher only hashes/
+    # signs/uploads/writes one row.
+    build:
+      resources:
+        limits:
+          cpu: "2000m"
+          memory: "4Gi"
+    publisher:
+      resources:
+        limits:
+          cpu: "1000m"
+          memory: "1Gi"
+    publisherDatabaseSecret: waddles-publisher-db
   bucket:
     provider: minio
     endpoint: "http://minio.waddles.svc.cluster.local:9000"
     name: waddles-bundles
     region: us-east-1
     existingSecret: waddles-bundle-bucket
+  signingPublicKeySecret: waddles-bundle-signing
   allowPrebuilt: true
   allowWildcardConsumes: false
 
@@ -3974,10 +4251,16 @@ git add k8s/helm/waddlebot/templates/hub-api-compiler-rbac.yaml k8s/helm/waddleb
 git commit -m "$(cat <<'EOF'
 feat(chart): hub-api compiler-Job RBAC + bundles.compiler/sandbox values (spec Sec4.6, Sec12.3)
 
-hub-api's ServiceAccount gains Job create/get/list/watch/delete in its
-own namespace; the compiler Job's own ServiceAccount (bundle-compiler)
-gets zero RBAC rules, matching D10's two-destination network policy
-(bucket + hub-api callback only, never the K8s API).
+hub-api's ServiceAccount gains Job create/get/list/watch/delete plus
+Secret create/get/patch/delete (the per-Job source Secret feeding the
+D27 build initContainer, Task 9) in its own namespace; the compiler
+Job's own ServiceAccount (bundle-compiler) gets zero RBAC rules,
+matching D10's two-destination network policy (bucket + hub-api
+callback only, never the K8s API). Values keys widened to the D27
+two-container split (pre-flight M2a seam scan, finding #3):
+build/publisher get independent resource limits, plus
+signingPublicKeySecret/publisherDatabaseSecret for the publisher
+container's mounted/referenced credentials.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
@@ -3996,10 +4279,12 @@ EOF
 - Test: `hub_api/tests/test_bundle_artifact_service.py`
 
 **Interfaces:**
-- Produces: `async def record_artifact_notification(install_dal, *, app_id: str, version: str, claimed_digest: str, component_key: str, cwasm_digest: str | None, wasmtime_abi: str | None, collector: str | None, size_bytes: int | None, language: str, artifact_kind: str, built_at: str, builder: str, scan_status: str, badge: str | None) -> Any` (the confirmed `app_versions` row). Raises `ApiError` 409 `digest_mismatch` on a re-hash disagreement (with a best-effort `audit_log` entry written first), 404 if no matching `app_version_uploads` row exists. `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `app_version_uploads` and `app_versions` are this plan's own new tables (R52), and `audit_log` is reachable through the same `install_dal` since `install_dal.reflect()` (Task 4) discovers hub-api's entire live schema, not only the new tables.
-- Consumes: `services.bundle_storage_service.fetch_object_sha256` (Task 8); `install_dal.audit_log` (a plain reflected `TableProxy`, no new binding needed — `install_dal.reflect()` (Task 4) already sees every pre-existing table `bind_platform_tables()` created, `audit_log` included).
+- Produces: `async def record_artifact_notification(install_dal, *, app_id: str, version: str, claimed_digest: str, component_key: str, sidecar_key: str, cwasm_digest: str | None, wasmtime_abi: str | None, collector: str | None, builder: str) -> Any` (the confirmed `app_versions` row). Raises `ApiError` 409 `digest_mismatch` on a re-hash disagreement (with a best-effort `audit_log` entry written first), 404 if no matching `app_version_uploads` row exists. `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `app_version_uploads` and `app_versions` are this plan's own new tables (R52), and `audit_log` is reachable through the same `install_dal` since `install_dal.reflect()` (Task 4) discovers hub-api's entire live schema, not only the new tables.
+- Consumes: `services.bundle_storage_service.fetch_object_sha256`, `services.bundle_storage_service.fetch_sidecar_json` (Task 8); `install_dal.audit_log` (a plain reflected `TableProxy`, no new binding needed — `install_dal.reflect()` (Task 4) already sees every pre-existing table `bind_platform_tables()` created, `audit_log` included).
 
 This plan's Decision #3: **hub-api verifies, it never computes.** The compiler (M2a's `waddles_publisher`-authenticated container) is expected to `INSERT`/`UPDATE` `app_versions` directly with its own Postgres role — this function's job is to (a) re-hash the bucket object at `component_key` and compare against `claimed_digest`, refusing on any mismatch, and (b) look for the row the publisher already wrote; if none exists yet (a race, or an M2a build that hasn't wired direct-DB-write yet), insert it itself using hub-api's own (also-granted) write privilege, but **only after its own re-hash succeeded** — never inserting an unverified value.
+
+**Seam ruling (pre-flight M2a scan, finding #1, binding — supersedes this function's earlier draft signature):** M2a's compiler (`docs/plan-m2a-compiler-sdks` Task 17, `notify_hub_api`) posts a plain `#[derive(Serialize)]` Rust struct with no `rename_all` — the wire body is **snake_case**, exactly seven fields: `artifact_digest, cwasm_digest, wasmtime_abi, collector, component_key, sidecar_key, builder`. It does not repeat `language`/`artifact_kind`/`built_at`/`scan_status`/`size_bytes`/`badge` on the wire. Per the coordinator's ownership split (M2a owns the sidecar/callback payload), this function's parameters match that wire shape exactly — no `size_bytes`/`language`/`artifact_kind`/`built_at`/`scan_status`/`badge` parameters. `language`/`artifact_kind` are already known to hub-api from the `app_version_uploads` row created at upload time (Task 10) and are read off that row, never off the wire. `built_at`/`scan_status`/`size_bytes` are recovered, on the fallback-insert path only, by fetching and parsing the signed sidecar object at `sidecar_key` (`fetch_sidecar_json`, Task 8) — the sidecar's own 12-field schema (spec Sec9.4) carries all three. `badge` has no source on either the wire or the sidecar and stays `None` on the fallback path, matching the column's nullable definition (Task 2) — the normal path (publisher already wrote the row) is unaffected, since `badge` there was set directly by `waddles_publisher`'s own `INSERT` (M2a's own writer, outside this function entirely).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4032,6 +4317,14 @@ async def _seed_upload(install_dal: Any) -> None:
     )
 
 
+_SIDECAR = {
+    "schema_version": 1, "app_id": "waddles.socials.music.default", "version": "3.0.1",
+    "digest": _DIGEST, "size_bytes": 2048, "language": "python", "artifact_kind": "source",
+    "scan_status": "scanned", "wit_world": "waddle:bundle/stage@1.0.0",
+    "built_at": "2026-09-14T12:00:00.000Z", "builder": "bundle-compiler@1.0.0", "signature": "ZmFrZQ==",
+}
+
+
 async def test_matching_digest_is_accepted_when_publisher_already_wrote_the_row(
     install_dal: Any,
 ) -> None:
@@ -4046,9 +4339,9 @@ async def test_matching_digest_is_accepted_when_publisher_already_wrote_the_row(
         result = await record_artifact_notification(
             install_dal, app_id="waddles.socials.music.default", version="3.0.1",
             claimed_digest=_DIGEST, component_key="bundles/x/3.0.1/aaa.wasm",
-            cwasm_digest=None, wasmtime_abi=None, collector=None, size_bytes=1024,
-            language="python", artifact_kind="source", built_at="2026-09-14T12:00:00.000Z",
-            builder="bundle-compiler@1.0.0", scan_status="scanned", badge=None,
+            sidecar_key="bundles/x/3.0.1/aaa.json",
+            cwasm_digest=None, wasmtime_abi=None, collector=None,
+            builder="bundle-compiler@1.0.0",
         )
     assert result.artifact_digest == _DIGEST
 
@@ -4062,16 +4355,22 @@ async def test_matching_digest_is_accepted_when_publisher_already_wrote_the_row(
 async def test_missing_row_is_inserted_as_a_fallback_after_verification(install_dal: Any) -> None:
     await _seed_upload(install_dal)
 
-    with patch("services.bundle_artifact_service.fetch_object_sha256", return_value=_DIGEST):
+    with (
+        patch("services.bundle_artifact_service.fetch_object_sha256", return_value=_DIGEST),
+        patch("services.bundle_artifact_service.fetch_sidecar_json", return_value=_SIDECAR),
+    ):
         result = await record_artifact_notification(
             install_dal, app_id="waddles.socials.music.default", version="3.0.1",
             claimed_digest=_DIGEST, component_key="bundles/x/3.0.1/aaa.wasm",
+            sidecar_key="bundles/x/3.0.1/aaa.json",
             cwasm_digest="sha256:" + "c" * 64, wasmtime_abi="wasmtime-30", collector="drc",
-            size_bytes=2048, language="python", artifact_kind="source",
-            built_at="2026-09-14T12:00:00.000Z", builder="bundle-compiler@1.0.0",
-            scan_status="scanned", badge=None,
+            builder="bundle-compiler@1.0.0",
         )
     assert result.artifact_digest == _DIGEST
+    assert result.language == "python"  # sourced from app_version_uploads, not the wire
+    assert result.built_at is not None  # sourced from the fetched sidecar
+    assert result.scan_status == "scanned"
+    assert result.size_bytes == 2048
     count_rows = await raw_sql_rows(
         install_dal, "SELECT COUNT(*) AS n FROM app_versions WHERE artifact_digest = :d", {"d": _DIGEST}
     )
@@ -4086,9 +4385,9 @@ async def test_digest_mismatch_is_refused_and_audited(install_dal: Any) -> None:
             await record_artifact_notification(
                 install_dal, app_id="waddles.socials.music.default", version="3.0.1",
                 claimed_digest=_DIGEST, component_key="bundles/x/3.0.1/aaa.wasm",
-                cwasm_digest=None, wasmtime_abi=None, collector=None, size_bytes=1024,
-                language="python", artifact_kind="source", built_at="2026-09-14T12:00:00.000Z",
-                builder="bundle-compiler@1.0.0", scan_status="scanned", badge=None,
+                sidecar_key="bundles/x/3.0.1/aaa.json",
+                cwasm_digest=None, wasmtime_abi=None, collector=None,
+                builder="bundle-compiler@1.0.0",
             )
     assert exc.value.status_code == 409
     assert exc.value.code == "digest_mismatch"
@@ -4119,9 +4418,9 @@ async def test_unknown_version_upload_raises_404(install_dal: Any) -> None:
             await record_artifact_notification(
                 install_dal, app_id="waddles.unknown.x.default", version="1.0.0",
                 claimed_digest=_DIGEST, component_key="bundles/x/1.0.0/aaa.wasm",
-                cwasm_digest=None, wasmtime_abi=None, collector=None, size_bytes=1,
-                language="python", artifact_kind="source", built_at="2026-09-14T12:00:00.000Z",
-                builder="bundle-compiler@1.0.0", scan_status="scanned", badge=None,
+                sidecar_key="bundles/x/1.0.0/aaa.json",
+                cwasm_digest=None, wasmtime_abi=None, collector=None,
+                builder="bundle-compiler@1.0.0",
             )
     assert exc.value.status_code == 404
 ```
@@ -4153,6 +4452,19 @@ write through the same `install_dal` (Decision #18) -- wrapped in
 `try`/`except`, matching this codebase's existing convention for every
 audit-log call site, so a logging failure never blocks the 409 refusal
 this function must still raise.
+
+Wire shape (pre-flight M2a seam scan, finding #1, binding): matches
+M2a's actual `notify_hub_api` callback body exactly -- seven
+snake_case fields (`artifact_digest, cwasm_digest, wasmtime_abi,
+collector, component_key, sidecar_key, builder`), no
+`language`/`artifact_kind`/`built_at`/`scan_status`/`size_bytes`/
+`badge`. `language`/`artifact_kind` come off the `app_version_uploads`
+row (already known at upload time, Task 10); `built_at`/`scan_status`/
+`size_bytes` are recovered from the signed sidecar object at
+`sidecar_key` (`fetch_sidecar_json`, Task 8) on the fallback-insert
+path only -- the normal path (publisher already wrote the row) never
+needs them, since `waddles_publisher` set them directly. `badge` has
+no source here and stays `None` on the fallback path.
 """
 
 from __future__ import annotations
@@ -4162,7 +4474,7 @@ from typing import Any
 
 from penguin_dal import AsyncDB
 
-from services.bundle_storage_service import fetch_object_sha256
+from services.bundle_storage_service import fetch_object_sha256, fetch_sidecar_json
 from services.errors import ApiError, not_found
 
 
@@ -4189,16 +4501,11 @@ async def record_artifact_notification(
     version: str,
     claimed_digest: str,
     component_key: str,
+    sidecar_key: str,
     cwasm_digest: str | None,
     wasmtime_abi: str | None,
     collector: str | None,
-    size_bytes: int | None,
-    language: str,
-    artifact_kind: str,
-    built_at: str,
     builder: str,
-    scan_status: str,
-    badge: str | None,
 ) -> Any:
     """Verify `claimed_digest` against the bucket, cross-check or fallback-insert, update the upload row."""
     upload_rows = await install_dal(
@@ -4228,11 +4535,17 @@ async def record_artifact_notification(
     ).select()
     version_row = existing.first()
     if version_row is None:
+        # Fallback-insert path only: language/artifact_kind are already known
+        # from the upload request (Task 10), never from this callback's wire
+        # body. built_at/scan_status/size_bytes come from the sidecar object
+        # itself (spec Sec9.4) since M2a's callback does not repeat them.
+        sidecar = await fetch_sidecar_json(sidecar_key)
         new_id = await install_dal.app_versions.async_insert(
             app_id=app_id, version=version, artifact_digest=claimed_digest,
             cwasm_digest=cwasm_digest, wasmtime_abi=wasmtime_abi, collector=collector,
-            size_bytes=size_bytes, language=language, artifact_kind=artifact_kind,
-            built_at=built_at, builder=builder, scan_status=scan_status, badge=badge,
+            size_bytes=sidecar.get("size_bytes"), language=upload.language,
+            artifact_kind=upload.artifact_kind, built_at=sidecar.get("built_at"),
+            builder=builder, scan_status=sidecar.get("scan_status", "not_scanned"), badge=None,
             created_at=datetime.now(UTC),
         )
         version_row = (await install_dal(install_dal.app_versions.id == new_id).select()).first()
@@ -4262,6 +4575,10 @@ inserting one itself using hub-api's own also-granted write privilege
 -- only ever after its own verification succeeded (spec Sec6.10, this
 plan's Decision #3). Queries the new app_version_uploads/app_versions
 tables through penguin-dal's install_dal per coordinator ruling R52.
+Wire shape matches M2a's actual notify_hub_api callback body exactly
+(pre-flight M2a seam scan, finding #1) -- language/artifact_kind read
+from app_version_uploads, built_at/scan_status/size_bytes recovered
+from the fetched sidecar object on the fallback-insert path only.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
@@ -4371,10 +4688,10 @@ EOF
 - Test: `hub_api/tests/test_bundle_artifact_callback_blueprint.py`
 
 **Interfaces:**
-- Produces: `POST /api/v1/bundles/{app_id}/versions/{version}/artifact` (scope `bundles:artifact`) → `200 {"success": true, "artifactDigest": ...}` or `409 digest_mismatch`; `POST /api/v1/bundles/{app_id}/versions/{version}/rejected` (scope `bundles:artifact`) → `200 {"success": true}`. **Must match M2a** — request body shapes below are this plan's contract; reconcile in M2a's plan if it defines the payload differently.
+- Produces: `POST /api/v1/bundles/{app_id}/versions/{version}/artifact` (scope `bundles:artifact`) → `200 {"success": true, "artifactDigest": ...}` or `409 digest_mismatch`; `POST /api/v1/bundles/{app_id}/versions/{version}/rejected` (scope `bundles:artifact`) → `200 {"success": true}`. **Matches M2a's actual wire contract** (pre-flight M2a seam scan, finding #1, verified against `docs/plan-m2a-compiler-sdks` Task 17's `notify_hub_api`, not invented here) — the artifact endpoint's request body is the one exception to this plan's own camelCase-DTO convention (Global Constraints), a deliberate, documented deviation matching M2a's plain, un-renamed Rust `Serialize` output verbatim.
 - Consumes: `services.bundle_artifact_service.{record_artifact_notification, record_rejection}` (Tasks 13-14), `current_app.config["install_dal"]` (Task 4).
 
-Request body for the artifact endpoint (JSON): `{"artifactDigest": str, "componentKey": str, "cwasmDigest": str|null, "wasmtimeAbi": str|null, "collector": str|null, "sizeBytes": int|null, "language": str, "artifactKind": str, "builtAt": str, "builder": str, "scanStatus": str, "badge": str|null}`. Rejection endpoint: `{"reason": str}`.
+Request body for the artifact endpoint (JSON, **snake_case — matches M2a's wire body exactly**): `{"artifact_digest": str, "component_key": str, "sidecar_key": str, "cwasm_digest": str|null, "wasmtime_abi": str|null, "collector": str|null, "builder": str}`. Rejection endpoint (unaffected by the seam finding — M2a has no equivalent struct to match, camelCase-vs-snake_case is moot for a single field): `{"reason": str}`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4419,10 +4736,10 @@ async def test_artifact_callback_requires_bundles_artifact_scope(app: Quart) -> 
         "/api/v1/bundles/waddles.socials.music.default/versions/3.0.1/artifact",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "artifactDigest": _DIGEST, "componentKey": "bundles/x/3.0.1/aaa.wasm",
-            "cwasmDigest": None, "wasmtimeAbi": None, "collector": None, "sizeBytes": 1,
-            "language": "python", "artifactKind": "source", "builtAt": "2026-09-14T12:00:00.000Z",
-            "builder": "bundle-compiler@1.0.0", "scanStatus": "scanned", "badge": None,
+            "artifact_digest": _DIGEST, "component_key": "bundles/x/3.0.1/aaa.wasm",
+            "sidecar_key": "bundles/x/3.0.1/aaa.json",
+            "cwasm_digest": None, "wasmtime_abi": None, "collector": None,
+            "builder": "bundle-compiler@1.0.0",
         },
     )
     assert response.status_code == 403
@@ -4430,16 +4747,25 @@ async def test_artifact_callback_requires_bundles_artifact_scope(app: Quart) -> 
 
 async def test_artifact_callback_happy_path(app: Quart) -> None:
     token = make_token(scope="bundles:artifact")
-    with patch("services.bundle_artifact_service.fetch_object_sha256", return_value=_DIGEST):
+    sidecar = {
+        "schema_version": 1, "app_id": "waddles.socials.music.default", "version": "3.0.1",
+        "digest": _DIGEST, "size_bytes": 1, "language": "python", "artifact_kind": "source",
+        "scan_status": "scanned", "wit_world": "waddle:bundle/stage@1.0.0",
+        "built_at": "2026-09-14T12:00:00.000Z", "builder": "bundle-compiler@1.0.0", "signature": "ZmFrZQ==",
+    }
+    with (
+        patch("services.bundle_artifact_service.fetch_object_sha256", return_value=_DIGEST),
+        patch("services.bundle_artifact_service.fetch_sidecar_json", return_value=sidecar),
+    ):
         client = app.test_client()
         response = await client.post(
             "/api/v1/bundles/waddles.socials.music.default/versions/3.0.1/artifact",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "artifactDigest": _DIGEST, "componentKey": "bundles/x/3.0.1/aaa.wasm",
-                "cwasmDigest": None, "wasmtimeAbi": None, "collector": None, "sizeBytes": 1,
-                "language": "python", "artifactKind": "source", "builtAt": "2026-09-14T12:00:00.000Z",
-                "builder": "bundle-compiler@1.0.0", "scanStatus": "scanned", "badge": None,
+                "artifact_digest": _DIGEST, "component_key": "bundles/x/3.0.1/aaa.wasm",
+                "sidecar_key": "bundles/x/3.0.1/aaa.json",
+                "cwasm_digest": None, "wasmtime_abi": None, "collector": None,
+                "builder": "bundle-compiler@1.0.0",
             },
         )
     assert response.status_code == 200
@@ -4471,11 +4797,13 @@ Expected: `ModuleNotFoundError: No module named 'blueprints.v1.bundle_artifact_c
 
 Machine-JWT auth, scope `bundles:artifact`, minted by
 `bundle_version_service._mint_callback_token` at Job-creation time
-(Task 10). **Must match M2a**: the compiler is the caller of both
-routes below; if M2a's own plan defines a different payload shape,
-reconcile there. R52: both handlers read `current_app.config
-["install_dal"]` -- `app_version_uploads`/`app_versions` are this
-plan's own new tables.
+(Task 10). The artifact endpoint's request DTO is snake_case,
+verified against M2a's actual `notify_hub_api` wire body
+(`docs/plan-m2a-compiler-sdks` Task 17) rather than invented here --
+pre-flight M2a seam scan, finding #1; the one deliberate exception to
+this plan's own camelCase-DTO convention (Global Constraints). R52:
+both handlers read `current_app.config["install_dal"]` --
+`app_version_uploads`/`app_versions` are this plan's own new tables.
 """
 
 from __future__ import annotations
@@ -4508,20 +4836,24 @@ def _err(exc: ApiError) -> tuple[dict[str, object], int]:
 
 @dataclass(slots=True, frozen=True)
 class ArtifactCallbackRequest:
-    """Request DTO for `POST .../artifact` -- must match M2a's compiler payload."""
+    """Request DTO for `POST .../artifact` -- snake_case, matches M2a's compiler payload verbatim.
 
-    artifactDigest: str
-    componentKey: str
-    language: str
-    artifactKind: str
-    builtAt: str
+    The one deliberate exception to this plan's camelCase-DTO
+    convention (Global Constraints): `convert_casing` is not enabled
+    in this app's QuartSchema setup, so these field names ARE the wire
+    keys, and M2a's actual `notify_hub_api` (Task 17) serializes a
+    plain, un-renamed Rust struct -- snake_case, seven fields, no
+    `language`/`artifact_kind`/`built_at`/`scan_status`/`size_bytes`/
+    `badge` (pre-flight M2a seam scan, finding #1).
+    """
+
+    artifact_digest: str
+    component_key: str
+    sidecar_key: str
     builder: str
-    scanStatus: str
-    cwasmDigest: str | None = None
-    wasmtimeAbi: str | None = None
+    cwasm_digest: str | None = None
+    wasmtime_abi: str | None = None
     collector: str | None = None
-    sizeBytes: int | None = None
-    badge: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -4560,10 +4892,9 @@ async def post_artifact(
     try:
         version_row = await svc.record_artifact_notification(
             install_dal, app_id=app_id, version=version,
-            claimed_digest=data.artifactDigest, component_key=data.componentKey,
-            cwasm_digest=data.cwasmDigest, wasmtime_abi=data.wasmtimeAbi, collector=data.collector,
-            size_bytes=data.sizeBytes, language=data.language, artifact_kind=data.artifactKind,
-            built_at=data.builtAt, builder=data.builder, scan_status=data.scanStatus, badge=data.badge,
+            claimed_digest=data.artifact_digest, component_key=data.component_key,
+            sidecar_key=data.sidecar_key, cwasm_digest=data.cwasm_digest,
+            wasmtime_abi=data.wasmtime_abi, collector=data.collector, builder=data.builder,
         )
     except ApiError as exc:
         return _err(exc)
@@ -4602,10 +4933,11 @@ git add hub_api/blueprints/v1/bundle_artifact_callback.py hub_api/tests/test_bun
 git commit -m "$(cat <<'EOF'
 feat(hub-api): POST /api/v1/bundles/{app_id}/versions/{version}/{artifact,rejected} (spec Sec9.1, Sec9.4, R52)
 
-The compiler's two callbacks, scope bundles:artifact. Marked "must
-match M2a" -- the payload shapes here are this plan's contract until
-M2a's own plan reconciles against them. Reads install_dal (penguin-dal)
-from app config.
+The compiler's two callbacks, scope bundles:artifact. The artifact
+endpoint's request DTO is snake_case, verified against M2a's actual
+notify_hub_api wire body rather than invented (pre-flight M2a seam
+scan, finding #1) -- the one deliberate exception to this plan's
+camelCase-DTO convention. Reads install_dal (penguin-dal) from app config.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
