@@ -33,9 +33,9 @@ echo "[install-unit-test-deps] core/identity_core_module + editable libs/flask_c
 
 # libs/waddle_transports is the first libs/* module carrying its own
 # runtime dependencies beyond flask_core (websockets/aiosmtplib/httpx[http2]
-# for the socket/email/http transports) -- every other libs/* module (see
-# the run_suite loop in tests/k8s/alpha/05-unit-tests.sh) has no
-# requirements.txt of its own and is satisfied by flask_core alone. Unlike
+# for the socket/email/http transports) -- most other libs/* modules (see
+# the run_suite loop in tests/k8s/alpha/05-unit-tests.sh) have no
+# requirements.txt of their own and are satisfied by flask_core alone. Unlike
 # flask_core's combined line above, this requirements.txt IS hash-pinned
 # (--generate-hashes) -- pip auto-enables hash-checking the moment any
 # requirement in a call carries a hash, and then rejects every other spec
@@ -46,6 +46,19 @@ echo "[install-unit-test-deps] libs/waddle_transports (hash-pinned deps)"
 "${PIP[@]}" --require-hashes -r libs/waddle_transports/requirements.txt
 echo "[install-unit-test-deps] editable libs/waddle_transports"
 "${PIP[@]}" -e libs/waddle_transports
+
+# libs/moderation_module (content-moderation classifier, see
+# docs/plans/2026-09-08-content-moderation-design.md) is consumed directly
+# by core/svc_process's services/moderation_gate.py -- same local-package
+# shape as libs/waddle_transports above (own hash-pinned requirements.txt,
+# installed editable so `import moderation_module` resolves). The Dockerfile
+# already installs it this way for the runtime image; this was the missing
+# piece for the *test* environment -- without it, core/svc_process's own
+# suite fails to collect with ModuleNotFoundError.
+echo "[install-unit-test-deps] libs/moderation_module (hash-pinned deps)"
+"${PIP[@]}" --require-hashes -r libs/moderation_module/requirements.txt
+echo "[install-unit-test-deps] editable libs/moderation_module"
+"${PIP[@]}" -e libs/moderation_module
 
 for pkg in hub_api core/svc_action core/svc_ingest core/svc_presentation core/svc_process core/svc_streaming; do
     req="${pkg}/requirements.txt"

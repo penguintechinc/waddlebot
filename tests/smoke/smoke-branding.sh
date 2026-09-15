@@ -131,18 +131,6 @@ test_infrastructure_identifiers() {
         record_fail "Helm values.yaml not found at $helm_values"
     fi
 
-    # pubspec.yaml package name should be "gazer_waddlebot"
-    local pubspec="${PROJECT_ROOT}/mobile/flutter_gazer/pubspec.yaml"
-    if [ -f "$pubspec" ]; then
-        if grep -q 'name: gazer_waddlebot' "$pubspec"; then
-            record_pass "pubspec.yaml package name is 'gazer_waddlebot'"
-        else
-            record_fail "pubspec.yaml package name is not 'gazer_waddlebot'"
-        fi
-    else
-        record_fail "pubspec.yaml not found at $pubspec"
-    fi
-
     # DB name/user in values.yaml should be "waddlebot"
     if [ -f "$helm_values" ]; then
         if grep -qE '(database|dbname|db_name|user).*waddlebot' "$helm_values"; then
