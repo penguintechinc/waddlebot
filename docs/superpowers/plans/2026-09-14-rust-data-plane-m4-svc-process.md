@@ -63,14 +63,24 @@ rustls-pki-types = "=1.10.0"
 sqlparser = "=0.52.0"
 sha2 = "=0.10.8"
 rand = "=0.8.5"
-penguin-licensing = "=0.1.0"   -- see Task 1 note: pinned assuming M1's publish step has run
+penguin-licensing = { git = "https://github.com/penguintechinc/penguin-libs", rev = "${LICENSING_REV}", version = "=0.1.0" }   -- git+rev, never registry-only (R53): source already exists, crates.io publish is a later user-gated step -- see Task 1 note and "Executor-supplied inputs" below
 [dev-dependencies]
 rcgen = "=0.13.1"
 http-body-util = "=0.1.3"
 tokio (test-util feature) = "=1.53.1"
 ```
 
-**Crate-plan dependency note (read before Task 1):** `penguin-spine` and `penguin-bundle-host` (spec §4.7, §4.8) are new `penguin-libs` crates that milestone **M1** builds and publishes; `penguin-logging` (spec §4.9) likewise. As of this plan's authorship none of the three has a written plan or a crates.io release (`git ls-remote` against both `penguin-libs` and this repo found no `docs/plan-penguin-*`/`docs/plan-m2b-*`/`docs/plan-m3-*` branches). Per the milestone dependency graph (spec §16), M4 is not meant to *start* until M1 has landed — but so this plan is executable and self-contained today, every signature this plan needs from those three crates is copied **verbatim** from the spec (§4.7 `Scope`/`SpineClient`/`GroupReader`, §4.8's module table, §4.9's `init`/sanitization contract) into **local, provisional modules** under `src/spine/` and `src/hostcap/`, clearly marked `// PROVISIONAL(M1)` at the top of each file. When plan M1 publishes the real crates, swapping is a mechanical import-path change (`crate::spine::` → `penguin_spine::`), never a behaviour change, because the local modules implement exactly the spec's documented behaviour, not an incidental shape. `penguin-licensing` (spec §4.11) is different: its Rust source **already exists** at `/home/penguin/code/penguin-libs/packages/rust-licensing` with the real, checked-in public API (`LicenseClient::new`, `.flag_enabled(&self, key: &str) -> bool`, `.tier()`, `.check_tier()`, `.spawn_refresh()`) — M1's remaining work on it is CI/publish process, not new code (spec §4.11) — so this plan pins and uses it directly as `penguin-licensing = "=0.1.0"` (the version spec §4.11 says M1 will publish); if that exact version differs when this plan executes, update the one `Cargo.toml` line, the call sites are unaffected.
+**Crate-plan dependency note (read before Task 1):** `penguin-spine` and `penguin-bundle-host` (spec §4.7, §4.8) are new `penguin-libs` crates that milestone **M1** builds and publishes; `penguin-logging` (spec §4.9) likewise. By this plan's finishing pass, all three now have their own plan branches (`penguin-libs` `docs/plan-penguin-spine`, `docs/plan-penguin-logging`, and a `.worktrees/plan-penguin-bundle-host` in progress) — but a plan branch is a document, not a merged, released crate: M1's actual execution of those plans, and the crates.io publish that follows, are still pending. Per the milestone dependency graph (spec §16), M4 is not meant to *start* until M1 has landed — but so this plan is executable and self-contained today, every signature this plan needs from those three crates is copied **verbatim** from their own plans (cited exactly in the "Names borrowed from sibling M1 plans" table below) into **local, provisional modules** under `src/spine/` and `src/hostcap/`, clearly marked `// PROVISIONAL(M1)` at the top of each file. When plan M1 executes and publishes the real crates, swapping is a mechanical import-path change (`crate::spine::` → `penguin_spine::`), never a behaviour change, because the local modules implement exactly the spec's documented behaviour, not an incidental shape -- and per the "Executor-supplied inputs" table immediately below, that swap's `Cargo.toml` lines are git+rev pins under `SPINE_REV`/`LOGGING_REV`/`BUNDLE_HOST_REV`, never a bare registry version, for the same reason `penguin-licensing` already must be. `penguin-licensing` (spec §4.11) is different **today**, not just eventually: its Rust source **already exists** at `/home/penguin/code/penguin-libs/packages/rust-licensing` with the real, checked-in public API (`LicenseClient::new`, `.flag_enabled(&self, key: &str) -> bool`, `.tier()`, `.check_tier()`, `.spawn_refresh()`) — M1's remaining work on it is CI/publish process, not new code (spec §4.11) — so this plan depends on it for real, right now, in Task 1's `Cargo.toml`. **Coordinator ruling R53:** because that source is not yet on crates.io, it is pinned as a git dependency at a specific revision, never a bare `"=0.1.0"` (which would fail to resolve) — `penguin-licensing = { git = "https://github.com/penguintechinc/penguin-libs", rev = "${LICENSING_REV}", version = "=0.1.0" }`; `deny.toml` (Task 0) carries the matching `[sources] allow-git = ["https://github.com/penguintechinc/penguin-libs"]` entry, or `cargo deny check` refuses the git source outright.
+
+**Executor-supplied inputs (git revs, R53).** This plan pins every `penguin-libs` crate dependency by full 40-character merge-commit SHA on that crate's own `release/rust-*/v0.1.x` branch — never a branch name, never `HEAD`, never invented. These SHAs are supplied to the task executor at dispatch time, as the named inputs below; every `Cargo.toml` snippet in this plan that needs one writes the literal placeholder shown, substituted by the executor, never a guessed hash:
+
+| Input | Crate | Pinned from branch | Used by |
+|---|---|---|---|
+| `LICENSING_REV` | `penguin-licensing` | `release/rust-licensing/v0.1.x` | Task 1's `Cargo.toml` -- a live dependency today |
+| `SPINE_REV` | `penguin-spine` | `release/rust-spine/v0.1.x` | Declared now for cross-plan consistency; **not** a live `Cargo.toml` line in this plan -- `src/spine/` stays PROVISIONAL(M1) until M1 executes, at which point the swap task adds this exact pin |
+| `LOGGING_REV` | `penguin-logging` | `release/rust-logging/v0.1.x` | Declared now for cross-plan consistency; **not** a live `Cargo.toml` line -- `telemetry.rs` (Task 4) stays on local `tracing`+OTel wiring until M6, per Global Constraints |
+| `BUNDLE_HOST_REV` | `penguin-bundle-host` | `release/rust-bundle-host/v0.1.x` | Declared now for cross-plan consistency; **not** a live `Cargo.toml` line -- `src/hostapi/wire.rs` (Task 13) stays PROVISIONAL(M1) until M1c executes |
+| `CONNECTORS_REV` | `penguin-connectors` | n/a | **Not applicable** -- this plan does not depend on `penguin-connectors` |
 
 **Commands — containerized `make` targets only.** Every `Run:` line in this plan invokes a `make -C core/svc_process <target>` created by **Task 0**, which builds a pinned `Dockerfile.ci` toolchain image; nothing runs host `cargo`, `rustc`, `semgrep`, `gitleaks` or `trivy` (`~/.claude/rules/backend-rust.md`; `general.md` Build & Deployment Requirements). Extra cargo arguments ride on `ARGS="…"`. **Task 0 therefore executes before Task 1**, despite being written last.
 
@@ -78,94 +88,104 @@ tokio (test-util feature) = "=1.53.1"
 
 | Source plan | Names this plan must match |
 |---|---|
-| **penguin-spine** (`penguin-libs` `docs/plan-penguin-spine`, `docs/superpowers/plans/2026-09-14-penguin-spine.md`) | `Scope`, `Stage`, `TENANT_WIDE_SEGMENT`, `dlq_key`, `parse_scope_from_key`, `PlatformEvent`, `Source`, `StageEnvelope`, `PROCESS_TARGET_APP_ID_KEY`, `EnvelopeError`, `DlqRecord`, `DlqErrorDetail`, `DlqErrorKind`, `DlqError`, `SpineError`, `SpineMetrics`, `NoopMetrics`, `SpineConfig`, `validate_block_timeout`, `ProbeClass`, `ProbeResult`, `classify_connect_error`, `probe_valkey`, `Grant`, `Delivered`, `GroupStats`, `SpineClient` (`connect`, `append`, `ensure_group`, `destroy_group`, `ack`, `dead_letter`, `claim_stale`, `group_stats`), `GroupReader` (`connect`, `read`, `ensure_granted`) |
+| **penguin-spine** (`penguin-libs` `docs/plan-penguin-spine`, `docs/superpowers/plans/2026-09-14-penguin-spine.md`) | `Scope`, `Stage`, `TENANT_WIDE_SEGMENT`, `dlq_key`, `parse_scope_from_key`, `PlatformEvent`, `Source`, `StageEnvelope`, `ENVELOPE_SCHEMA_VERSION` (`= 2`, D30 — no dual-read), `Trace`, `Binding`, `trace_id_from_traceparent`, `PROCESS_TARGET_APP_ID_KEY`, `EnvelopeError`, `DlqRecord` (incl. `workstream_id: Option<String>`, `trace: Option<Trace>`), `DlqErrorDetail`, `DlqErrorKind` (10 variants incl. `TenantBoundary`, `.as_str()`, `.never_retry()`), `DlqError`, `SpineError`, `SpineMetrics`, `NoopMetrics`, `SpineConfig`, `validate_block_timeout`, `ProbeClass`, `ProbeResult`, `classify_connect_error`, `probe_valkey`, `Grant`, `Delivered`, `GroupStats`, `SpineClient` (`connect`, `append`, `ensure_group`, `destroy_group`, `ack`, `dead_letter`, `claim_stale`, `group_stats`, `append_usage`), `GroupReader` (`connect`, `read`, `ensure_granted`), `BindingKeyEntry`, `BindingKeyring` (`from_entries`, `load`, `signing_kid_and_key`, `verify_key_for`), `BindingInput`, `compute_binding_mac`, `verify_binding`, `ScopeCheck` (`check_against_key`, `check_against_grant`), `BoundaryError` (5 variants, `.reason()`, `.to_dlq_error()`), `RESERVED_IDENTITY_FIELDS`, `strip_bundle_identity_fields`, `USAGE_STREAM_KEY`, `HostCallKind`, `HostCallCounts`, `UsageDelta` (incl. `UsageDelta::zero`), `UsageBatcher` (`record`, `flush`, `is_empty`) — the last block (`BindingKeyEntry` through `UsageBatcher`) is D30/D31 (spec §5.11, §5.12), added to the real crate after this table's first draft; **Task 21** below wires all of it into `svc-process` |
 | **penguin-logging** (`penguin-libs` `docs/plan-penguin-logging`, `…/2026-09-14-penguin-logging.md`) | `ServiceConfig` + `ServiceConfig::from_env`, `OtlpProtocol`, `init(ServiceConfig) -> (TelemetryGuard, LevelHandle, prometheus::Registry)`, `TelemetryGuard::shutdown`, `LevelHandle::set_level`/`current`, `SENSITIVE_KEYS`, `sanitize_value`, `sanitize_json_str`, `Sanitized<T>`, `record_latency_ms`, `record_latency_seconds`, `counter_add`, `gauge_set`, `inject_trace_context`, `context_from_trace_context`, `DependencyClass`, `DependencyStatus`, `ComponentTransport`, `HealthState` (`set_dependency`, `set_transport`, `set_sandbox`, `set_extra`, `snapshot`), `HealthBody`, `health::router`/`liveness_readiness_router`/`metrics_router`, `DependencyMetrics::record`, `TransportAspect`, `TransportMetrics::mark_secure`, `warn_insecure_transport`, `render_prometheus_text`, `testing::{init_test_telemetry, TelemetryCounts}` |
-| **penguin-bundle-host** (`penguin-libs` worktree `.worktrees/plan-penguin-bundle-host`, `…/2026-09-14-penguin-bundle-host.md`) — **must match plan M1c** | `Frame`, `SandboxInfo`, `read_frame`, `write_frame`, `FrameTransport`; `ApprovedPermissions` (`from_json(app_id, summary) -> Result<Self, ApprovalsError>`, fields `app_id`/`egress`/`tables`/`capabilities`/`routes_to`/`limits`), `EgressRule`, `TableGrant`, `ApprovedLimits`, `Capability` (`Http`/`Kv`/`Db`/`Relay`/`Flags`/`Log`/`Clock`/`Context`), `ApprovalsError`; host traits `HttpEgress` (`execute`), `KvStore` (`get`/`set`/`delete`/`increment`), `DbExecutor` (`execute`), `RelayPush` (`push`), `Flags` (`enabled`/`tier`), `Logger` (`write`), `Clock` (`now_millis`/`now_rfc3339`/`monotonic_nanos`), and `PreparedHttpRequest`, `RawHttpResponse`, `HttpTransportError`, `KvBackendError`, `DbValue`, `DbRows`, `DbBackendError`, `RelayBackendError`, `LogLevel` |
+| **penguin-bundle-host** (`penguin-libs` `docs/plan-penguin-bundle-host`, `…/2026-09-14-penguin-bundle-host.md`) — **must match plan M1c** | **Confirmed current, re-verified against the branch tip at this plan's self-review:** `ApprovedPermissions` (`from_json(app_id, summary) -> Result<Self, ApprovalsError>`, fields `app_id`/`egress`/`tables`/`capabilities`/`routes_to`/`limits`), `EgressRule { host, methods }`, `TableGrant { name, read, write }`, `ApprovedLimits { timeout_ms, memory_mb, egress_rps }`, `ApprovalsError`, `SandboxInfo`. **Superseded since this plan's Task 13 was authored — see "Known divergence: wire protocol shape" immediately below, do not use the names in this cell's second half as current:** ~~`Frame`, `read_frame`, `write_frame`, `FrameTransport`~~ (the real crate now splits these as `wire::frame::{read_frame, write_frame, FrameError, MAX_FRAME_BYTES}` + `wire::message::Frame` + `wire::transport::FrameTransport` — the function names survive, the module split does not); ~~`Capability` (`Http`/`Kv`/`Db`/`Relay`/`Flags`/`Log`/`Clock`/`Context`)~~ is now `CapabilityKind` in `wire::message`; the real crate has **no** `FromExecutor`/`ToExecutor` pair and no separate `HttpEgress`/`KvStore`/`DbExecutor`/`RelayPush`/`Flags`/`Logger`/`Clock` host-trait names, no `PreparedHttpRequest`/`RawHttpResponse`/`HttpTransportError`/`KvBackendError`/`DbValue`/`DbRows`/`DbBackendError`/`RelayBackendError`/`LogLevel` — those were this table's earlier draft's own invention, made before a wire-shape plan existed to check against, not names the crate ever settled on. |
 | **M3 `svc_action`** (`docs/superpowers/plans/2026-09-14-rust-data-plane-m3-svc-action.md`) — **must match plan M3** | The `Dockerfile.ci` + containerized `Makefile` template (M3 Task 2); the action-stream entry format this plan writes and M3 reads: one Valkey stream entry with exactly one field, `env`, whose value is the `StageEnvelope` JSON with `stage: "action"` — byte-identical on both sides, asserted by the shared golden fixture `tests/golden/entries/action_entry.json` (Task 32) |
 
 `penguin-bundle-host` is being written concurrently with this plan; every name in its row above was read from the in-progress plan file and is marked **must match plan M1c** at each use site. If M1c's published signature differs, change the local PROVISIONAL module to match M1c — never the other way around.
+
+**Known divergence: wire protocol shape (found at this plan's self-review, not yet reconciled).** `penguin-bundle-host`'s Task 4 settled on a **unified `wire::message::Message` enum** (`Frame`, `Message`, `ExportKind`, `CapabilityKind`, `ErrorCode`, `SandboxInfo`, `HelloLimits`, `LoadLimits`, `InvocationScope` — one `Message` type carrying both directions, discriminated by variant) plus a first-class `InvocationScope { tenant, community, workstream_id, event_id, trace, .. }` riding on every `Invoke`/`HostCall` frame (D30, spec §5.11/§6.6) — scope travels **on the wire itself**, never as a bundle-supplied argument. **Task 13** (`hostapi/wire.rs`) below was authored before that shape was settled and instead defines two separate enums, `FromExecutor`/`ToExecutor`, with no `InvocationScope` at all (trace travels only as a bare `trace_context: Option<String>` string on `ToExecutor::Invoke`). This is a genuine, unreconciled shape difference, not a cosmetic renaming — **flagging it precisely here rather than either hiding it or attempting an under-informed rewrite of Tasks 13/14/16/20/25/28/35** (the seven tasks that touch the wire enums) is this self-review's deliberate choice, for two reasons: (1) reconciling it correctly requires reading `penguin-bundle-host`'s Task 4 in full (the `Message` variant fields, `InvocationScope`'s exact shape, how `wire::transport::FrameTransport` composes with `wire::frame::{read_frame,write_frame}`) rather than guessing from a name list, and (2) `penguin-bundle-host` itself is still mid-plan (not yet executed, per the crate-plan dependency note above) — M4's own Task 13 is already explicitly PROVISIONAL and due for a mechanical-or-not swap once M1c lands regardless. **Action for whoever executes M1c and then swaps M4's `hostapi/` onto the real crate:** re-derive Tasks 13/14/16/20/25/28/35's wire-facing code against `penguin_bundle_host::wire::message::Message`/`InvocationScope` directly at that time, treating this as a real (not mechanical) migration for the wire layer specifically — every other PROVISIONAL swap in this plan (`spine/`, `hostcap::flags`'s `penguin-licensing` usage) is unaffected and stays mechanical.
 
 ## File Structure
 
 ```
 core/svc_process/
   Cargo.toml  Cargo.lock  deny.toml  rust-toolchain.toml
-  Dockerfile  Dockerfile.ci  Makefile  .dockerignore  README.md
+  Dockerfile  Dockerfile.ci  Makefile  .dockerignore  README.md          (Task 0 + Task 35)
   build/scanner-images.env   digest-pinned semgrep/gitleaks/trivy images (Task 0)
   src/
-    main.rs                    thin binary entrypoint (mirrors svc_streaming)
-    lib.rs                     run()/run_with_shutdown() wiring
-    config.rs                  CliConfig + Config + Secret
-    error.rs                   ProcessError (internal) + ApiError (HTTP)
-    telemetry.rs                tracing + OTel + Prometheus bootstrap (local, see Global Constraints)
+    main.rs                    thin binary entrypoint; --healthcheck (Task 27) + run() (Task 28)
+    lib.rs                     run() -- full service wiring (Task 28)
+    config.rs                  CliConfig + Config + Secret (Task 2); binding/metering fields (Task 21)
+    error.rs                   ProcessError (internal) + ApiError (HTTP) (Task 3)
+    telemetry.rs               tracing + OTel + Prometheus bootstrap, local wiring (Task 4)
     spine/
       mod.rs
-      envelope.rs              PlatformEvent, EventSource, StageEnvelope   -- PROVISIONAL(M1)
-      keys.rs                  Scope, key builders                        -- PROVISIONAL(M1)
-      client.rs                SpineClient (admin ops)                    -- PROVISIONAL(M1)
-      reader.rs                GroupReader (dedicated blocking connection) -- PROVISIONAL(M1)
-      dlq.rs                   DlqRecord, DlqErrorKind
+      envelope.rs              PlatformEvent, EventSource, StageEnvelope, Trace, Binding -- PROVISIONAL(M1), D30 (Task 5)
+      keys.rs                  Scope, TENANT_WIDE_SEGMENT, parse_scope_from_key, dlq_key -- PROVISIONAL(M1) (Task 6)
+      client.rs                SpineClient (admin ops + append_usage)    -- PROVISIONAL(M1) (Tasks 8, 21, 28)
+      reader.rs                GroupReader (dedicated connection, ensure_granted) -- PROVISIONAL(M1) (Task 9)
+      dlq.rs                   DlqRecord, DlqErrorKind (incl. TenantBoundary), D30 fields (Task 7)
+      binding.rs               BindingKeyring, compute/verify_binding, ScopeCheck, BoundaryError -- D30 (Task 21)
+      usage.rs                 UsageDelta, HostCallCounts, UsageBatcher -- D31 (Task 21)
     consumes/
       mod.rs
-      matcher.rs               consumes glob + filter matching
+      matcher.rs               consumes glob + filter matching (Task 10)
     distribution/
       mod.rs
-      client.rs                distribution API v2 poller
-      model.rs                 BundleRow, Grant, ManifestSubset
+      client.rs                distribution API v2 poller (Task 11)
+      model.rs                 BundleRow, Grant, ManifestSubset (Task 11)
     registry/
-      mod.rs                   bundle/grant reconciliation, worker lifecycle
+      mod.rs                   bundle/grant reconciliation, worker lifecycle (Task 12); is_active_for_tenant (Task 24)
     hostapi/
-      mod.rs
-      listener.rs              mTLS TCP listener + per-connection actor
-      wire.rs                  frame codec + message enums                -- PROVISIONAL(M1, penguin-bundle-host::wire)
-      dispatch.rs               invoke/host-call multiplexing by id
+      mod.rs                   HostCallHandler trait, HostCapError (Task 15)
+      listener.rs              mTLS TCP listener + per-connection actor (Task 14); local_addr() (Task 35)
+      wire.rs                  frame codec + message enums -- PROVISIONAL(M1, penguin-bundle-host::wire) (Task 13)
+      dispatch.rs              invoke/host-call multiplexing, Invoker trait (Tasks 16, 25)
     hostcap/
-      mod.rs
-      context.rs
-      kv.rs
-      db.rs
-      http.rs
-      flags.rs
-      log.rs
-      clock.rs
-    trip.rs                    sandbox trip counting + three-strike disable
+      mod.rs                   BundleGrant, CompositeHandler (Tasks 15, 20)
+      context.rs               ContextArgs, build_bundle_context (Task 15)
+      kv.rs                    (Task 17)
+      db.rs                    parser+role+RLS-scoped db capability (Task 20)
+      http.rs                  guarded egress capability (Task 19)
+      flags.rs  log.rs  clock.rs                                        (Task 18)
+    trip.rs                    sandbox trip counting + three-strike disable, classify_invoke_error (Task 22)
     builtins/
       mod.rs
-      moderation_gate.rs       always-on content-moderation gate (built-in)
-      moderation_enforce.rs    enforcement routing to waddles.community.moderation.default
-      routing.rs               _target_app_id / routes_to + per-bundle action emit
-    worker.rs                  per-(bundle,stream) consumer task orchestration
-    reaper.rs                  XAUTOCLAIM sweep + XINFO GROUPS stats sampler
+      moderation_gate.rs       always-on content-moderation gate (built-in) (Task 23)
+      moderation_enforce.rs    enforcement routing to waddles.community.moderation.default (Task 23)
+      routing.rs               _target_app_id / routes_to + per-bundle action emit, D30 stripping (Task 24)
+    worker.rs                  per-(bundle,stream) consumer task orchestration, Worker::process_entry (Task 25)
+    reaper.rs                  XAUTOCLAIM sweep + XINFO GROUPS stats sampler, shares Worker::process_entry (Task 26)
     http/
-      mod.rs                   AppState + router()/metrics_router()
-      health.rs                /health /healthz /metrics
-      selfcheck.rs              startup connectivity self-check (§12.6)
+      mod.rs                   AppState + router()/metrics_router() (Task 27)
+      health.rs                /health /healthz /metrics + --healthcheck local probe (Task 27)
+      selfcheck.rs             startup connectivity self-check, ProbeClass/ProbeResult (§12.6) (Task 28)
   tests/
-    config.rs  telemetry.rs  health.rs
-    envelope_golden.rs         golden fixture contract tests (§14.1)
-    keys_golden.rs
-    consumes_matcher.rs
-    moderation_gate.rs
-    routing_negative.rs        §14.6 negative tests owned by this plan
-    grant_isolation.rs
-    trip_disable.rs
-    db_capability_guard.rs
-    e2e_process_pipeline.rs    real Valkey + fake executor
-    fakes/mod.rs               FakeExecutor test harness
+    envelope_golden.rs         golden fixture contract tests (§14.1) (Task 5)
+    keys_golden.rs             (Task 6)
+    spine_client_integration.rs (live Valkey, #[ignore]) (Task 8)
+    action_entry_golden.rs     shared action-stream entry contract, "must match plan M3" (Task 33)
+    grant_isolation.rs         §14.11 negative tests: ungranted stream, grant revocation, group isolation (Task 34)
+    db_capability_guard.rs     §14.11 negative tests: undeclared egress, live-Postgres RLS (Task 35)
+    e2e_process_pipeline.rs    real Valkey + FakeExecutor, trace continuity + usage totals (Task 35)
+    fakes/mod.rs               FakeExecutor test harness (real wire protocol over real TLS) (Task 35)
+    (unit tests for config/error/telemetry/health/spine::*/hostcap::*/builtins::*/worker/reaper/trip
+     are inline `#[cfg(test)] mod tests` blocks in their own `src/` files, per this crate's convention --
+     `tests/` holds only cross-file integration, golden-fixture, negative and e2e coverage)
 
 .github/workflows/
-  rust-svc-process.yml
-  build-svc-process.yml
+  rust-svc-process.yml          fmt/clippy/deny/audit/coverage/semgrep/gitleaks/trivy on PR (Task 32)
+  build-svc-process.yml         beta image build-and-push to ghcr.io on merge (Task 32)
 
 k8s/helm/waddlebot/templates/
-  svc-process.yaml               (modified: real image, host-api port/volumes)
-  svc-process-executor.yaml      (new: Deployment + Service, gVisor RuntimeClass)
-  svc-process-networkpolicy.yaml (new: CiliumNetworkPolicy rows)
-k8s/helm/waddlebot/values.yaml   (modified: pipeline.svcProcess.*, pipeline.executor.*, sandbox.*)
+  svc-process.yaml               (modified: real image, host-api port/volumes) (Task 29)
+  svc-process-executor.yaml      (new: Deployment + Service, gVisor RuntimeClass) (Task 29)
+  svc-process-networkpolicy.yaml (new: CiliumNetworkPolicy rows) (Task 29)
+k8s/helm/waddlebot/values.yaml   (modified: pipeline.svcProcess.*, pipeline.executor.*, sandbox.*,
+                                 security.envelopeBinding.*, metering.*) (Task 29)
 
-config/postgres/rbac-matrix.yaml (created by this plan if M1/M6 has not yet: svc_process +
-                                 bundle-role rows; Task 30)
-config/valkey/acl-matrix.yaml    (created by this plan if absent: svc-process row; Task 30)
+-- repo-root config shared across services/milestones, not under core/svc_process/ --
+config/postgres/rbac-matrix.yaml (modified: svc_process role row + bundle_rls_tables list) (Task 30)
+config/valkey/acl-matrix.yaml    (modified: svc-process row, waddles:usage +xadd-only grant) (Task 30)
+tests/rbac/test_matrix_equality.py (repo-root Python test asserting both matrices carry these rows) (Task 30)
+tests/helm/svc_process_chart_test.sh (repo-root shell test for the Helm chart) (Task 29)
+tests/golden/entries/action_entry.json (repo-root, shared with M1/M3's own golden-fixture trees) (Task 33)
+
+-- hub-api tree, repo root -- different toolchain (Python/Alembic), not core/svc_process/ --
+alembic/versions/0024_process_stage_rls.py  RLS on bundle-owned tables, chains after M2b's 0023 (Task 31)
+alembic/tests/test_0024_process_stage_rls.py                                                    (Task 31)
 ```
 
 ---
@@ -174,14 +194,14 @@ config/valkey/acl-matrix.yaml    (created by this plan if absent: svc-process ro
 
 ### Task 0: Containerized toolchain image, `Makefile`, rootless runtime `Dockerfile`
 
-> **Execute this task FIRST.** It is numbered `0` (not `21`) because it was added when this plan was completed, and every other task's `Run:` line already invokes the `make` targets it creates. Nothing in Tasks 1-34 runs host `cargo` — `~/.claude/rules/backend-rust.md` and `general.md` Build & Deployment Requirements both require builds inside a container.
+> **Execute this task FIRST.** It is numbered `0` (not `21`) because it was added when this plan was completed, and every other Rust task's `Run:` line already invokes the `make` targets it creates. Nothing in Tasks 1-35 runs host `cargo` — `~/.claude/rules/backend-rust.md` and `general.md` Build & Deployment Requirements both require builds inside a container. (**Task 31** is the one exception to "every task" below, by design: it is a hub-api Alembic migration in a different repo tree with its own Python/`alembic` toolchain, not a Rust `core/svc_process` task at all — see that task's own header note.)
 
 **Files:**
 - Create: `core/svc_process/Dockerfile.ci`, `core/svc_process/Makefile`, `core/svc_process/Dockerfile`, `core/svc_process/.dockerignore`, `core/svc_process/build/scanner-images.env`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `make -C core/svc_process {toolchain-build,lockfile,build,test,lint,fmt,fmt-check,clippy,test-security,audit,coverage,semgrep,gitleaks,trivy,docker-build,structure-test,clean}`. Every `Run:` line in Tasks 1-34 uses these targets and passes extra cargo arguments through `ARGS="…"` — no task ever invokes host `cargo`. **Must match plan M3** (`core/svc_action/Dockerfile.ci` + `Makefile`, M3 Task 2): the two files are the same template with `svc-action` → `svc-process`, `8202` → `8201`; keep them diffable.
+- Produces: `make -C core/svc_process {toolchain-build,lockfile,build,test,lint,fmt,fmt-check,clippy,test-security,audit,coverage,semgrep,gitleaks,trivy,docker-build,structure-test,clean}`. Every `Run:` line in Tasks 1-35 that touches `core/svc_process` uses these targets and passes extra cargo arguments through `ARGS="…"` — no task ever invokes host `cargo`. (Task 31's hub-api Alembic migration is the sole exception — a different repo tree, a different toolchain, by design.) **Must match plan M3** (`core/svc_action/Dockerfile.ci` + `Makefile`, M3 Task 2): the two files are the same template with `svc-action` → `svc-process`, `8202` → `8201`; keep them diffable.
 
 - [ ] **Step 1: Write `core/svc_process/Dockerfile.ci`**
 
@@ -357,8 +377,13 @@ target/
 
 FROM rust:1.97-slim-bookworm@sha256:2775a09d208ff0d7c1f50490c45b62db929e87ba1dcbc3f2132ac71a704bcdd3 AS builder
 
+# `git` + `ca-certificates` are required here (not just in Dockerfile.ci)
+# because `penguin-licensing` is a git+rev dependency (R53, Global
+# Constraints "Executor-supplied inputs") -- `cargo build --locked` still
+# performs a `git checkout` of the pinned rev even though the exact
+# commit is already fixed in Cargo.lock; it does not vendor the source.
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y cmake build-essential pkg-config \
+    && apt-get install --no-install-recommends -y cmake build-essential pkg-config git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -415,7 +440,7 @@ git add core/svc_process/Dockerfile.ci core/svc_process/Makefile core/svc_proces
 git commit -m "$(cat <<'EOF'
 ci(svc-process): containerized toolchain image, make targets, rootless runtime Dockerfile
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -492,7 +517,7 @@ rand = "=0.8.5"
 # See Global Constraints crate-plan note: pinned assuming M1 has published
 # rust-licensing 0.1.0; source already exists at
 # penguin-libs/packages/rust-licensing.
-penguin-licensing = "=0.1.0"
+penguin-licensing = { git = "https://github.com/penguintechinc/penguin-libs", rev = "${LICENSING_REV}", version = "=0.1.0" }  # git+rev, R53 -- not yet on crates.io
 
 [dev-dependencies]
 http-body-util = "=0.1.3"
@@ -506,7 +531,14 @@ codegen-units = 1
 strip = true
 ```
 
-- [ ] **Step 2: Write `deny.toml`** — copy `core/svc_streaming/deny.toml` verbatim except the package-specific bans stay (they are supply-chain rules, not per-service), and add no new `deny` entries yet (later tasks add `openssl`/`native-tls` if not already present — they already are).
+- [ ] **Step 2: Write `deny.toml`** — copy `core/svc_streaming/deny.toml` verbatim except the package-specific bans stay (they are supply-chain rules, not per-service), and add no new `deny` entries yet (later tasks add `openssl`/`native-tls` if not already present — they already are). **R53:** also add (or confirm present, if the `svc_streaming` template already carries one) a `[sources]` table allowing exactly the one git dependency this crate takes:
+```toml
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = ["https://github.com/penguintechinc/penguin-libs"]
+```
+Without this, `cargo deny check` (part of `make test-security`) refuses `penguin-licensing`'s git+rev dependency outright as an unknown source.
 
 - [ ] **Step 3: Write `rust-toolchain.toml`**
 
@@ -593,7 +625,7 @@ git add Cargo.toml Cargo.lock deny.toml rust-toolchain.toml src/ .gitignore
 git commit -m "$(cat <<'EOF'
 feat(svc-process): scaffold Rust crate on the svc_streaming template
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -990,7 +1022,7 @@ git add src/config.rs
 git commit -m "$(cat <<'EOF'
 feat(svc-process): env-driven Config/CliConfig with client-rule-1 validation
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -1169,7 +1201,7 @@ git add core/svc_process/src/error.rs
 git commit -m "$(cat <<'EOF'
 feat(svc-process): ApiError (HTTP) and ProcessError (internal) surfaces
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -1207,7 +1239,7 @@ git add core/svc_process/src/telemetry.rs
 git commit -m "$(cat <<'EOF'
 feat(svc-process): tracing + OTLP + Prometheus telemetry bootstrap
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -1215,7 +1247,7 @@ EOF
 
 ---
 
-### Task 5: Envelope types (`spine/envelope.rs`)
+### Task 5: Envelope types (`spine/envelope.rs`) — D30 workstream identity + trace + binding
 
 **Files:**
 - Create: `core/svc_process/src/spine/envelope.rs`
@@ -1223,16 +1255,18 @@ EOF
 - Test: `core/svc_process/tests/envelope_golden.rs`
 
 **Interfaces:**
-- Consumes: `tests/golden/envelopes/{valid,invalid}/*.json`, `tests/golden/entries/*.json` (produced by milestone M1 at the repo root, per spec Sec14.1 -- if this directory does not exist yet when this task runs, STOP and report it: M1 has not landed, which the milestone graph says must precede M4).
-- Produces: `pub struct PlatformEvent { pub platform: String, pub event_type: String, pub actor: Option<String>, pub payload: serde_json::Map<String, serde_json::Value>, pub occurred_at: String, pub source: Option<EventSource> }`; `pub struct EventSource { pub platform: String, pub account_id: String, pub channel_id: Option<String> }`; `pub struct StageEnvelope { pub tenant: String, pub community: Option<String>, pub app_id: String, pub stage: String, pub event: PlatformEvent, pub ts: String, pub target_app_id: Option<String>, pub trace_context: Option<String> }`; `pub const PROCESS_TARGET_APP_ID_KEY: &str = "_target_app_id";`; `#[derive(Debug, Error)] pub enum EnvelopeError`. Both structs `#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]` with `#[serde(deny_unknown_fields)]` for strict deserialization (spec Sec6.1.2 "Strictness"). Every later task imports `StageEnvelope`/`PlatformEvent` from `crate::spine::envelope`, never redefines them.
+- Consumes: `tests/golden/envelopes/{valid,invalid}/*.json`, `tests/golden/entries/*.json` (produced by milestone M1 at the repo root, per spec Sec14.1 -- if this directory does not exist yet when this task runs, STOP and report it: M1 has not landed, which the milestone graph says must precede M4). The fixtures are the **D30 shape** (`schema_version: 2`, `workstream_id`, `event_id`, `trace`, `binding` present) -- a `tests/golden` tree still carrying the pre-D30 shape (`schema_version` absent/`1`, `trace_context` instead of `trace`) means M1 has not yet landed the D30 fixture regeneration either; STOP and report that too.
+- Produces: `pub struct PlatformEvent { pub platform: String, pub event_type: String, pub actor: Option<String>, pub payload: serde_json::Map<String, serde_json::Value>, pub occurred_at: String, pub source: Option<EventSource> }`; `pub struct EventSource { pub platform: String, pub account_id: String, pub channel_id: Option<String> }`; `pub struct Trace { pub traceparent: String, pub tracestate: Option<String> }`; `pub struct Binding { pub kid: String, pub mac: String }`; `pub struct StageEnvelope { pub schema_version: u32, pub tenant: String, pub community: Option<String>, pub app_id: String, pub stage: String, pub event: PlatformEvent, pub ts: String, pub target_app_id: Option<String>, pub workstream_id: String, pub event_id: String, pub session_id: Option<String>, pub trace: Option<Trace>, pub binding: Binding }`; `pub const ENVELOPE_SCHEMA_VERSION: u32 = 2;`; `pub const PROCESS_TARGET_APP_ID_KEY: &str = "_target_app_id";`; `pub fn trace_id_from_traceparent(s: &str) -> Option<&str>` (extracts the 32-hex trace-id segment -- spec Sec5.11's `binding.mac` formula input, not the full `traceparent` string); `#[derive(Debug, Error)] pub enum EnvelopeError`. Both `Trace`/`Binding` and `StageEnvelope` are `#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]` with `#[serde(deny_unknown_fields)]` for strict deserialization, `schema_version` checked equal to `ENVELOPE_SCHEMA_VERSION` with **no dual-read** of the pre-D30 shape (D3, D30 -- spec Sec6.1.2), and `binding` is **required** on every envelope, never optional (D30: "there is no unsigned shape"). This mirrors `penguin_spine`'s own Task 4 exactly (spec Sec4.7) -- see Global Constraints borrowed-names table; `workstream_id`/`event_id`/`session_id`/`trace`/`binding` replace the pre-D30 single `trace_context: Option<String>` field this task's earlier draft carried. Every later task imports `StageEnvelope`/`PlatformEvent`/`Trace`/`Binding`/`trace_id_from_traceparent` from `crate::spine::envelope`, never redefines them; **Task 21**'s `binding` module is this task's direct consumer.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 ```rust
 // core/svc_process/tests/envelope_golden.rs
 //! Contract tests against the shared golden fixtures (spec Sec14.1) --
 //! asserts svc-process's Rust envelope types agree byte-for-byte with the
 //! fixtures every other implementation (flask_core, penguin-spine) reads.
+//! Fixtures are the D30 shape: schema_version 2, workstream_id, event_id,
+//! trace, binding.
 use std::fs;
 use std::path::Path;
 use svc_process::spine::envelope::StageEnvelope;
@@ -1245,7 +1279,7 @@ fn golden_dir() -> &'static Path {
 fn valid_envelopes_round_trip_byte_identical() {
     let dir = golden_dir().join("envelopes/valid");
     let entries: Vec<_> = fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("reading {dir:?}: {e} -- has M1 landed?"))
+        .unwrap_or_else(|e| panic!("reading {dir:?}: {e} -- has M1 landed the D30 fixture regeneration?"))
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
         .collect();
@@ -1256,6 +1290,7 @@ fn valid_envelopes_round_trip_byte_identical() {
         let original: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let env: StageEnvelope = serde_json::from_value(original.clone())
             .unwrap_or_else(|e| panic!("{:?}: {e}", entry.path()));
+        assert_eq!(env.schema_version, 2, "{:?} is not the D30 shape", entry.path());
         let round_tripped = serde_json::to_value(&env).unwrap();
         assert_eq!(original, round_tripped, "{:?} did not round-trip byte-identical", entry.path());
         examined += 1;
@@ -1286,29 +1321,35 @@ fn invalid_envelopes_fail_deserialization() {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `make -C core/svc_process test ARGS="--test envelope_golden"`
-Expected: FAIL to compile (`svc_process::spine::envelope` does not exist), or if `tests/golden/` is missing, the test panics naming that gap explicitly — either way, this is the expected pre-implementation state.
+Expected: FAIL to compile (`svc_process::spine::envelope` does not exist), or if `tests/golden/` is missing, the test panics naming that gap explicitly -- either way, this is the expected pre-implementation state.
 
 - [ ] **Step 3: Implement `spine/mod.rs` and `spine/envelope.rs`**
 
 ```rust
 // core/svc_process/src/spine/mod.rs
 //! Valkey Streams spine: envelope types, key builders, admin/consumer
-//! clients, DLQ record shape. PROVISIONAL(M1): mirrors the `penguin-spine`
-//! crate spec Sec4.7 defines; swap `crate::spine::` for `penguin_spine::`
-//! once that crate is published -- see Global Constraints.
+//! clients, DLQ record shape, D30 binding verification, D31 usage
+//! metering. PROVISIONAL(M1): mirrors the `penguin-spine` crate spec
+//! Sec4.7 defines; swap `crate::spine::` for `penguin_spine::` once that
+//! crate is published -- see Global Constraints.
+pub mod binding;
 pub mod client;
 pub mod dlq;
 pub mod envelope;
 pub mod keys;
 pub mod reader;
+pub mod usage;
 ```
+
+(`binding`/`usage` are empty placeholder modules — `pub struct Placeholder;` with a one-line doc comment, matching Task 1's scaffolding convention — until Task 21 fills them in; declaring them here now means Task 21's diff is additive-only.)
 
 ```rust
 // core/svc_process/src/spine/envelope.rs
 //! `PlatformEvent`/`StageEnvelope` -- the queue-crossing contract, spec
-//! Sec6.1. Strict deserialization: an unknown top-level field, a missing
-//! required field, or a wrong type is refused, never coerced (Sec6.1.2
-//! "Strictness").
+//! Sec6.1, Sec5.11 (D30 workstream identity, trace, tenant-binding).
+//! Strict deserialization: an unknown top-level field, a missing required
+//! field, a wrong type, or `schema_version != 2` is refused, never coerced
+//! (Sec6.1.2 "Strictness"; D3/D30 "no dual-read").
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -1320,6 +1361,15 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[error("envelope invalid: {0}")]
 pub struct EnvelopeError(pub String);
+
+fn env_err(msg: impl Into<String>) -> EnvelopeError {
+    EnvelopeError(msg.into())
+}
+
+/// The only `StageEnvelope.schema_version` this module accepts. No
+/// dual-read (D3, D30): a `1` or absent value is the pre-D30 shape and is
+/// rejected outright rather than interpreted (spec Sec6.1.2).
+pub const ENVELOPE_SCHEMA_VERSION: u32 = 2;
 
 /// Which connection an event came in on -- spec Sec6.1.1.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1358,10 +1408,143 @@ pub struct PlatformEvent {
 /// before enqueuing.
 pub const PROCESS_TARGET_APP_ID_KEY: &str = "_target_app_id";
 
-/// One pipeline queue message routed between stages -- spec Sec6.1.2.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+fn is_valid_traceparent(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('-').collect();
+    parts.len() == 4
+        && parts[0] == "00"
+        && parts[1].len() == 32
+        && parts[1].chars().all(|c| c.is_ascii_hexdigit())
+        && parts[2].len() == 16
+        && parts[2].chars().all(|c| c.is_ascii_hexdigit())
+        && parts[3].len() == 2
+        && parts[3].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Extracts the 32-hex trace-id segment from a validated `traceparent`
+/// (spec Sec5.11: `binding.mac`'s input is this segment, not the full
+/// `traceparent` string). Returns `None` if `s` is not a valid traceparent.
+/// **Task 21**'s `verify_binding` is this function's direct caller.
+pub fn trace_id_from_traceparent(s: &str) -> Option<&str> {
+    if !is_valid_traceparent(s) {
+        return None;
+    }
+    s.split('-').nth(1)
+}
+
+fn is_lowercase_hex_64(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RawTrace {
+    traceparent: String,
+    #[serde(default)]
+    tracestate: Option<String>,
+}
+
+/// The W3C trace context carried on every envelope (spec Sec5.11,
+/// Sec6.1.2) -- **supersedes the pre-D30 single-field `trace_context`**.
+/// Absent means "no parent span"; when present, `traceparent` has already
+/// passed the Sec6.1.2 shape check.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Trace {
+    /// The W3C `traceparent` string (`00-<32 hex>-<16 hex>-<2 hex>`).
+    pub traceparent: String,
+    /// The W3C `tracestate` string, or `None`.
+    pub tracestate: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for Trace {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawTrace::deserialize(deserializer)?;
+        if !is_valid_traceparent(&raw.traceparent) {
+            return Err(serde::de::Error::custom(format!(
+                "'trace.traceparent' {:?} is not a valid W3C traceparent",
+                raw.traceparent
+            )));
+        }
+        Ok(Trace { traceparent: raw.traceparent, tracestate: raw.tracestate })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawBinding {
+    kid: String,
+    mac: String,
+}
+
+/// `{kid, mac}` -- `kid` names the active HMAC key version, `mac` is the
+/// lowercase-hex `HMAC-SHA256` of spec Sec5.11's formula. Required on
+/// every envelope; there is no unsigned shape (D30). Verified by every
+/// stage on every read, before any other processing -- see **Task 21**'s
+/// `binding` module (`compute_binding_mac`/`verify_binding`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Binding {
+    /// Names the HMAC key version under which `mac` was computed.
+    pub kid: String,
+    /// Lowercase-hex HMAC-SHA256 output (64 hex chars, spec Sec5.11).
+    pub mac: String,
+}
+
+impl<'de> Deserialize<'de> for Binding {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawBinding::deserialize(deserializer)?;
+        if raw.kid.is_empty() {
+            return Err(serde::de::Error::custom("'binding.kid' must be a non-empty string, got \"\""));
+        }
+        if !is_lowercase_hex_64(&raw.mac) {
+            return Err(serde::de::Error::custom(format!(
+                "'binding.mac' {:?} must be exactly 64 lowercase hex characters",
+                raw.mac
+            )));
+        }
+        Ok(Binding { kid: raw.kid, mac: raw.mac })
+    }
+}
+
+const BUNDLE_STAGES: [&str; 3] = ["ingest", "process", "action"];
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawStageEnvelope {
+    schema_version: u32,
+    tenant: String,
+    community: Option<String>,
+    app_id: String,
+    stage: String,
+    event: PlatformEvent,
+    ts: String,
+    #[serde(default)]
+    target_app_id: Option<String>,
+    workstream_id: String,
+    event_id: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    trace: Option<Trace>,
+    binding: Binding,
+}
+
+/// One pipeline queue message routed between stages -- spec Sec6.1.2.
+/// `workstream_id`, `event_id`, `session_id`, `trace` and `binding` are
+/// the D30 workstream-identity/trace/tenant-wall fields (spec Sec5.11):
+/// minted once by svc-ingest from its own `intake_sources`/`workstreams`
+/// cache, never from payload, and copied verbatim by every later stage --
+/// a bundle's output is never read for them (spec Sec5.11 "Bundles cannot
+/// move a workstream"; **Task 24**'s routing built-in is the enforcement
+/// point for this stage).
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StageEnvelope {
+    /// Must equal [`ENVELOPE_SCHEMA_VERSION`] (`2`) -- no dual-read (D3, D30).
+    pub schema_version: u32,
     /// Non-empty; equals the `t:` segment of the key this was taken from.
     pub tenant: String,
     /// `None` renders as the literal `_tenant` key segment.
@@ -1377,9 +1560,65 @@ pub struct StageEnvelope {
     /// Set only by the `_target_app_id` cross-app-routing built-in (Task 24).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_app_id: Option<String>,
-    /// W3C `traceparent`, when the producing stage had one.
+    /// UUID; minted by svc-ingest from `intake_sources`/`workstreams`
+    /// (spec Sec5.11, Sec6.11), never from payload; copied verbatim by
+    /// every later stage, never accepted from bundle output.
+    pub workstream_id: String,
+    /// UUID v4, minted once by svc-ingest per inbound event; distinct
+    /// from the platform's own message id and the Valkey stream entry id.
+    pub event_id: String,
+    /// The platform connection/broadcast session, when the platform has
+    /// one; absent otherwise (spec Sec5.11).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trace_context: Option<String>,
+    pub session_id: Option<String>,
+    /// W3C trace context for the entry's parent span, when present.
+    /// Supersedes the pre-D30 `trace_context` field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<Trace>,
+    /// `{kid, mac}` -- the Sec5.11 tenant-binding MAC. Required.
+    pub binding: Binding,
+}
+
+impl<'de> Deserialize<'de> for StageEnvelope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawStageEnvelope::deserialize(deserializer)?;
+        if raw.schema_version != ENVELOPE_SCHEMA_VERSION {
+            return Err(serde::de::Error::custom(format!(
+                "'schema_version' must equal {ENVELOPE_SCHEMA_VERSION}, got {} -- no dual-read of the pre-D30 shape",
+                raw.schema_version
+            )));
+        }
+        if raw.tenant.is_empty() {
+            return Err(serde::de::Error::custom("'tenant' must be a non-empty string, got \"\""));
+        }
+        if !BUNDLE_STAGES.contains(&raw.stage.as_str()) {
+            return Err(serde::de::Error::custom(format!("'stage' {:?} is not one of {BUNDLE_STAGES:?}", raw.stage)));
+        }
+        if raw.workstream_id.is_empty() {
+            return Err(serde::de::Error::custom("'workstream_id' must be a non-empty string, got \"\""));
+        }
+        if raw.event_id.is_empty() {
+            return Err(serde::de::Error::custom("'event_id' must be a non-empty string, got \"\""));
+        }
+        Ok(StageEnvelope {
+            schema_version: raw.schema_version,
+            tenant: raw.tenant,
+            community: raw.community,
+            app_id: raw.app_id,
+            stage: raw.stage,
+            event: raw.event,
+            ts: raw.ts,
+            target_app_id: raw.target_app_id,
+            workstream_id: raw.workstream_id,
+            event_id: raw.event_id,
+            session_id: raw.session_id,
+            trace: raw.trace,
+            binding: raw.binding,
+        })
+    }
 }
 
 impl StageEnvelope {
@@ -1387,7 +1626,7 @@ impl StageEnvelope {
     /// -- the shape `worker.rs` (Task 25) needs to route straight to
     /// `DlqErrorKind::EnvelopeInvalid` without matching on `serde_json::Error`.
     pub fn from_json(raw: &str) -> Result<Self, EnvelopeError> {
-        serde_json::from_str(raw).map_err(|e| EnvelopeError(e.to_string()))
+        serde_json::from_str(raw).map_err(|e| env_err(e.to_string()))
     }
 }
 
@@ -1395,39 +1634,95 @@ impl StageEnvelope {
 mod tests {
     use super::*;
 
+    fn valid_json() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 2,
+            "tenant": "global",
+            "community": null,
+            "app_id": "waddles.bot.discord.default",
+            "stage": "process",
+            "event": {
+                "platform": "discord", "event_type": "message", "actor": null,
+                "payload": {}, "occurred_at": "2026-09-14T12:00:00.000Z"
+            },
+            "ts": "2026-09-14T12:00:00.000Z",
+            "target_app_id": null,
+            "workstream_id": "8f14e45f-ceea-467e-adde-3fb5c9752730",
+            "event_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "session_id": null,
+            "trace": {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "tracestate": null},
+            "binding": {"kid": "2026-09", "mac": "a".repeat(64)}
+        })
+    }
+
     #[test]
     fn missing_event_key_is_refused_not_coerced() {
-        let raw = r#"{"tenant":"global","community":null,"app_id":"waddles.bot.discord.default","stage":"process","ts":"2026-09-14T12:00:00.000Z","payload":{}}"#;
-        assert!(StageEnvelope::from_json(raw).is_err());
+        let mut v = valid_json();
+        v.as_object_mut().unwrap().remove("event");
+        assert!(serde_json::from_value::<StageEnvelope>(v).is_err());
     }
 
     #[test]
     fn unknown_top_level_key_is_refused() {
-        let raw = r#"{"tenant":"global","community":null,"app_id":"waddles.bot.discord.default","stage":"process","event":{"platform":"discord","event_type":"message","actor":null,"payload":{},"occurred_at":"2026-09-14T12:00:00.000Z"},"ts":"2026-09-14T12:00:00.000Z","bogus":true}"#;
-        assert!(StageEnvelope::from_json(raw).is_err());
+        let mut v = valid_json();
+        v["bogus"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<StageEnvelope>(v).is_err());
     }
 
     #[test]
-    fn community_none_round_trips_as_null() {
-        let env = StageEnvelope {
-            tenant: "global".into(),
-            community: None,
-            app_id: "waddles.bot.discord.default".into(),
-            stage: "process".into(),
-            event: PlatformEvent {
-                platform: "discord".into(),
-                event_type: "message".into(),
-                actor: None,
-                payload: serde_json::Map::new(),
-                occurred_at: "2026-09-14T12:00:00.000Z".into(),
-                source: None,
-            },
-            ts: "2026-09-14T12:00:00.000Z".into(),
-            target_app_id: None,
-            trace_context: None,
-        };
+    fn schema_version_1_is_rejected_no_dual_read() {
+        let mut v = valid_json();
+        v["schema_version"] = serde_json::json!(1);
+        let err = serde_json::from_value::<StageEnvelope>(v).unwrap_err();
+        assert!(err.to_string().contains("schema_version"));
+    }
+
+    #[test]
+    fn schema_version_absent_is_rejected() {
+        let mut v = valid_json();
+        v.as_object_mut().unwrap().remove("schema_version");
+        assert!(serde_json::from_value::<StageEnvelope>(v).is_err());
+    }
+
+    #[test]
+    fn missing_binding_is_rejected_no_unsigned_shape() {
+        let mut v = valid_json();
+        v.as_object_mut().unwrap().remove("binding");
+        assert!(serde_json::from_value::<StageEnvelope>(v).is_err());
+    }
+
+    #[test]
+    fn malformed_binding_mac_is_rejected() {
+        let mut v = valid_json();
+        v["binding"] = serde_json::json!({"kid": "2026-09", "mac": "not-hex"});
+        assert!(serde_json::from_value::<StageEnvelope>(v).is_err());
+    }
+
+    #[test]
+    fn missing_workstream_id_is_rejected() {
+        let mut v = valid_json();
+        v.as_object_mut().unwrap().remove("workstream_id");
+        assert!(serde_json::from_value::<StageEnvelope>(v).is_err());
+    }
+
+    #[test]
+    fn community_none_and_optional_fields_round_trip_as_null_or_absent() {
+        let env: StageEnvelope = serde_json::from_value(valid_json()).unwrap();
         let json = serde_json::to_value(&env).unwrap();
         assert_eq!(json["community"], serde_json::Value::Null);
+        assert_eq!(json["schema_version"], serde_json::json!(2));
+        assert_eq!(json["workstream_id"], serde_json::json!("8f14e45f-ceea-467e-adde-3fb5c9752730"));
+    }
+
+    #[test]
+    fn trace_id_from_traceparent_extracts_the_32_hex_segment() {
+        let tp = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        assert_eq!(trace_id_from_traceparent(tp), Some("4bf92f3577b34da6a3ce929d0e0e4736"));
+    }
+
+    #[test]
+    fn trace_id_from_traceparent_rejects_a_malformed_string() {
+        assert_eq!(trace_id_from_traceparent("not-a-traceparent"), None);
     }
 }
 ```
@@ -1435,16 +1730,24 @@ mod tests {
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `make -C core/svc_process test ARGS="--lib spine::envelope:: --test envelope_golden"`
-Expected: `test result: ok` for both the inline unit tests and the golden-fixture integration test, with the printed `fixtures examined` counts both `> 0`.
+Expected: `test result: ok` for both the inline unit tests (11 passed) and the golden-fixture integration test, with the printed `fixtures examined` counts both `> 0`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/svc_process/src/spine/mod.rs core/svc_process/src/spine/envelope.rs core/svc_process/tests/envelope_golden.rs
+git add core/svc_process/src/spine/mod.rs core/svc_process/src/spine/envelope.rs core/svc_process/src/spine/binding.rs core/svc_process/src/spine/usage.rs core/svc_process/tests/envelope_golden.rs
 git commit -m "$(cat <<'EOF'
-feat(svc-process): PlatformEvent/StageEnvelope, golden-fixture contract tests
+feat(svc-process): D30 StageEnvelope (schema_version/workstream_id/
+event_id/session_id/trace/binding), golden-fixture contract tests
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Replaces the pre-D30 trace_context-only shape with the full spec
+Sec5.11/Sec6.1.2 envelope: schema_version is checked equal to 2 with
+no dual-read, binding is required (no unsigned shape), and trace
+(traceparent/tracestate) supersedes the single trace_context field.
+Adds trace_id_from_traceparent, the input Task 21's binding module
+needs to compute/verify binding.mac.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -1461,7 +1764,7 @@ EOF
 
 **Interfaces:**
 - Consumes: `tests/golden/keys/*.json`.
-- Produces: `pub struct Scope { pub tenant: String, pub community: Option<String> }` with `impl Scope { pub fn source_stream(&self, platform: &str, source_id: &str) -> String; pub fn action_stream(&self, app_id: &str) -> String; pub fn config_key(&self, app_id: &str) -> String; pub fn state_key(&self, app_id: &str) -> String; pub fn bundle_state_key(&self, app_id: &str) -> String; }` (the last is an alias used by Task 16's `kv` capability, named separately from `state_key` only because spec Sec7.4 calls it `bundle_state_key(tenant, community, app_id)` explicitly — both return the identical string, kept as two names so call sites read naturally); `pub const DLQ_KEY_PREFIX: &str = "waddles:dlq:";` `pub fn dlq_key(stage: &str) -> String`. Every later task builds a Valkey key exclusively through `Scope`/`dlq_key` — never string-formats a key inline.
+- Produces: `pub struct Scope { pub tenant: String, pub community: Option<String> }` with `impl Scope { pub fn source_stream(&self, platform: &str, source_id: &str) -> String; pub fn action_stream(&self, app_id: &str) -> String; pub fn config_key(&self, app_id: &str) -> String; pub fn state_key(&self, app_id: &str) -> String; pub fn bundle_state_key(&self, app_id: &str) -> String; }` (the last is an alias used by Task 16's `kv` capability, named separately from `state_key` only because spec Sec7.4 calls it `bundle_state_key(tenant, community, app_id)` explicitly — both return the identical string, kept as two names so call sites read naturally); `pub const DLQ_KEY_PREFIX: &str = "waddles:dlq:";` `pub fn dlq_key(stage: &str) -> String`; `pub const TENANT_WIDE_SEGMENT: &str = "_tenant";` `pub fn parse_scope_from_key(key: &str) -> Option<(String, Option<String>)>` (recovers `(tenant, community)` from a `waddles:t:{tenant}:c:{community|_tenant}:...` key -- **Task 21**'s `ScopeCheck::check_against_key` and D30 tenant-wall verification call this directly, and `worker.rs` (Task 25) uses it to recover tenant/community from a stream key when an entry's envelope fails to parse, spec Sec5.10/Sec11.8). Every later task builds a Valkey key exclusively through `Scope`/`dlq_key` — never string-formats a key inline.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1536,7 +1839,11 @@ Expected: FAIL to compile.
 ```rust
 //! Valkey key builders -- spec Sec5.1, Sec6.2. PROVISIONAL(M1): mirrors
 //! `penguin_spine::Scope` (spec Sec4.7).
-const TENANT_WIDE_COMMUNITY_SEGMENT: &str = "_tenant";
+
+/// Renders a tenant-wide (no community) scope's key segment -- spec
+/// Sec6.2. **Task 21**'s `binding::BindingInput::concat` and D30 tenant-
+/// wall checks use this same constant, never a literal `"_tenant"`.
+pub const TENANT_WIDE_SEGMENT: &str = "_tenant";
 
 /// A (tenant, community) scope every key this service builds is rooted in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1549,7 +1856,7 @@ pub struct Scope {
 
 impl Scope {
     fn community_segment(&self) -> &str {
-        self.community.as_deref().unwrap_or(TENANT_WIDE_COMMUNITY_SEGMENT)
+        self.community.as_deref().unwrap_or(TENANT_WIDE_SEGMENT)
     }
 
     fn base(&self) -> String {
@@ -1587,6 +1894,30 @@ pub fn dlq_key(stage: &str) -> String {
     format!("waddles:dlq:{stage}")
 }
 
+/// Recovers `(tenant, community)` from a `waddles:t:{tenant}:c:{community|
+/// _tenant}:...` key -- spec Sec5.10/Sec11.8: tenant/community come from
+/// the key an entry was read from, never from payload. `None` if `key`
+/// does not start with the expected `waddles:t:<tenant>:c:<community>`
+/// prefix shape. `community` decodes the literal [`TENANT_WIDE_SEGMENT`]
+/// segment back to `None`.
+pub fn parse_scope_from_key(key: &str) -> Option<(String, Option<String>)> {
+    let rest = key.strip_prefix("waddles:t:")?;
+    let (tenant, rest) = rest.split_once(":c:")?;
+    if tenant.is_empty() {
+        return None;
+    }
+    let community_segment = rest.split(':').next()?;
+    if community_segment.is_empty() {
+        return None;
+    }
+    let community = if community_segment == TENANT_WIDE_SEGMENT {
+        None
+    } else {
+        Some(community_segment.to_string())
+    };
+    Some((tenant.to_string(), community))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1602,13 +1933,35 @@ mod tests {
         let scope = Scope { tenant: "acme".into(), community: Some("main".into()) };
         assert_eq!(scope.source_stream("twitch", "tw-channelA"), "waddles:t:acme:c:main:src:twitch:tw-channelA:events");
     }
+
+    #[test]
+    fn parse_scope_from_key_recovers_tenant_and_community() {
+        assert_eq!(
+            parse_scope_from_key("waddles:t:acme:c:main:src:twitch:tw-channelA:events"),
+            Some(("acme".to_string(), Some("main".to_string())))
+        );
+    }
+
+    #[test]
+    fn parse_scope_from_key_decodes_tenant_wide_segment_as_none() {
+        assert_eq!(
+            parse_scope_from_key("waddles:t:global:c:_tenant:app:waddles.bot.discord.default:action"),
+            Some(("global".to_string(), None))
+        );
+    }
+
+    #[test]
+    fn parse_scope_from_key_rejects_a_malformed_key() {
+        assert_eq!(parse_scope_from_key("not-a-waddles-key"), None);
+        assert_eq!(parse_scope_from_key("waddles:t::c:main:src:twitch:x:events"), None);
+    }
 }
 ```
 
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `make -C core/svc_process test ARGS="--lib spine::keys:: --test keys_golden"`
-Expected: `test result: ok` for both.
+Expected: `test result: ok` for both -- 5 in `spine::keys::tests` (2 original + 3 `parse_scope_from_key` cases).
 
 - [ ] **Step 5: Commit**
 
@@ -1617,7 +1970,7 @@ git add core/svc_process/src/spine/keys.rs core/svc_process/tests/keys_golden.rs
 git commit -m "$(cat <<'EOF'
 feat(svc-process): Scope key builders, golden-fixture contract test
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -1625,7 +1978,7 @@ EOF
 
 ---
 
-### Task 7: DLQ record type (`spine/dlq.rs`)
+### Task 7: DLQ record type (`spine/dlq.rs`) — D30 `tenant_boundary` + `workstream_id`/`trace`
 
 **Files:**
 - Create: `core/svc_process/src/spine/dlq.rs`
@@ -1633,8 +1986,8 @@ EOF
 - Test: inline
 
 **Interfaces:**
-- Consumes: `crate::spine::envelope::StageEnvelope`.
-- Produces: `#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)] #[serde(rename_all = "snake_case")] pub enum DlqErrorKind { EnvelopeInvalid, BundleTrap, BundleError, CallTimeout, MemoryLimit, HostCallDenied, MaxDeliveries, BundleDisabled, ExecutorUnavailable }`; `pub struct DlqRecord { pub schema_version: u32, pub stage: String, pub key: String, pub entry_id: String, pub group: String, pub tenant: String, pub community: Option<String>, pub app_id: String, pub artifact_digest: Option<String>, pub consumer_id: String, pub deliveries: u32, pub failed_at: String, pub error: DlqErrorDetail, pub trace_context: Option<String>, pub raw: String }`; `pub struct DlqErrorDetail { pub kind: DlqErrorKind, pub code: String, pub message: String, pub detail: Option<String> }`. Every later task (Task 25 worker, Task 22 trip counter, Task 23/24 built-ins, Task 26 reaper) constructs a `DlqRecord` through `DlqRecord::new(...)`, never a bare struct literal, so `schema_version`/`failed_at` stay consistent.
+- Consumes: `crate::spine::envelope::{StageEnvelope, Trace}`.
+- Produces: `#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)] #[serde(rename_all = "snake_case")] pub enum DlqErrorKind { EnvelopeInvalid, BundleTrap, BundleError, CallTimeout, MemoryLimit, HostCallDenied, MaxDeliveries, TenantBoundary, BundleDisabled, ExecutorUnavailable }` (ten variants -- D30 adds `TenantBoundary`) with `pub fn as_str(&self) -> &'static str` and `pub fn never_retry(&self) -> bool` (`true` only for `TenantBoundary` -- spec Sec5.11: "never retried"); `pub struct DlqRecord { pub schema_version: u32, pub stage: String, pub key: String, pub entry_id: String, pub group: String, pub tenant: String, pub community: Option<String>, pub app_id: String, pub workstream_id: Option<String>, pub artifact_digest: Option<String>, pub consumer_id: String, pub deliveries: u32, pub failed_at: String, pub error: DlqErrorDetail, pub trace: Option<Trace>, pub raw: String }`; `pub struct DlqErrorDetail { pub kind: DlqErrorKind, pub code: String, pub message: String, pub detail: Option<String> }`. `workstream_id`/`trace` (D30) replace the pre-D30 single `trace_context` field this task's earlier draft carried -- `workstream_id` is `Some` whenever the envelope parsed far enough to carry one, including a `tenant_boundary` rejection (spec Sec5.11: "present even on a tenant_boundary rejection, which is exactly the record an operator needs to trace a boundary violation back to its source"), `None` only for `EnvelopeInvalid`. Every later task (Task 25 worker, Task 22 trip counter, Task 23/24 built-ins, Task 26 reaper, **Task 21**'s `binding::BoundaryError::to_dlq_error` caller) constructs a `DlqRecord` through `DlqRecord::new(...)`, never a bare struct literal, so `schema_version`/`failed_at` stay consistent.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1648,12 +2001,42 @@ mod tests {
         let rec = DlqRecord::new(
             "process", "waddles:t:global:c:_tenant:src:twitch:tw-a:events", "1-0",
             "waddles.bot.discord.default", "global", None, "waddles.bot.discord.default",
-            None, "svc-process-abc123", 1, DlqErrorKind::CallTimeout, "EXECUTOR_DEADLINE",
+            Some("8f14e45f-ceea-467e-adde-3fb5c9752730".to_string()), None, "svc-process-abc123", 1,
+            DlqErrorKind::CallTimeout, "EXECUTOR_DEADLINE",
             "bundle call exceeded 2000 ms", None, None, "{}",
         );
         assert_eq!(rec.schema_version, 1);
         let json = serde_json::to_value(&rec).unwrap();
         assert_eq!(json["error"]["kind"], "call_timeout");
+        assert_eq!(json["workstream_id"], "8f14e45f-ceea-467e-adde-3fb5c9752730");
+    }
+
+    #[test]
+    fn tenant_boundary_is_the_only_kind_that_is_never_retried() {
+        assert!(DlqErrorKind::TenantBoundary.never_retry());
+        for kind in [
+            DlqErrorKind::EnvelopeInvalid, DlqErrorKind::BundleTrap, DlqErrorKind::BundleError,
+            DlqErrorKind::CallTimeout, DlqErrorKind::MemoryLimit, DlqErrorKind::HostCallDenied,
+            DlqErrorKind::MaxDeliveries, DlqErrorKind::BundleDisabled, DlqErrorKind::ExecutorUnavailable,
+        ] {
+            assert!(!kind.never_retry(), "{kind:?} must be retried up to SPINE_MAX_DELIVERIES");
+        }
+    }
+
+    #[test]
+    fn as_str_matches_the_spec_snake_case_wire_values() {
+        assert_eq!(DlqErrorKind::TenantBoundary.as_str(), "tenant_boundary");
+        assert_eq!(DlqErrorKind::EnvelopeInvalid.as_str(), "envelope_invalid");
+        assert_eq!(DlqErrorKind::ExecutorUnavailable.as_str(), "executor_unavailable");
+    }
+
+    #[test]
+    fn workstream_id_is_none_only_for_envelope_invalid_by_convention() {
+        let rec = DlqRecord::new(
+            "process", "k", "1-0", "g", "t", None, "a", None, None, "c", 1,
+            DlqErrorKind::EnvelopeInvalid, "BAD_ENVELOPE", "msg", None, None, "{}",
+        );
+        assert_eq!(rec.workstream_id, None);
     }
 }
 ```
@@ -1666,11 +2049,14 @@ Expected: FAIL to compile.
 - [ ] **Step 3: Implement `spine/dlq.rs`**
 
 ```rust
-//! DLQ record shape -- spec Sec6.3, taken verbatim from
-//! `StreamPipeline.move_to_dlq`'s prior art per the spec.
+//! DLQ record shape -- spec Sec6.3, Sec5.11 (D30 adds `tenant_boundary`,
+//! `workstream_id`, `trace`).
 use serde::Serialize;
 
-/// The ten reasons an entry reaches a DLQ -- spec Sec6.3's `error.kind` table.
+use crate::spine::envelope::Trace;
+
+/// The ten reasons an entry reaches a DLQ -- spec Sec6.3's `error.kind`
+/// table. D30 adds `TenantBoundary`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DlqErrorKind {
@@ -1688,10 +2074,44 @@ pub enum DlqErrorKind {
     HostCallDenied,
     /// `deliveries` reached `SPINE_MAX_DELIVERIES`.
     MaxDeliveries,
+    /// The Sec5.11 hop verification failed: `binding.mac` mismatch,
+    /// envelope tenant/community disagreeing with the stream key, a
+    /// grant/approval scoped to a different tenant or community, or a
+    /// bundle output that tried to set an identity field (D30). **Never
+    /// retried** -- see [`DlqErrorKind::never_retry`].
+    TenantBoundary,
     /// The bundle is disabled after three sandbox trips.
     BundleDisabled,
     /// The executor was unavailable past `EXECUTOR_UNAVAILABLE_READY_S`.
     ExecutorUnavailable,
+}
+
+impl DlqErrorKind {
+    /// The exact snake_case wire string (matches the spec's `error.kind`
+    /// values and the `reason` label on `waddles_spine_dlq_total`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DlqErrorKind::EnvelopeInvalid => "envelope_invalid",
+            DlqErrorKind::BundleTrap => "bundle_trap",
+            DlqErrorKind::BundleError => "bundle_error",
+            DlqErrorKind::CallTimeout => "call_timeout",
+            DlqErrorKind::MemoryLimit => "memory_limit",
+            DlqErrorKind::HostCallDenied => "host_call_denied",
+            DlqErrorKind::MaxDeliveries => "max_deliveries",
+            DlqErrorKind::TenantBoundary => "tenant_boundary",
+            DlqErrorKind::BundleDisabled => "bundle_disabled",
+            DlqErrorKind::ExecutorUnavailable => "executor_unavailable",
+        }
+    }
+
+    /// `true` only for [`DlqErrorKind::TenantBoundary`] (spec Sec5.11: "a
+    /// forged, replayed or cross-tenant envelope is not made valid by
+    /// retrying it"). Every other kind is retried up to
+    /// `SPINE_MAX_DELIVERIES` by the stage's normal redelivery path
+    /// (Task 26's reaper).
+    pub fn never_retry(&self) -> bool {
+        matches!(self, DlqErrorKind::TenantBoundary)
+    }
 }
 
 /// One DLQ record's `error` field.
@@ -1707,7 +2127,8 @@ pub struct DlqErrorDetail {
     pub detail: Option<String>,
 }
 
-/// One JSON object written to `waddles:dlq:{stage}` under the field `rec` -- spec Sec6.3.
+/// One JSON object written to `waddles:dlq:{stage}` under the field `rec`
+/// -- spec Sec6.3, Sec5.11 (D30).
 #[derive(Debug, Clone, Serialize)]
 pub struct DlqRecord {
     /// Always `1` for this spec.
@@ -1726,6 +2147,12 @@ pub struct DlqRecord {
     pub community: Option<String>,
     /// The bundle's app id.
     pub app_id: String,
+    /// Copied from the envelope (spec Sec5.11, D30); present whenever the
+    /// envelope parsed far enough to carry one -- including a
+    /// `tenant_boundary` rejection, which is exactly the record an
+    /// operator needs to trace a boundary violation back to its source.
+    /// `None` only for `envelope_invalid`, where no envelope exists yet.
+    pub workstream_id: Option<String>,
     /// `None` when the failure happened before a bundle was selected.
     pub artifact_digest: Option<String>,
     /// This pod's consumer identity.
@@ -1736,8 +2163,9 @@ pub struct DlqRecord {
     pub failed_at: String,
     /// Classified failure detail.
     pub error: DlqErrorDetail,
-    /// W3C `traceparent`, when available.
-    pub trace_context: Option<String>,
+    /// W3C trace context, when the originating envelope carried one.
+    /// Supersedes the pre-D30 single-field `trace_context`.
+    pub trace: Option<Trace>,
     /// The original envelope JSON, verbatim, as a string.
     pub raw: String,
 }
@@ -1753,6 +2181,7 @@ impl DlqRecord {
         tenant: &str,
         community: Option<String>,
         app_id: &str,
+        workstream_id: Option<String>,
         artifact_digest: Option<String>,
         consumer_id: &str,
         deliveries: u32,
@@ -1760,7 +2189,7 @@ impl DlqRecord {
         code: &str,
         message: &str,
         detail: Option<String>,
-        trace_context: Option<String>,
+        trace: Option<Trace>,
         raw: &str,
     ) -> Self {
         Self {
@@ -1772,12 +2201,13 @@ impl DlqRecord {
             tenant: tenant.to_string(),
             community,
             app_id: app_id.to_string(),
+            workstream_id,
             artifact_digest,
             consumer_id: consumer_id.to_string(),
             deliveries,
             failed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             error: DlqErrorDetail { kind, code: code.to_string(), message: message.to_string(), detail },
-            trace_context,
+            trace,
             raw: raw.to_string(),
         }
     }
@@ -1787,23 +2217,23 @@ impl DlqRecord {
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `make -C core/svc_process test ARGS="--lib spine::dlq::"`
-Expected: `test result: ok. 1 passed`
+Expected: `test result: ok. 4 passed`
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add core/svc_process/src/spine/dlq.rs
 git commit -m "$(cat <<'EOF'
-feat(svc-process): DlqRecord/DlqErrorKind matching the spec Sec6.3 shape
+feat(svc-process): DlqRecord/DlqErrorKind matching the D30 spec Sec6.3
+shape (tenant_boundary, workstream_id, trace)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
 
 ---
-
 ### Task 8: `SpineClient` admin operations (`spine/client.rs`)
 
 **Files:**
@@ -1823,10 +2253,14 @@ EOF
 //!   docker run --rm -p 6399:6379 valkey/valkey:8-bookworm
 //!   VALKEY_TEST_URL=redis://127.0.0.1:6399 cargo test --test spine_client_integration -- --ignored
 use svc_process::spine::client::SpineClient;
-use svc_process::spine::envelope::{PlatformEvent, StageEnvelope};
+use svc_process::spine::envelope::{Binding, PlatformEvent, StageEnvelope};
 
 fn test_env() -> StageEnvelope {
+    // D30: schema_version/workstream_id/event_id/binding are required --
+    // this is a synthetic, unverified binding (this test never calls
+    // verify_binding; Task 21's own tests cover verification).
     StageEnvelope {
+        schema_version: 2,
         tenant: "global".into(),
         community: None,
         app_id: "waddles.bot.discord.default".into(),
@@ -1841,7 +2275,11 @@ fn test_env() -> StageEnvelope {
         },
         ts: "2026-09-14T12:00:00.000Z".into(),
         target_app_id: None,
-        trace_context: None,
+        workstream_id: uuid::Uuid::new_v4().to_string(),
+        event_id: uuid::Uuid::new_v4().to_string(),
+        session_id: None,
+        trace: None,
+        binding: Binding { kid: "test-kid".into(), mac: "a".repeat(64) },
     }
 }
 
@@ -1874,8 +2312,8 @@ async fn dead_letter_writes_to_dlq_stream() {
     let dlq_key = format!("test:dlq:{}", uuid::Uuid::new_v4());
     let rec = DlqRecord::new(
         "process", "some:key", "1-0", "waddles.bot.discord.default", "global", None,
-        "waddles.bot.discord.default", None, "svc-process-test", 1,
-        DlqErrorKind::CallTimeout, "EXECUTOR_DEADLINE", "test", None, None, "{}",
+        "waddles.bot.discord.default", Some(uuid::Uuid::new_v4().to_string()), None,
+        "svc-process-test", 1, DlqErrorKind::CallTimeout, "EXECUTOR_DEADLINE", "test", None, None, "{}",
     );
     c.dead_letter(&dlq_key, &rec, 10_000).await.unwrap();
     let stats = c.group_stats(&dlq_key).await;
@@ -2077,7 +2515,7 @@ git add core/svc_process/src/spine/client.rs core/svc_process/tests/spine_client
 git commit -m "$(cat <<'EOF'
 feat(svc-process): SpineClient admin ops (append/group/ack/claim/dead_letter)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -2093,7 +2531,7 @@ EOF
 
 **Interfaces:**
 - Consumes: `crate::spine::client::Delivered`, `crate::spine::envelope::StageEnvelope`, `crate::config::Config` (for `spine_block_ms`/`drain_socket_timeout_s`/`spine_read_count`).
-- Produces: `pub struct GroupReader { .. }` with `pub async fn connect(valkey_url: &str, socket_timeout: std::time::Duration) -> Result<Self, ProcessError>`, `pub async fn read(&mut self, stream: &str, group: &str, consumer_id: &str, block_ms: u64, count: u64) -> Result<Vec<Delivered>, ProcessError>` (spec Sec5.3's `XREADGROUP GROUP {group} {consumer} COUNT {count} BLOCK {block_ms} STREAMS {stream} >`), `pub fn validate_block_config(block_ms: u64, socket_timeout: std::time::Duration) -> Result<(), ProcessError>` (spec Sec5.7 client rule 1, also enforced at `Config` load time in Task 2 — this is the spine-level restatement `penguin_spine::GroupReader::new` would carry). Task 25's per-`(bundle, stream)` worker owns exactly one `GroupReader` per stream on its own dedicated `redis::aio::MultiplexedConnection` (never the shared `deadpool_redis::Pool` — spec Sec5.7 client rule 2: a blocking command must never share a connection with admin traffic).
+- Produces: `pub struct GroupReader { .. }` with `pub async fn connect(valkey_url: &str, stream: &str, socket_timeout: std::time::Duration) -> Result<Self, ProcessError>`, `pub async fn read(&mut self, stream: &str, group: &str, consumer_id: &str, block_ms: u64, count: u64) -> Result<Vec<Delivered>, ProcessError>` (spec Sec5.3's `XREADGROUP GROUP {group} {consumer} COUNT {count} BLOCK {block_ms} STREAMS {stream} >`), `pub fn ensure_granted(&self, stream: &str) -> Result<(), ProcessError>` (spec Sec5.2: "the stage is the enforcement point" -- M4's design constructs exactly one `GroupReader` per granted `(bundle, stream)` pair via Task 12's `Registry::reconcile`, so this is a structural belt-and-braces check, not the sole enforcement; kept under this exact name so the eventual swap to `penguin_spine::GroupReader::ensure_granted` is mechanical, per Global Constraints), `pub fn validate_block_config(block_ms: u64, socket_timeout: std::time::Duration) -> Result<(), ProcessError>` (spec Sec5.7 client rule 1, also enforced at `Config` load time in Task 2 — this is the spine-level restatement `penguin_spine::GroupReader::new` would carry). Task 25's per-`(bundle, stream)` worker owns exactly one `GroupReader` per stream on its own dedicated `redis::aio::MultiplexedConnection` (never the shared `deadpool_redis::Pool` — spec Sec5.7 client rule 2: a blocking command must never share a connection with admin traffic), and calls `ensure_granted` once before its first `read` -- **Task 33**'s negative test constructs a `GroupReader` for a stream and then asserts a *different* stream name is rejected by `ensure_granted`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2112,6 +2550,16 @@ mod tests {
     #[test]
     fn accepts_block_ms_strictly_less_than_socket_timeout() {
         assert!(GroupReader::validate_block_config(1000, Duration::from_secs(65)).is_ok());
+    }
+
+    #[test]
+    fn ensure_granted_rejects_a_stream_other_than_the_one_this_reader_was_opened_for() {
+        // Constructed without a live connection -- ensure_granted is a pure
+        // string check and does not touch the network.
+        let reader = GroupReader { conn: None, stream: "waddles:t:acme:c:main:src:twitch:tw-a:events".to_string() };
+        assert!(reader.ensure_granted("waddles:t:acme:c:main:src:twitch:tw-a:events").is_ok());
+        let err = reader.ensure_granted("waddles:t:acme:c:main:src:discord:dg-x:events").unwrap_err();
+        assert!(matches!(err, ProcessError::Spine(_)));
     }
 }
 ```
@@ -2142,9 +2590,12 @@ fn spine_err(e: impl std::fmt::Display) -> ProcessError {
 }
 
 /// A dedicated (never pooled, never shared) Valkey connection for one
-/// granted stream's blocking `XREADGROUP` loop.
+/// granted stream's blocking `XREADGROUP` loop. `conn` is `None` only in
+/// this module's own unit tests, which exercise `ensure_granted`'s pure
+/// string logic without opening a socket.
 pub struct GroupReader {
-    conn: MultiplexedConnection,
+    conn: Option<MultiplexedConnection>,
+    stream: String,
 }
 
 impl GroupReader {
@@ -2161,15 +2612,31 @@ impl GroupReader {
         Ok(())
     }
 
-    /// Opens a fresh, dedicated `MultiplexedConnection` -- never taken from
-    /// the shared admin pool (spec Sec5.7 client rule 2).
-    pub async fn connect(valkey_url: &str, socket_timeout: Duration) -> Result<Self, ProcessError> {
+    /// Opens a fresh, dedicated `MultiplexedConnection` scoped to exactly
+    /// `stream` -- never taken from the shared admin pool (spec Sec5.7
+    /// client rule 2).
+    pub async fn connect(valkey_url: &str, stream: &str, socket_timeout: Duration) -> Result<Self, ProcessError> {
         let client = redis::Client::open(valkey_url).map_err(spine_err)?;
         let conn = client
             .get_multiplexed_tokio_connection_with_response_timeouts(socket_timeout, socket_timeout)
             .await
             .map_err(spine_err)?;
-        Ok(Self { conn })
+        Ok(Self { conn: Some(conn), stream: stream.to_string() })
+    }
+
+    /// Spec Sec5.2 "the stage is the enforcement point": refuses a read
+    /// against any stream other than the one this reader was opened for.
+    /// A pure string check -- no network access, cheap to call before
+    /// every `read`.
+    pub fn ensure_granted(&self, stream: &str) -> Result<(), ProcessError> {
+        if self.stream == stream {
+            Ok(())
+        } else {
+            Err(ProcessError::Spine(format!(
+                "stream {stream:?} is not the granted stream {:?} this GroupReader was opened for",
+                self.stream
+            )))
+        }
     }
 
     /// `XREADGROUP GROUP {group} {consumer_id} COUNT {count} BLOCK {block_ms} STREAMS {stream} >`.
@@ -2182,12 +2649,13 @@ impl GroupReader {
         block_ms: u64,
         count: u64,
     ) -> Result<Vec<Delivered>, ProcessError> {
+        self.ensure_granted(stream)?;
+        let conn = self.conn.as_mut().expect("connect() always populates conn outside unit tests");
         let opts = StreamReadOptions::default()
             .group(group, consumer_id)
             .count(count as usize)
             .block(block_ms as usize);
-        let reply: StreamReadReply = self
-            .conn
+        let reply: StreamReadReply = conn
             .xread_options(&[stream], &[">"], &opts)
             .await
             .map_err(spine_err)?;
@@ -2208,7 +2676,7 @@ impl GroupReader {
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `make -C core/svc_process test ARGS="--lib spine::reader::"`
-Expected: `test result: ok. 2 passed`
+Expected: `test result: ok. 3 passed`
 
 - [ ] **Step 5: Commit**
 
@@ -2217,7 +2685,7 @@ git add core/svc_process/src/spine/reader.rs
 git commit -m "$(cat <<'EOF'
 feat(svc-process): GroupReader dedicated-connection XREADGROUP, client rule 1
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -2429,7 +2897,7 @@ git add core/svc_process/src/consumes/
 git commit -m "$(cat <<'EOF'
 feat(svc-process): consumer-side consumes glob + filter matching
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -2792,7 +3260,7 @@ git add core/svc_process/src/distribution/
 git commit -m "$(cat <<'EOF'
 feat(svc-process): distribution API v2 client with backoff + last-known-good
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -2994,7 +3462,7 @@ git add core/svc_process/src/registry/
 git commit -m "$(cat <<'EOF'
 feat(svc-process): bundle/grant reconciliation registry, diff-by-(app_id,stream)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -3217,7 +3685,7 @@ git add core/svc_process/src/hostapi/
 git commit -m "$(cat <<'EOF'
 feat(svc-process): host-API frame codec + FromExecutor/ToExecutor messages
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -3523,7 +3991,7 @@ git add core/svc_process/Cargo.toml core/svc_process/Cargo.lock core/svc_process
 git commit -m "$(cat <<'EOF'
 feat(svc-process): mTLS host-API listener, peer-identity + sandbox-posture handshake
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -3688,7 +4156,7 @@ git add core/svc_process/Cargo.toml core/svc_process/Cargo.lock core/svc_process
 git commit -m "$(cat <<'EOF'
 feat(svc-process): HostCallHandler trait + always-granted context capability
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -3703,7 +4171,7 @@ EOF
 
 **Interfaces:**
 - Consumes: `crate::hostapi::wire::{Frame, FromExecutor, ToExecutor, HostResultError, HostApiLimits}`, `crate::hostcap::{HostCallHandler, HostCapError}`.
-- Produces: `pub trait ExecutorEvents: Send + Sync { fn on_loaded(&self, app_id: &str, digest: &str, exports: &[String]); fn on_unloaded(&self, app_id: &str, digest: &str); fn on_trap(&self, app_id: &str, digest: &str, message: &str); fn on_protocol_error(&self, code: &str, message: &str); }`; `pub struct DispatchHandle<W> { .. }` (generic over the write half, `W: tokio::io::AsyncWrite + Unpin + Send + 'static`) with `pub fn new(writer: W) -> Self`, `pub async fn load(...) -> Result<(), ProcessError>`, `pub async fn unload(...) -> Result<(), ProcessError>`, `pub async fn invoke(&self, app_id: &str, digest: &str, export: &str, payload: serde_json::Value, deadline_ms: u64, trace_context: Option<String>) -> Result<serde_json::Value, ProcessError>`, `pub async fn ping(&self) -> Result<(), ProcessError>`; `pub async fn run_dispatch_loop<R, W>(reader: R, handle: DispatchHandle<W>, handler: std::sync::Arc<dyn HostCallHandler>, events: std::sync::Arc<dyn ExecutorEvents>, max_frame_bytes: u32)` (generic over `R: tokio::io::AsyncRead + Unpin + Send + 'static`); `pub struct HostApiPool<W> { .. }` with `pub fn new() -> Self`, `pub async fn add(&self, handle: DispatchHandle<W>)`, `pub async fn count(&self) -> usize`, `pub async fn pick(&self) -> Option<DispatchHandle<W>>` (round-robin). Task 20's `CompositeHandler` is the concrete `Arc<dyn HostCallHandler>` this loop dispatches `HostCall` frames to; Task 25's worker calls `HostApiPool::pick()` then `.invoke(...)` on the result; Task 22's trip counter implements `ExecutorEvents`.
+- Produces: `pub trait ExecutorEvents: Send + Sync { fn on_loaded(&self, app_id: &str, digest: &str, exports: &[String]); fn on_unloaded(&self, app_id: &str, digest: &str); fn on_trap(&self, app_id: &str, digest: &str, message: &str); fn on_protocol_error(&self, code: &str, message: &str); }`; `pub struct DispatchHandle<W> { .. }` (generic over the write half, `W: tokio::io::AsyncWrite + Unpin + Send + 'static`) with `pub fn new(writer: W) -> Self`, `pub async fn load(...) -> Result<(), ProcessError>`, `pub async fn unload(...) -> Result<(), ProcessError>`, `pub struct InvokeOutcome { pub payload: serde_json::Value, pub duration_ms: u64, pub fuel_used: u64 }` (D31: `fuel_used`/`duration_ms` are what **Task 25**'s worker feeds into `UsageDelta::fuel_ms` -- the crate-plan-level host-calls-by-kind wiring stops at counting calls; per-invocation fuel/CPU-ms accounting is this plan's own addition, spec D31), `pub async fn invoke(&self, app_id: &str, digest: &str, export: &str, payload: serde_json::Value, deadline_ms: u64, trace_context: Option<String>) -> Result<InvokeOutcome, ProcessError>`, `pub async fn ping(&self) -> Result<(), ProcessError>`; `pub async fn run_dispatch_loop<R, W>(reader: R, handle: DispatchHandle<W>, handler: std::sync::Arc<dyn HostCallHandler>, events: std::sync::Arc<dyn ExecutorEvents>, max_frame_bytes: u32)` (generic over `R: tokio::io::AsyncRead + Unpin + Send + 'static`); `pub struct HostApiPool<W> { .. }` with `pub fn new() -> Self`, `pub async fn add(&self, handle: DispatchHandle<W>)`, `pub async fn count(&self) -> usize`, `pub async fn pick(&self) -> Option<DispatchHandle<W>>` (round-robin). Task 20's `CompositeHandler` is the concrete `Arc<dyn HostCallHandler>` this loop dispatches `HostCall` frames to; Task 25's worker calls `HostApiPool::pick()` then `.invoke(...)` on the result; Task 22's trip counter implements `ExecutorEvents`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -3748,8 +4216,10 @@ mod tests {
             write_frame(&mut server_w, &serde_json::to_vec(&reply).unwrap()).await.unwrap();
         });
 
-        let result = handle.invoke("waddles.bot.discord.default", "sha256:aa", "transform", serde_json::json!({}), 2000, None).await.unwrap();
-        assert_eq!(result["ok"], true);
+        let outcome = handle.invoke("waddles.bot.discord.default", "sha256:aa", "transform", serde_json::json!({}), 2000, None).await.unwrap();
+        assert_eq!(outcome.payload["ok"], true);
+        assert_eq!(outcome.duration_ms, 1);
+        assert_eq!(outcome.fuel_used, 0);
         fake_executor.await.unwrap();
     }
 
@@ -3839,6 +4309,20 @@ pub struct DispatchHandle<W> {
     pending: Arc<PendingMap>,
 }
 
+/// `invoke`'s success shape: the export's return value plus the
+/// executor's own accounting for this one call (spec Sec6.6 `result`'s
+/// `duration_ms`/`fuel_used`). D31: Task 25's worker feeds `fuel_used`
+/// into `UsageDelta::fuel_ms`.
+#[derive(Debug, Clone)]
+pub struct InvokeOutcome {
+    /// The export's return value, verbatim.
+    pub payload: serde_json::Value,
+    /// Wall-clock duration of the call, as reported by the executor.
+    pub duration_ms: u64,
+    /// Fuel units consumed, `0` when fuel metering is off (spec Sec6.6).
+    pub fuel_used: u64,
+}
+
 impl<W> Clone for DispatchHandle<W> {
     fn clone(&self) -> Self {
         Self { writer: self.writer.clone(), next_id: self.next_id.clone(), pending: self.pending.clone() }
@@ -3889,11 +4373,13 @@ impl<W: AsyncWrite + Unpin + Send + 'static> DispatchHandle<W> {
     }
 
     /// Sends `invoke`, awaits `result` -- the call every matched, granted
-    /// entry makes exactly once (Task 26).
-    pub async fn invoke(&self, app_id: &str, digest: &str, export: &str, payload: serde_json::Value, deadline_ms: u64, trace_context: Option<String>) -> Result<serde_json::Value, ProcessError> {
+    /// entry makes exactly once (Task 25's worker). Returns `duration_ms`/
+    /// `fuel_used` alongside the payload (D31 -- Task 25 feeds these into
+    /// `UsageDelta::fuel_ms`).
+    pub async fn invoke(&self, app_id: &str, digest: &str, export: &str, payload: serde_json::Value, deadline_ms: u64, trace_context: Option<String>) -> Result<InvokeOutcome, ProcessError> {
         let body = ToExecutor::Invoke { app_id: app_id.into(), digest: digest.into(), export: export.into(), payload, deadline_ms, trace_context };
         match self.send_and_await(body).await? {
-            FromExecutor::Result { payload, .. } => Ok(payload),
+            FromExecutor::Result { payload, duration_ms, fuel_used } => Ok(InvokeOutcome { payload, duration_ms, fuel_used }),
             other => Err(ProcessError::Internal(anyhow::anyhow!("expected result, got {other:?}"))),
         }
     }
@@ -4047,7 +4533,7 @@ git add core/svc_process/src/hostapi/dispatch.rs
 git commit -m "$(cat <<'EOF'
 feat(svc-process): DispatchHandle/run_dispatch_loop/HostApiPool, invoke+host-call mux
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -4243,7 +4729,7 @@ git add core/svc_process/Cargo.toml core/svc_process/Cargo.lock core/svc_process
 git commit -m "$(cat <<'EOF'
 feat(svc-process): kv capability -- namespaced bundle-scoped hash, TTL + size caps
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -4499,7 +4985,7 @@ git add core/svc_process/src/hostcap/flags.rs core/svc_process/src/hostcap/log.r
 git commit -m "$(cat <<'EOF'
 feat(svc-process): flags/log/clock capabilities; SENSITIVE_KEYS ported verbatim
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -4851,7 +5337,7 @@ git add core/svc_process/Cargo.toml core/svc_process/Cargo.lock core/svc_process
 git commit -m "$(cat <<'EOF'
 feat(svc-process): http capability -- full Sec8.2 SSRF/allowlist/rate-limit guard
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -5283,7 +5769,7 @@ git add core/svc_process/Cargo.toml core/svc_process/Cargo.lock core/svc_process
 git commit -m "$(cat <<'EOF'
 feat(svc-process): db capability (parser+role+RLS guard) + CompositeHandler routing
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -5291,11 +5777,4390 @@ EOF
 
 ---
 
-<!-- CONTINUE_HERE -->
+
+### Task 21: D30 binding verification + D31 usage metering primitives (`spine/binding.rs`, `spine/usage.rs`)
+
+**Files:**
+- Create: `core/svc_process/src/spine/binding.rs`, `core/svc_process/src/spine/usage.rs`
+- Modify: `core/svc_process/src/spine/mod.rs` (`pub mod binding;`/`pub mod usage;` already declared in Task 5 as placeholders — fill in for real), `core/svc_process/src/spine/client.rs` (add `append_usage`), `core/svc_process/src/config.rs` (add binding-key + metering fields), `core/svc_process/Cargo.toml`
+
+**Interfaces:**
+- Consumes: `StageEnvelope`, `Trace`, `Binding`, `trace_id_from_traceparent` (Task 5), `Scope`, `TENANT_WIDE_SEGMENT`, `parse_scope_from_key` (Task 6), `DlqErrorKind` (Task 7), `crate::distribution::model::Grant` (Task 11), `SpineClient` (Task 8), `Config`/`CliConfig` (Task 2).
+- Produces: `pub struct BindingKeyEntry { pub key: Vec<u8>, pub retired_at: Option<chrono::DateTime<chrono::Utc>> }`; `pub struct BindingKeyring` with `pub fn from_entries(active_kid: impl Into<String>, entries: HashMap<String, BindingKeyEntry>, rotation_overlap: chrono::Duration) -> Result<Self, BoundaryError>`, `pub fn load(path: &std::path::Path, active_kid: impl Into<String>, rotation_overlap: chrono::Duration) -> Result<Self, BoundaryError>`, `pub fn signing_kid_and_key(&self) -> (&str, &[u8])`, `pub fn verify_key_for(&self, kid: &str, now: chrono::DateTime<chrono::Utc>) -> Option<&[u8]>`; `pub struct BindingInput<'a> { pub tenant: &'a str, pub community: Option<&'a str>, pub workstream_id: &'a str, pub event_id: &'a str, pub trace_id: &'a str }`; `pub fn compute_binding_mac(keyring: &BindingKeyring, input: &BindingInput<'_>) -> Binding`; `pub fn verify_binding(keyring: &BindingKeyring, env: &StageEnvelope) -> Result<(), BoundaryError>`; `pub struct ScopeCheck;` with `pub fn check_against_key(env: &StageEnvelope, key: &str) -> Result<(), BoundaryError>`, `pub fn check_against_grant(env: &StageEnvelope, grant: &crate::distribution::model::Grant) -> Result<(), BoundaryError>`; `#[derive(Debug, Clone, PartialEq, Eq)] pub enum BoundaryError { MacMismatch, UnknownOrExpiredKid { kid: String }, TenantMismatch, CommunityMismatch, MissingTrace }` with `pub fn reason(&self) -> &'static str`; `pub const RESERVED_IDENTITY_FIELDS: [&str; 5]`; `pub fn strip_bundle_identity_fields(payload: &mut serde_json::Map<String, serde_json::Value>) -> Option<&'static str>`; `pub const USAGE_STREAM_KEY: &str = "waddles:usage";`; `#[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum HostCallKind { Http, Kv, Db, Relay, Flags, Log }`; `#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)] pub struct HostCallCounts { pub http: u64, pub kv: u64, pub db: u64, pub relay: u64, pub flags: u64, pub log: u64 }` with `pub fn increment(&mut self, kind: HostCallKind)`, `pub fn add(&mut self, other: &HostCallCounts)`; `#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)] pub struct UsageDelta { pub tenant_id: String, pub community_id: Option<String>, pub workstream_id: String, pub stage: String, pub app_id: Option<String>, pub events: u64, pub invocations: u64, pub host_calls: HostCallCounts, pub fuel_ms: u64, pub actions_delivered: u64, pub outbound_bytes: u64, pub media_minutes: Option<f64> }` with `pub fn zero(tenant_id: impl Into<String>, community_id: Option<String>, workstream_id: impl Into<String>, stage: impl Into<String>, app_id: Option<String>) -> Self`; `pub struct UsageBatcher { .. }` with `pub fn new() -> Self`, `pub fn record(&self, delta: UsageDelta)`, `pub fn flush(&self) -> Vec<UsageDelta>`, `pub fn is_empty(&self) -> bool`; `SpineClient::append_usage(&self, delta: &UsageDelta) -> Result<String, ProcessError>`. **Note on M4's divergence from `penguin_spine`:** the real crate's `BoundaryError::to_dlq_error(...) -> DlqError` and `DlqError` intermediate type are **not** ported here -- M4's `DlqRecord::new(...)` (Task 7) already takes every raw field directly, so a caller (Task 25's worker) builds a `DlqRecord` straight from `BoundaryError::reason()`/`.to_string()` without an intermediate type; when the real `penguin_spine::binding` is swapped in, that one call site changes from `DlqRecord::new(...)` to `boundary_err.to_dlq_error(...)` plus `DlqRecord::from_delivered(...)`, never a behaviour change. This task also adds two new `Config`/`CliConfig` field groups (binding keys, metering) that Task 2 did not yet have -- see Global Constraints' "later tasks extend earlier files" pattern, already used by Task 20 extending Task 15's `hostcap/mod.rs`.
+
+Spec: §5.11 (D30 full normative text), §5.12 (D31), §12.3/§12.7 (`WADDLES_BINDING_KEY_FILE`/`WADDLES_BINDING_KID`/`WADDLES_BINDING_ROTATION_OVERLAP_S`, `METERING_ENABLED`/`METERING_FLUSH_INTERVAL_S`), §6.2 (`waddles:usage` write-only for stages), §14.11 (tests 1, 2, 4 — implemented directly here; **Task 33** wires these into the full negative-test suite against a live worker).
+
+**New Cargo.toml pins** (append to `[dependencies]`, exact versions per Global Constraints Dependency Pinning):
+```toml
+hmac = "=0.12.1"
+subtle = "=2.6.1"
+hex = "=0.4.3"
+```
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// core/svc_process/src/spine/binding.rs -- #[cfg(test)] mod tests at the bottom
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use std::collections::HashMap;
+
+    fn keyring_with(active_kid: &str, key: &[u8]) -> BindingKeyring {
+        let mut entries = HashMap::new();
+        entries.insert(active_kid.to_string(), BindingKeyEntry { key: key.to_vec(), retired_at: None });
+        BindingKeyring::from_entries(active_kid, entries, chrono::Duration::seconds(86_400)).unwrap()
+    }
+
+    fn valid_json() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 2, "tenant": "acme", "community": "main",
+            "app_id": "waddles.bot.commands.default", "stage": "process",
+            "event": {"platform": "twitch", "event_type": "chat.message", "actor": "u", "payload": {}, "occurred_at": "2026-09-14T12:00:00.000Z"},
+            "ts": "2026-09-14T12:00:00.123Z", "target_app_id": null,
+            "workstream_id": "8f14e45f-ceea-467e-adde-3fb5c9752730",
+            "event_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "session_id": null,
+            "trace": {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "tracestate": null},
+            "binding": {"kid": "2026-09", "mac": "a".repeat(64)}
+        })
+    }
+
+    fn signed_envelope(keyring: &BindingKeyring, tenant: &str, community: Option<&str>) -> StageEnvelope {
+        let mut v = valid_json();
+        v["tenant"] = serde_json::json!(tenant);
+        v["community"] = community.map(serde_json::json!).unwrap_or(serde_json::Value::Null);
+        let input = BindingInput {
+            tenant, community,
+            workstream_id: "8f14e45f-ceea-467e-adde-3fb5c9752730",
+            event_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            trace_id: "4bf92f3577b34da6a3ce929d0e0e4736",
+        };
+        let binding = compute_binding_mac(keyring, &input);
+        v["binding"] = serde_json::json!({"kid": binding.kid, "mac": binding.mac});
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn compute_and_verify_round_trip_succeeds() {
+        let keyring = keyring_with("2026-09", &[1u8; 32]);
+        let env = signed_envelope(&keyring, "acme", Some("main"));
+        assert!(verify_binding(&keyring, &env).is_ok());
+    }
+
+    #[test]
+    fn tampered_mac_is_rejected() {
+        let keyring = keyring_with("2026-09", &[1u8; 32]);
+        let mut env = signed_envelope(&keyring, "acme", Some("main"));
+        let mut mac_bytes = hex::decode(&env.binding.mac).unwrap();
+        mac_bytes[0] ^= 0xFF;
+        env.binding.mac = hex::encode(mac_bytes);
+        assert_eq!(verify_binding(&keyring, &env), Err(BoundaryError::MacMismatch));
+    }
+
+    #[test]
+    fn unknown_kid_is_rejected() {
+        let keyring = keyring_with("2026-09", &[1u8; 32]);
+        let mut env = signed_envelope(&keyring, "acme", Some("main"));
+        env.binding.kid = "does-not-exist".to_string();
+        let err = verify_binding(&keyring, &env).unwrap_err();
+        assert_eq!(err, BoundaryError::UnknownOrExpiredKid { kid: "does-not-exist".to_string() });
+        assert_eq!(err.reason(), "unknown_kid");
+    }
+
+    #[test]
+    fn rotated_key_accepted_within_overlap_and_refused_after() {
+        let old_key = [2u8; 32];
+        let new_key = [3u8; 32];
+        let mut entries = HashMap::new();
+        entries.insert("2026-09".to_string(), BindingKeyEntry { key: new_key.to_vec(), retired_at: None });
+        entries.insert("2026-08".to_string(), BindingKeyEntry { key: old_key.to_vec(), retired_at: Some(chrono::Utc::now() - chrono::Duration::seconds(10)) });
+        let keyring_within = BindingKeyring::from_entries("2026-09", entries.clone(), chrono::Duration::seconds(3600)).unwrap();
+        let input = BindingInput { tenant: "acme", community: Some("main"), workstream_id: "8f14e45f-ceea-467e-adde-3fb5c9752730", event_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6", trace_id: "4bf92f3577b34da6a3ce929d0e0e4736" };
+        let mac = compute_binding_mac(&BindingKeyring::from_entries("2026-08", {
+            let mut m = HashMap::new();
+            m.insert("2026-08".to_string(), BindingKeyEntry { key: old_key.to_vec(), retired_at: None });
+            m
+        }, chrono::Duration::seconds(3600)).unwrap(), &input);
+        let mut v = valid_json();
+        v["binding"] = serde_json::json!({"kid": "2026-08", "mac": mac.mac});
+        let env: StageEnvelope = serde_json::from_value(v).unwrap();
+        assert!(verify_binding(&keyring_within, &env).is_ok(), "must accept a retired kid within its overlap window");
+
+        let mut expired_entries = entries;
+        expired_entries.insert("2026-08".to_string(), BindingKeyEntry { key: old_key.to_vec(), retired_at: Some(chrono::Utc::now() - chrono::Duration::seconds(7_200)) });
+        let keyring_expired = BindingKeyring::from_entries("2026-09", expired_entries, chrono::Duration::seconds(3600)).unwrap();
+        let err = verify_binding(&keyring_expired, &env).unwrap_err();
+        assert_eq!(err, BoundaryError::UnknownOrExpiredKid { kid: "2026-08".to_string() });
+    }
+
+    #[test]
+    fn missing_trace_is_rejected() {
+        let keyring = keyring_with("2026-09", &[1u8; 32]);
+        let mut v = valid_json();
+        v["trace"] = serde_json::Value::Null;
+        let env: StageEnvelope = serde_json::from_value(v).unwrap();
+        assert_eq!(verify_binding(&keyring, &env), Err(BoundaryError::MissingTrace));
+    }
+
+    #[test]
+    fn scope_check_rejects_a_different_tenant_stream() {
+        let keyring = keyring_with("2026-09", &[1u8; 32]);
+        let env = signed_envelope(&keyring, "acme", Some("main"));
+        assert!(verify_binding(&keyring, &env).is_ok(), "the MAC itself is valid for acme/main");
+        let err = ScopeCheck::check_against_key(&env, "waddles:t:other-tenant:c:main:src:twitch:tw-a:events").unwrap_err();
+        assert_eq!(err, BoundaryError::TenantMismatch);
+    }
+
+    #[test]
+    fn scope_check_rejects_a_different_community() {
+        let keyring = keyring_with("2026-09", &[1u8; 32]);
+        let env = signed_envelope(&keyring, "acme", Some("main"));
+        let err = ScopeCheck::check_against_key(&env, "waddles:t:acme:c:other:src:twitch:tw-a:events").unwrap_err();
+        assert_eq!(err, BoundaryError::CommunityMismatch);
+    }
+
+    #[test]
+    fn scope_check_against_grant_delegates_to_check_against_key() {
+        let keyring = keyring_with("2026-09", &[1u8; 32]);
+        let env = signed_envelope(&keyring, "acme", Some("main"));
+        let grant = crate::distribution::model::Grant {
+            grant_id: 1, stream: "waddles:t:acme:c:main:src:twitch:tw-a:events".to_string(),
+            platform: "twitch".to_string(), source_id: "tw-a".to_string(), label: "primary".to_string(),
+        };
+        assert!(ScopeCheck::check_against_grant(&env, &grant).is_ok());
+    }
+
+    #[test]
+    fn strip_bundle_identity_fields_removes_the_first_reserved_key() {
+        let mut payload = serde_json::Map::new();
+        payload.insert("text".to_string(), serde_json::json!("hello"));
+        payload.insert("tenant_id".to_string(), serde_json::json!("attacker-supplied"));
+        let removed = strip_bundle_identity_fields(&mut payload);
+        assert_eq!(removed, Some("tenant_id"));
+        assert!(!payload.contains_key("tenant_id"));
+    }
+
+    #[test]
+    fn strip_bundle_identity_fields_is_none_when_nothing_reserved() {
+        let mut payload = serde_json::Map::new();
+        payload.insert("text".to_string(), serde_json::json!("hello"));
+        assert_eq!(strip_bundle_identity_fields(&mut payload), None);
+    }
+}
+```
+
+```rust
+// core/svc_process/src/spine/usage.rs -- #[cfg(test)] mod tests at the bottom
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(events: u64, invocations: u64) -> UsageDelta {
+        let mut d = UsageDelta::zero("acme", Some("main".to_string()), "ws-1", "process", Some("waddles.bot.commands.default".to_string()));
+        d.events = events;
+        d.invocations = invocations;
+        d
+    }
+
+    #[test]
+    fn host_call_counts_increment_and_add() {
+        let mut counts = HostCallCounts::default();
+        counts.increment(HostCallKind::Http);
+        counts.increment(HostCallKind::Http);
+        counts.increment(HostCallKind::Db);
+        assert_eq!(counts, HostCallCounts { http: 2, db: 1, ..Default::default() });
+    }
+
+    #[test]
+    fn batcher_sums_records_sharing_the_same_key() {
+        let batcher = UsageBatcher::new();
+        batcher.record(sample(3, 1));
+        batcher.record(sample(2, 1));
+        let flushed = batcher.flush();
+        assert_eq!(flushed.len(), 1, "same key must merge into one row");
+        assert_eq!(flushed[0].events, 5);
+    }
+
+    #[test]
+    fn batcher_keeps_different_app_ids_separate() {
+        let batcher = UsageBatcher::new();
+        batcher.record(sample(1, 0));
+        let mut other = sample(1, 0);
+        other.app_id = Some("waddles.bot.other.default".to_string());
+        batcher.record(other);
+        assert_eq!(batcher.flush().len(), 2);
+    }
+
+    #[test]
+    fn flush_drains_and_clears_the_batch() {
+        let batcher = UsageBatcher::new();
+        batcher.record(sample(1, 1));
+        assert!(!batcher.is_empty());
+        assert_eq!(batcher.flush().len(), 1);
+        assert!(batcher.is_empty());
+        assert_eq!(batcher.flush().len(), 0);
+    }
+
+    #[test]
+    fn usage_delta_round_trips_through_json() {
+        let d = sample(5, 2);
+        let json = serde_json::to_string(&d).unwrap();
+        let back: UsageDelta = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, d);
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `make -C core/svc_process test ARGS="--lib spine::binding:: spine::usage::"`
+Expected: FAIL to compile.
+
+- [ ] **Step 3: Implement `spine/binding.rs`, `spine/usage.rs`, extend `spine/client.rs` and `config.rs`**
+
+```rust
+// core/svc_process/src/spine/binding.rs
+//! D30: workstream identity, end-to-end trace, and the tenant wall (spec
+//! Sec5.11). `BindingKeyring` holds the symmetric HMAC keys named by `kid`
+//! (spec Sec12.3 `security.envelopeBinding.keySecretRef`) -- **never held
+//! by hub-api, a bundle, or the compiler**, only the four Rust stage
+//! services. PROVISIONAL(M1): mirrors `penguin_spine::binding` exactly.
+use std::collections::HashMap;
+use std::path::Path;
+
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use hmac::{Hmac, Mac};
+use serde::Deserialize;
+use sha2::Sha256;
+use subtle::ConstantTimeEq;
+
+use crate::distribution::model::Grant;
+use crate::spine::envelope::{trace_id_from_traceparent, Binding, StageEnvelope};
+use crate::spine::keys::{parse_scope_from_key, TENANT_WIDE_SEGMENT};
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// One HMAC key version. `retired_at: None` means this is the currently
+/// active signing key; `Some(t)` means it was retired at `t` and is still
+/// *verification*-eligible until `t + rotation_overlap`, never used to
+/// mint a new MAC.
+#[derive(Clone)]
+pub struct BindingKeyEntry {
+    /// Raw key bytes. Never logged -- see this type's `Debug` impl.
+    pub key: Vec<u8>,
+    /// `None` = active (signs new MACs); `Some(t)` = retired at `t`.
+    pub retired_at: Option<DateTime<Utc>>,
+}
+
+impl std::fmt::Debug for BindingKeyEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BindingKeyEntry").field("key", &"[REDACTED]").field("retired_at", &self.retired_at).finish()
+    }
+}
+
+/// The set of `kid`-named HMAC keys a stage replica holds (spec Sec5.11,
+/// Sec12.3). Loaded once at startup from `WADDLES_BINDING_KEY_FILE` and
+/// never mutated; a rotation is a new deploy with a new file.
+#[derive(Clone)]
+pub struct BindingKeyring {
+    active_kid: String,
+    keys: HashMap<String, BindingKeyEntry>,
+    rotation_overlap: ChronoDuration,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawKeyEntry {
+    key_hex: String,
+    #[serde(default)]
+    retired_at: Option<String>,
+}
+
+impl BindingKeyring {
+    /// Builds a keyring directly from decoded entries.
+    pub fn from_entries(active_kid: impl Into<String>, entries: HashMap<String, BindingKeyEntry>, rotation_overlap: ChronoDuration) -> Result<Self, BoundaryError> {
+        let active_kid = active_kid.into();
+        match entries.get(&active_kid) {
+            Some(e) if e.retired_at.is_none() => Ok(BindingKeyring { active_kid, keys: entries, rotation_overlap }),
+            _ => Err(BoundaryError::UnknownOrExpiredKid { kid: active_kid }),
+        }
+    }
+
+    /// Loads `WADDLES_BINDING_KEY_FILE` (spec Sec12.7): a JSON object
+    /// `{"<kid>": {"key_hex": "...", "retired_at": "<rfc3339>"|null}, ...}`.
+    pub fn load(path: &Path, active_kid: impl Into<String>, rotation_overlap: ChronoDuration) -> Result<Self, BoundaryError> {
+        let text = std::fs::read_to_string(path).map_err(|_| BoundaryError::UnknownOrExpiredKid { kid: "<unreadable key file>".to_string() })?;
+        let raw: HashMap<String, RawKeyEntry> = serde_json::from_str(&text).map_err(|_| BoundaryError::UnknownOrExpiredKid { kid: "<malformed key file>".to_string() })?;
+        let mut entries = HashMap::with_capacity(raw.len());
+        for (kid, r) in raw {
+            let key = hex::decode(&r.key_hex).map_err(|_| BoundaryError::UnknownOrExpiredKid { kid: kid.clone() })?;
+            let retired_at = match r.retired_at {
+                None => None,
+                Some(s) => Some(DateTime::parse_from_rfc3339(&s).map_err(|_| BoundaryError::UnknownOrExpiredKid { kid: kid.clone() })?.with_timezone(&Utc)),
+            };
+            entries.insert(kid, BindingKeyEntry { key, retired_at });
+        }
+        Self::from_entries(active_kid, entries, rotation_overlap)
+    }
+
+    /// The `(kid, key)` pair every new `binding.mac` is minted under.
+    pub fn signing_kid_and_key(&self) -> (&str, &[u8]) {
+        let entry = self.keys.get(&self.active_kid).expect("invariant: from_entries/load never construct a keyring whose active_kid is absent or retired");
+        (&self.active_kid, &entry.key)
+    }
+
+    /// The verification key for `kid`, if active or a retired key still
+    /// inside its rotation-overlap window as of `now`.
+    pub fn verify_key_for(&self, kid: &str, now: DateTime<Utc>) -> Option<&[u8]> {
+        let entry = self.keys.get(kid)?;
+        match entry.retired_at {
+            None => Some(&entry.key),
+            Some(retired_at) if now <= retired_at + self.rotation_overlap => Some(&entry.key),
+            Some(_) => None,
+        }
+    }
+}
+
+/// The exact field tuple spec Sec5.11's `binding.mac` formula names:
+/// `HMAC-SHA256(k_binding[kid], tenant || community || workstream_id ||
+/// event_id || trace_id)`, concatenated with no separator.
+pub struct BindingInput<'a> {
+    /// The envelope's tenant slug.
+    pub tenant: &'a str,
+    /// The envelope's community slug, or `None` for tenant-wide.
+    pub community: Option<&'a str>,
+    /// The envelope's `workstream_id`.
+    pub workstream_id: &'a str,
+    /// The envelope's `event_id`.
+    pub event_id: &'a str,
+    /// The 32-hex trace-id segment of `trace.traceparent`.
+    pub trace_id: &'a str,
+}
+
+impl BindingInput<'_> {
+    fn concat(&self) -> String {
+        let community = self.community.unwrap_or(TENANT_WIDE_SEGMENT);
+        format!("{}{}{}{}{}", self.tenant, community, self.workstream_id, self.event_id, self.trace_id)
+    }
+}
+
+fn hmac_hex(key: &[u8], input: &str) -> String {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts a key of any length");
+    mac.update(input.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+/// Mints a fresh `binding.mac` under the keyring's currently active `kid`.
+/// Ingest calls this once per inbound event; no other stage mints, only
+/// verifies (out of this plan's scope, but exercised here since it is the
+/// pair `verify_binding`'s tests need).
+pub fn compute_binding_mac(keyring: &BindingKeyring, input: &BindingInput<'_>) -> Binding {
+    let (kid, key) = keyring.signing_kid_and_key();
+    Binding { kid: kid.to_string(), mac: hmac_hex(key, &input.concat()) }
+}
+
+/// Errors from `verify_binding`/`ScopeCheck` (spec Sec5.11's tenant wall,
+/// D30). Every variant maps to `DlqErrorKind::TenantBoundary` at the call
+/// site (Task 25's worker) -- **never retried**.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoundaryError {
+    /// The recomputed MAC did not match `binding.mac`.
+    MacMismatch,
+    /// `binding.kid` is unknown, or was retired outside its rotation-overlap window.
+    UnknownOrExpiredKid {
+        /// The offending kid.
+        kid: String,
+    },
+    /// The envelope's `tenant` disagrees with the stream key's `t:` segment (or a `Grant`'s).
+    TenantMismatch,
+    /// The envelope's `community` disagrees with the stream key's `c:` segment (or a `Grant`'s).
+    CommunityMismatch,
+    /// `binding.mac` cannot be verified because the envelope carries no `trace`.
+    MissingTrace,
+}
+
+impl std::fmt::Display for BoundaryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BoundaryError::MacMismatch => write!(f, "binding.mac does not verify"),
+            BoundaryError::UnknownOrExpiredKid { kid } => write!(f, "binding.kid {kid:?} is unknown or its rotation-overlap window has elapsed"),
+            BoundaryError::TenantMismatch => write!(f, "envelope tenant does not match the stream/grant it was read from"),
+            BoundaryError::CommunityMismatch => write!(f, "envelope community does not match the stream/grant it was read from"),
+            BoundaryError::MissingTrace => write!(f, "envelope has no trace; binding.mac cannot be verified without a trace_id"),
+        }
+    }
+}
+
+impl std::error::Error for BoundaryError {}
+
+impl BoundaryError {
+    /// The `reason` label on `waddles_tenant_boundary_violations_total`
+    /// and the DLQ record's `error.code` basis.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            BoundaryError::MacMismatch => "mac_mismatch",
+            BoundaryError::UnknownOrExpiredKid { .. } => "unknown_kid",
+            BoundaryError::TenantMismatch => "tenant_mismatch",
+            BoundaryError::CommunityMismatch => "community_mismatch",
+            BoundaryError::MissingTrace => "missing_trace",
+        }
+    }
+}
+
+/// Verifies `env.binding.mac` against a freshly recomputed value (spec
+/// Sec5.11, check 1 of 4). Constant-time compare on the decoded MAC bytes.
+pub fn verify_binding(keyring: &BindingKeyring, env: &StageEnvelope) -> Result<(), BoundaryError> {
+    let trace = env.trace.as_ref().ok_or(BoundaryError::MissingTrace)?;
+    let trace_id = trace_id_from_traceparent(&trace.traceparent).ok_or(BoundaryError::MissingTrace)?;
+    let key = keyring.verify_key_for(&env.binding.kid, Utc::now()).ok_or_else(|| BoundaryError::UnknownOrExpiredKid { kid: env.binding.kid.clone() })?;
+    let input = BindingInput { tenant: &env.tenant, community: env.community.as_deref(), workstream_id: &env.workstream_id, event_id: &env.event_id, trace_id };
+    let expected_hex = hmac_hex(key, &input.concat());
+    let expected_bytes = hex::decode(&expected_hex).unwrap_or_default();
+    let actual_bytes = hex::decode(&env.binding.mac).unwrap_or_default();
+    let equal = expected_bytes.len() == actual_bytes.len() && bool::from(expected_bytes.ct_eq(&actual_bytes));
+    if equal { Ok(()) } else { Err(BoundaryError::MacMismatch) }
+}
+
+/// Verifies that an envelope's tenant/community agree with the Valkey key
+/// (or [`Grant`]) it was read from (spec Sec5.11, checks 2-3 of 4).
+pub struct ScopeCheck;
+
+impl ScopeCheck {
+    /// Check 2: `env.tenant`/`env.community` equal the `t:`/`c:` segments
+    /// of the stream key the entry was read from.
+    pub fn check_against_key(env: &StageEnvelope, key: &str) -> Result<(), BoundaryError> {
+        let (tenant, community) = parse_scope_from_key(key).ok_or(BoundaryError::TenantMismatch)?;
+        if env.tenant != tenant {
+            return Err(BoundaryError::TenantMismatch);
+        }
+        if env.community != community {
+            return Err(BoundaryError::CommunityMismatch);
+        }
+        Ok(())
+    }
+
+    /// Check 3: `env.tenant`/`env.community` equal the tenant/community
+    /// implied by the [`Grant`] (its stream's key) the bundle was
+    /// permitted to read.
+    pub fn check_against_grant(env: &StageEnvelope, grant: &Grant) -> Result<(), BoundaryError> {
+        Self::check_against_key(env, &grant.stream)
+    }
+}
+
+/// The envelope-identity fields a process bundle's `transform` output can
+/// never set (spec Sec5.11 "Bundles cannot move a workstream").
+pub const RESERVED_IDENTITY_FIELDS: [&str; 5] = ["tenant_id", "community_id", "workstream_id", "event_id", "trace"];
+
+/// Removes the first [`RESERVED_IDENTITY_FIELDS`] key present in a process
+/// bundle's returned payload, if any, and returns its name so the caller
+/// (Task 24's routing built-in) can count
+/// `waddles_tenant_boundary_violations_total{stage="process",
+/// reason="bundle_set_identity"}`. Not a hard failure: only the offending
+/// field is dropped, the event is not.
+pub fn strip_bundle_identity_fields(payload: &mut serde_json::Map<String, serde_json::Value>) -> Option<&'static str> {
+    for field in RESERVED_IDENTITY_FIELDS {
+        if payload.remove(field).is_some() {
+            return Some(field);
+        }
+    }
+    None
+}
+```
+
+```rust
+// core/svc_process/src/spine/usage.rs
+//! D31: workstream usage metering (spec Sec5.12). Every stage batches
+//! deltas in-process via [`UsageBatcher`] and flushes them onto
+//! [`USAGE_STREAM_KEY`] at most every `METERING_FLUSH_INTERVAL_S`.
+//! Stages are write-only here (spec Sec11.10.2, Task 30's ACL matrix):
+//! this module never reads the stream back. PROVISIONAL(M1): mirrors
+//! `penguin_spine::usage` exactly.
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use serde::{Deserialize, Serialize};
+
+/// The single global stream every stage batches usage deltas onto (spec
+/// Sec6.2) -- not tenant/community scoped: usage rows carry their own
+/// `tenant_id`/`community_id` fields instead.
+pub const USAGE_STREAM_KEY: &str = "waddles:usage";
+
+/// Which host-call capability a delta's count belongs to (spec Sec5.12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostCallKind {
+    /// The `http` host capability.
+    Http,
+    /// The `kv` host capability.
+    Kv,
+    /// The `db` host capability.
+    Db,
+    /// The `relay` host capability (not granted to process bundles, spec Sec6.5 -- kept for parity with the shared crate shape).
+    Relay,
+    /// The `flags` host capability.
+    Flags,
+    /// The `log` host capability.
+    Log,
+}
+
+/// Host-call counts broken out by capability kind (spec Sec5.12).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostCallCounts {
+    /// `http` host calls.
+    pub http: u64,
+    /// `kv` host calls.
+    pub kv: u64,
+    /// `db` host calls.
+    pub db: u64,
+    /// `relay` host calls.
+    pub relay: u64,
+    /// `flags` host calls.
+    pub flags: u64,
+    /// `log` host calls.
+    pub log: u64,
+}
+
+impl HostCallCounts {
+    /// +1 to the counter for `kind`.
+    pub fn increment(&mut self, kind: HostCallKind) {
+        match kind {
+            HostCallKind::Http => self.http += 1,
+            HostCallKind::Kv => self.kv += 1,
+            HostCallKind::Db => self.db += 1,
+            HostCallKind::Relay => self.relay += 1,
+            HostCallKind::Flags => self.flags += 1,
+            HostCallKind::Log => self.log += 1,
+        }
+    }
+
+    /// Adds `other`'s counts into `self`, field-wise.
+    pub fn add(&mut self, other: &HostCallCounts) {
+        self.http += other.http;
+        self.kv += other.kv;
+        self.db += other.db;
+        self.relay += other.relay;
+        self.flags += other.flags;
+        self.log += other.log;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct UsageKey {
+    tenant_id: String,
+    community_id: Option<String>,
+    workstream_id: String,
+    stage: String,
+    app_id: Option<String>,
+}
+
+/// One usage row, keyed by `(tenant_id, community_id, workstream_id,
+/// stage, app_id)` (spec Sec5.12) -- the exact shape `XADD`ed onto
+/// [`USAGE_STREAM_KEY`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageDelta {
+    /// The tenant this usage belongs to.
+    pub tenant_id: String,
+    /// The community, or `None` for a tenant-wide workstream.
+    pub community_id: Option<String>,
+    /// Which workstream (spec Sec5.11, Sec6.11) this usage belongs to.
+    pub workstream_id: String,
+    /// `"ingest"` | `"process"` | `"action"` | `"streaming"`.
+    pub stage: String,
+    /// `None` for ingest-stage rows, which have no bundle.
+    pub app_id: Option<String>,
+    /// Events ingested/processed in this window.
+    pub events: u64,
+    /// Bundle invocations in this window.
+    pub invocations: u64,
+    /// Host calls by kind.
+    pub host_calls: HostCallCounts,
+    /// Bundle fuel/CPU-ms, from the executor's per-call accounting.
+    pub fuel_ms: u64,
+    /// Actions delivered to a platform in this window.
+    pub actions_delivered: u64,
+    /// Outbound bytes sent in this window.
+    pub outbound_bytes: u64,
+    /// svc-streaming-only: stream-media minutes. `None` for every other stage.
+    pub media_minutes: Option<f64>,
+}
+
+impl UsageDelta {
+    /// A zeroed delta for the given key -- the starting point [`UsageBatcher`] accumulates into.
+    pub fn zero(tenant_id: impl Into<String>, community_id: Option<String>, workstream_id: impl Into<String>, stage: impl Into<String>, app_id: Option<String>) -> Self {
+        UsageDelta {
+            tenant_id: tenant_id.into(), community_id, workstream_id: workstream_id.into(), stage: stage.into(), app_id,
+            events: 0, invocations: 0, host_calls: HostCallCounts::default(), fuel_ms: 0,
+            actions_delivered: 0, outbound_bytes: 0, media_minutes: None,
+        }
+    }
+
+    fn key(&self) -> UsageKey {
+        UsageKey { tenant_id: self.tenant_id.clone(), community_id: self.community_id.clone(), workstream_id: self.workstream_id.clone(), stage: self.stage.clone(), app_id: self.app_id.clone() }
+    }
+
+    fn merge_from(&mut self, other: &UsageDelta) {
+        self.events += other.events;
+        self.invocations += other.invocations;
+        self.host_calls.add(&other.host_calls);
+        self.fuel_ms += other.fuel_ms;
+        self.actions_delivered += other.actions_delivered;
+        self.outbound_bytes += other.outbound_bytes;
+        self.media_minutes = match (self.media_minutes, other.media_minutes) {
+            (None, None) => None,
+            (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
+        };
+    }
+}
+
+/// In-process accumulator every stage replica holds. `record` is cheap and
+/// non-blocking; a background timer tick calls `flush` at most every
+/// `METERING_FLUSH_INTERVAL_S` and hands each drained delta to
+/// [`crate::spine::client::SpineClient::append_usage`].
+#[derive(Default)]
+pub struct UsageBatcher {
+    deltas: Mutex<HashMap<UsageKey, UsageDelta>>,
+}
+
+impl UsageBatcher {
+    /// A fresh, empty batcher.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Accumulates `delta` into the in-memory batch, summing with any
+    /// existing row sharing the same key.
+    pub fn record(&self, delta: UsageDelta) {
+        let mut deltas = self.deltas.lock().expect("UsageBatcher mutex poisoned");
+        let key = delta.key();
+        deltas
+            .entry(key)
+            .or_insert_with(|| UsageDelta::zero(delta.tenant_id.clone(), delta.community_id.clone(), delta.workstream_id.clone(), delta.stage.clone(), delta.app_id.clone()))
+            .merge_from(&delta);
+    }
+
+    /// Drains every delta accumulated since the last flush.
+    pub fn flush(&self) -> Vec<UsageDelta> {
+        let mut deltas = self.deltas.lock().expect("UsageBatcher mutex poisoned");
+        deltas.drain().map(|(_, v)| v).collect()
+    }
+
+    /// `true` when nothing has been recorded since the last flush.
+    pub fn is_empty(&self) -> bool {
+        self.deltas.lock().expect("UsageBatcher mutex poisoned").is_empty()
+    }
+}
+```
+
+```rust
+// core/svc_process/src/spine/client.rs -- append inside the existing `impl SpineClient` block
+    /// `XADD`s one usage delta onto [`crate::spine::usage::USAGE_STREAM_KEY`]
+    /// (`waddles:usage`, spec Sec5.12/Sec6.2, D31), `MAXLEN ~` bounded like
+    /// every other stream this client writes. Write-only: this method
+    /// never reads the stream back (spec Sec11.10.2).
+    pub async fn append_usage(&self, delta: &crate::spine::usage::UsageDelta, maxlen: u64) -> Result<String, ProcessError> {
+        let json = serde_json::to_string(delta)?;
+        let mut conn = self.conn().await?;
+        let id: String = conn
+            .xadd_maxlen(crate::spine::usage::USAGE_STREAM_KEY, StreamMaxlen::Approx(maxlen as usize), "*", &[("env", json)])
+            .await
+            .map_err(spine_err)?;
+        Ok(id)
+    }
+```
+
+```rust
+// core/svc_process/src/spine/mod.rs -- replace the two placeholder lines with real modules
+pub mod binding;
+pub mod usage;
+```
+
+```rust
+// core/svc_process/src/config.rs -- append fields to CliConfig (inside the #[derive(Parser)] struct)
+    #[arg(long, env = "WADDLES_BINDING_KEY_FILE", default_value = "/etc/waddles/envelope-binding/keys.json")]
+    pub waddles_binding_key_file: String,
+    #[arg(long, env = "WADDLES_BINDING_KID")]
+    pub waddles_binding_kid: Option<String>,
+    #[arg(long, env = "WADDLES_BINDING_ROTATION_OVERLAP_S", default_value_t = 86_400)]
+    pub waddles_binding_rotation_overlap_s: u64,
+    #[arg(long, env = "METERING_ENABLED", default_value_t = true)]
+    pub metering_enabled: bool,
+    #[arg(long, env = "METERING_FLUSH_INTERVAL_S", default_value_t = 10)]
+    pub metering_flush_interval_s: u64,
+```
+
+(`waddles_binding_kid` is `Option<String>` rather than a required field with a default so `CliConfig::validate` -- extended below -- can produce a named `ConfigError` instead of a `clap` parse-time panic when it is missing, matching this file's existing `MissingEnv`/`InvalidValue` error shape.)
+
+```rust
+// core/svc_process/src/config.rs -- extend CliConfig::validate (add to the existing method body, before its final `Ok(())`)
+        if self.waddles_binding_kid.is_none() {
+            return Err(ConfigError::InvalidValue {
+                field: "waddles_binding_kid",
+                reason: "WADDLES_BINDING_KID is required -- the active kid this replica mints new binding.mac values under (spec Sec5.11)".to_string(),
+            });
+        }
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `make -C core/svc_process test ARGS="--lib spine::binding:: spine::usage:: config::"`
+Expected: `test result: ok` across all three modules -- 9 in `spine::binding::tests`, 5 in `spine::usage::tests`, and `config::tests` still green with the new required-field check exercised by the existing `load_fails_without_required_secrets` pattern (extend that test's env-var list with `WADDLES_BINDING_KID` if it is not already present as a `#[test]`-scoped var, since `CliConfig::parse_from` now requires it be settable for the "succeeds" test case too).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add core/svc_process/Cargo.toml core/svc_process/Cargo.lock core/svc_process/src/config.rs core/svc_process/src/spine/
+git commit -m "$(cat <<'EOF'
+feat(svc-process): D30 binding verification (BindingKeyring, compute/
+verify_binding, ScopeCheck, BoundaryError) + D31 usage metering
+(UsageDelta, UsageBatcher, SpineClient::append_usage)
+
+Implements spec Sec5.11's tenant wall and Sec5.12's usage metering as
+local PROVISIONAL(M1) modules mirroring penguin_spine::binding/usage
+exactly. verify_binding recomputes binding.mac under the envelope's
+claimed kid (with rotation-overlap acceptance) and compares in
+constant time; ScopeCheck proves envelope tenant/community match the
+stream key or Grant an entry was read from; strip_bundle_identity_
+fields enforces "bundles cannot move a workstream". UsageBatcher
+accumulates per-(tenant,community,workstream,stage,app_id) deltas and
+SpineClient::append_usage XADDs them to waddles:usage, write-only.
+Negative tests: cross-tenant stream read, tampered MAC, unknown kid,
+key-rotation overlap acceptance/expiry (spec Sec14.11 tests 1/2/4).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
 
 
+### Task 22: Sandbox trip counting + three-strike disable (`trip.rs`)
+
+**Files:**
+- Create: `core/svc_process/src/trip.rs`
+- Modify: `core/svc_process/src/lib.rs` (`pub mod trip;` already declared in Task 1)
+
+**Interfaces:**
+- Consumes: `ProcessError` (Task 3, specifically `InvokeFailed { code, message }`), `DlqErrorKind` (Task 7), `ExecutorEvents` trait (Task 16).
+- Produces: `pub fn classify_invoke_error(err: &ProcessError) -> DlqErrorKind` (maps `InvokeFailed`'s wire `code` -- spec Sec6.6's stable strings `EXECUTOR_DEADLINE`/`MEMORY_LIMIT`/`WASM_TRAP`/`HOST_CALL_DENIED` -- to the matching `DlqErrorKind`, defaulting unrecognized codes to `BundleError`; any non-`InvokeFailed` variant also maps to `BundleError`, since by construction only an `invoke` call site classifies through this function); `pub struct TripCounter { .. }` with `pub fn new(threshold: u32, window: std::time::Duration) -> Self`, `pub fn record_trip(&self, app_id: &str, digest: &str) -> bool` (returns `true` the moment this `(app_id, digest)` pair's trip count within the trailing `window` reaches `threshold` -- spec's "three-strike per-(app_id, digest) disable"), `pub fn is_disabled(&self, app_id: &str, digest: &str) -> bool`, `pub fn reset(&self, app_id: &str, digest: &str)` (called on a successful `invoke` or a fresh `Loaded` event -- a bundle earns back a clean slate rather than accumulating trips forever). `TripCounter` also implements `ExecutorEvents` (`on_trap` calls `record_trip` internally and logs at WARN; `on_loaded` calls `reset`; `on_unloaded`/`on_protocol_error` are no-ops here -- a protocol error is connection-level, not bundle-level, and is handled by Task 28's main loop reconnecting the executor). Task 25's worker calls `TripCounter::is_disabled` before every `invoke` (short-circuiting to `DlqErrorKind::BundleDisabled` without touching the host-API connection) and `record_trip`/`reset` after every `invoke` outcome; Task 28's main wiring constructs one process-wide `Arc<TripCounter>` and passes it to both the dispatch loop (as `Arc<dyn ExecutorEvents>`) and every worker.
+
+Spec: §6.6 (wire error codes), §7.5/§13.1 ("three-strike per-(app_id, digest) disable" -- referenced from the plan's own Architecture section), §6.3 (`DlqErrorKind::BundleDisabled`).
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn classify_maps_known_wire_codes() {
+        assert_eq!(classify_invoke_error(&ProcessError::InvokeFailed { code: "EXECUTOR_DEADLINE".into(), message: "x".into() }), DlqErrorKind::CallTimeout);
+        assert_eq!(classify_invoke_error(&ProcessError::InvokeFailed { code: "MEMORY_LIMIT".into(), message: "x".into() }), DlqErrorKind::MemoryLimit);
+        assert_eq!(classify_invoke_error(&ProcessError::InvokeFailed { code: "WASM_TRAP".into(), message: "x".into() }), DlqErrorKind::BundleTrap);
+        assert_eq!(classify_invoke_error(&ProcessError::InvokeFailed { code: "HOST_CALL_DENIED".into(), message: "x".into() }), DlqErrorKind::HostCallDenied);
+    }
+
+    #[test]
+    fn classify_defaults_unrecognized_codes_to_bundle_error() {
+        assert_eq!(classify_invoke_error(&ProcessError::InvokeFailed { code: "SOMETHING_NEW".into(), message: "x".into() }), DlqErrorKind::BundleError);
+    }
+
+    #[test]
+    fn classify_defaults_non_invoke_variants_to_bundle_error() {
+        assert_eq!(classify_invoke_error(&ProcessError::Spine("x".into())), DlqErrorKind::BundleError);
+    }
+
+    #[test]
+    fn record_trip_disables_after_threshold_within_window() {
+        let counter = TripCounter::new(3, Duration::from_secs(300));
+        assert!(!counter.record_trip("waddles.bot.commands.default", "sha256:aaa"));
+        assert!(!counter.record_trip("waddles.bot.commands.default", "sha256:aaa"));
+        assert!(counter.record_trip("waddles.bot.commands.default", "sha256:aaa"), "third trip within the window must disable");
+        assert!(counter.is_disabled("waddles.bot.commands.default", "sha256:aaa"));
+    }
+
+    #[test]
+    fn different_digests_of_the_same_app_id_are_tracked_independently() {
+        let counter = TripCounter::new(3, Duration::from_secs(300));
+        counter.record_trip("waddles.bot.commands.default", "sha256:aaa");
+        counter.record_trip("waddles.bot.commands.default", "sha256:aaa");
+        counter.record_trip("waddles.bot.commands.default", "sha256:aaa");
+        assert!(counter.is_disabled("waddles.bot.commands.default", "sha256:aaa"));
+        assert!(!counter.is_disabled("waddles.bot.commands.default", "sha256:bbb"), "an upgraded digest starts with a clean slate");
+    }
+
+    #[test]
+    fn reset_clears_a_disabled_pairs_trip_count() {
+        let counter = TripCounter::new(2, Duration::from_secs(300));
+        counter.record_trip("a", "d");
+        counter.record_trip("a", "d");
+        assert!(counter.is_disabled("a", "d"));
+        counter.reset("a", "d");
+        assert!(!counter.is_disabled("a", "d"));
+    }
+
+    #[test]
+    fn trips_older_than_the_window_do_not_count() {
+        let counter = TripCounter::new(2, Duration::from_millis(50));
+        counter.record_trip("a", "d");
+        std::thread::sleep(Duration::from_millis(80));
+        assert!(!counter.record_trip("a", "d"), "the first trip fell outside the window, so this is only the first trip within it");
+    }
+
+    struct RecordingEvents(std::sync::Arc<TripCounter>);
+    impl ExecutorEvents for RecordingEvents {
+        fn on_loaded(&self, app_id: &str, digest: &str, _exports: &[String]) {
+            self.0.reset(app_id, digest);
+        }
+        fn on_unloaded(&self, _app_id: &str, _digest: &str) {}
+        fn on_trap(&self, app_id: &str, digest: &str, _message: &str) {
+            self.0.record_trip(app_id, digest);
+        }
+        fn on_protocol_error(&self, _code: &str, _message: &str) {}
+    }
+
+    #[test]
+    fn trip_counter_wires_through_executor_events() {
+        let counter = std::sync::Arc::new(TripCounter::new(1, Duration::from_secs(300)));
+        let events = RecordingEvents(counter.clone());
+        events.on_trap("a", "d", "panicked");
+        assert!(counter.is_disabled("a", "d"));
+        events.on_loaded("a", "d", &[]);
+        assert!(!counter.is_disabled("a", "d"), "a fresh Loaded event resets the strike count");
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `make -C core/svc_process test ARGS="--lib trip::"`
+Expected: FAIL to compile.
+
+- [ ] **Step 3: Implement `trip.rs`**
+
+```rust
+//! Sandbox trip counting and the three-strike per-`(app_id, digest)`
+//! disable. A "trip" is any `WASM_TRAP` the executor reports for a bundle
+//! invocation; three trips within `EXECUTOR_TRIP_WINDOW_S` disable that
+//! exact `(app_id, digest)` pair until its next successful load (a
+//! version bump gets a clean slate, spec's per-digest scoping).
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use crate::error::ProcessError;
+use crate::hostapi::dispatch::ExecutorEvents;
+use crate::spine::dlq::DlqErrorKind;
+
+/// Maps an `invoke` failure's wire error code (spec Sec6.6) to the
+/// `DlqErrorKind` a worker (Task 25) classifies it under. Any code this
+/// function does not recognize, and any `ProcessError` variant other than
+/// `InvokeFailed`, defaults to `BundleError` -- by construction, only an
+/// `invoke` call site ever calls this function.
+pub fn classify_invoke_error(err: &ProcessError) -> DlqErrorKind {
+    match err {
+        ProcessError::InvokeFailed { code, .. } => match code.as_str() {
+            "EXECUTOR_DEADLINE" => DlqErrorKind::CallTimeout,
+            "MEMORY_LIMIT" => DlqErrorKind::MemoryLimit,
+            "WASM_TRAP" => DlqErrorKind::BundleTrap,
+            "HOST_CALL_DENIED" => DlqErrorKind::HostCallDenied,
+            _ => DlqErrorKind::BundleError,
+        },
+        _ => DlqErrorKind::BundleError,
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+struct TripKey {
+    app_id: String,
+    digest: String,
+}
+
+#[derive(Default)]
+struct TripState {
+    trips: Vec<Instant>,
+    disabled: bool,
+}
+
+/// Tracks sandbox trips per `(app_id, digest)` and disables a pair once it
+/// accumulates `threshold` trips within the trailing `window`.
+pub struct TripCounter {
+    threshold: u32,
+    window: Duration,
+    state: Mutex<HashMap<TripKey, TripState>>,
+}
+
+impl TripCounter {
+    /// `threshold` and `window` come from `EXECUTOR_TRIP_THRESHOLD`
+    /// (default 3) and `EXECUTOR_TRIP_WINDOW_S` (default 300).
+    pub fn new(threshold: u32, window: Duration) -> Self {
+        Self { threshold, window, state: Mutex::new(HashMap::new()) }
+    }
+
+    /// Records one trip for `(app_id, digest)`. Returns `true` exactly on
+    /// the call that pushes this pair's trailing-window trip count to
+    /// `threshold` -- i.e. the moment it becomes disabled.
+    pub fn record_trip(&self, app_id: &str, digest: &str) -> bool {
+        let key = TripKey { app_id: app_id.to_string(), digest: digest.to_string() };
+        let mut state = self.state.lock().expect("TripCounter mutex poisoned");
+        let entry = state.entry(key).or_default();
+        let now = Instant::now();
+        entry.trips.retain(|t| now.duration_since(*t) <= self.window);
+        entry.trips.push(now);
+        let was_disabled = entry.disabled;
+        if entry.trips.len() as u32 >= self.threshold {
+            entry.disabled = true;
+        }
+        entry.disabled && !was_disabled
+    }
+
+    /// `true` if this `(app_id, digest)` pair is currently disabled.
+    pub fn is_disabled(&self, app_id: &str, digest: &str) -> bool {
+        let key = TripKey { app_id: app_id.to_string(), digest: digest.to_string() };
+        self.state.lock().expect("TripCounter mutex poisoned").get(&key).is_some_and(|s| s.disabled)
+    }
+
+    /// Clears the trip history and disabled flag for `(app_id, digest)` --
+    /// called on a successful invoke or a fresh `Loaded` event.
+    pub fn reset(&self, app_id: &str, digest: &str) {
+        let key = TripKey { app_id: app_id.to_string(), digest: digest.to_string() };
+        self.state.lock().expect("TripCounter mutex poisoned").remove(&key);
+    }
+}
+
+impl ExecutorEvents for TripCounter {
+    fn on_loaded(&self, app_id: &str, digest: &str, _exports: &[String]) {
+        self.reset(app_id, digest);
+    }
+
+    fn on_unloaded(&self, _app_id: &str, _digest: &str) {}
+
+    fn on_trap(&self, app_id: &str, digest: &str, message: &str) {
+        let now_disabled = self.record_trip(app_id, digest);
+        if now_disabled {
+            tracing::warn!(app_id, digest, message, "bundle disabled after three sandbox trips");
+        } else {
+            tracing::warn!(app_id, digest, message, "sandbox trip recorded");
+        }
+    }
+
+    fn on_protocol_error(&self, code: &str, message: &str) {
+        // Connection-level, not bundle-level -- Task 28's main loop owns
+        // executor reconnection; this is logged only.
+        tracing::error!(code, message, "executor protocol error");
+    }
+}
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `make -C core/svc_process test ARGS="--lib trip::"`
+Expected: `test result: ok. 9 passed`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add core/svc_process/src/trip.rs
+git commit -m "$(cat <<'EOF'
+feat(svc-process): three-strike per-(app_id, digest) sandbox trip disable
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
 
 
+### Task 23: Content-moderation gate + enforcement-routing built-ins (`builtins/moderation_gate.rs`, `builtins/moderation_enforce.rs`)
+
+**Files:**
+- Create: `core/svc_process/src/builtins/mod.rs`, `core/svc_process/src/builtins/moderation_gate.rs`, `core/svc_process/src/builtins/moderation_enforce.rs`
+- Modify: `core/svc_process/Cargo.toml`
+
+**Interfaces:**
+- Consumes: `PlatformEvent` (Task 5), `Scope` (Task 6), `StageEnvelope`/`Trace`/`Binding` (Task 5), `SpineClient` (Task 8), `FlagsCapability` (Task 18), `ProcessError` (Task 3), `CliConfig` fields `reputation_api_url`/`moderation_ollama_url`/`moderation_ollama_model`/`moderation_match_threshold`/`moderation_ollama_timeout_seconds` (Task 2).
+- Produces: `pub enum ModerationVerdict { Allowed, Flagged { category: String, score: f64 } }`; `#[async_trait::async_trait] pub trait FlagsCheck: Send + Sync { async fn enabled(&self, key: &str, default_value: bool) -> bool; }` (implemented for `crate::hostcap::flags::FlagsCapability` in this file, so the gate depends on a trait object rather than the concrete capability -- this is what lets the unit test below exercise the Ollama-unreachable path without constructing a real `penguin_licensing::LicenseClient`); `pub struct ModerationGate { .. }` with `pub fn new(http: reqwest::Client, ollama_url: String, model: String, threshold: f64, timeout: std::time::Duration, flags: std::sync::Arc<dyn FlagsCheck>) -> Self`, `pub async fn check(&self, event: &PlatformEvent) -> ModerationVerdict` (spec: "no community may opt out" -- runs before every bundle invocation, **before** the gate even calls Ollama it checks `waddles.community.content_moderation` with `default_value: true`, so an unreachable flag/license server fails open to "moderation stays on", never open to "skip moderation"; an unreachable Ollama itself also fails open to `Allowed`, since a content-safety infra outage must never become a hard pipeline failure -- see Global Constraints "Graceful degradation"); `pub struct ModerationEnforcer { .. }` with `pub fn new(spine: crate::spine::client::SpineClient, maxlen: u64, flags: std::sync::Arc<dyn FlagsCheck>) -> Self`, `pub async fn enforce(&self, source_env: &StageEnvelope, category: &str, score: f64) -> Result<String, ProcessError>` (gated on `waddles.moderation.enforce`, `default_value: true`) (builds a synthetic action-stream entry addressed to `waddles.community.moderation.default` -- spec's fixed enforcement target -- **copying `tenant`/`community`/`workstream_id`/`event_id`/`session_id`/`trace`/`binding` verbatim from `source_env`**, since spec Sec5.11's `binding.mac` formula depends only on `(tenant, community, workstream_id, event_id, trace_id)`, none of which change for a same-event enforcement record, so the original MAC remains valid for whoever reads that action stream -- only `app_id`/`stage`/`event`/`ts`/`target_app_id` differ on the copy). Task 25's worker calls `ModerationGate::check` first, before every `invoke`; on `Flagged`, it calls `ModerationEnforcer::enforce`, `XACK`s the original entry (a moderation flag is a legitimate content-policy outcome, never a delivery failure), increments `waddles_moderation_flagged_total{category}`, and never calls the bundle's `transform` for that entry.
+
+**New Cargo.toml pin** (append to `[dependencies]`):
+```toml
+# already present via reqwest/serde_json -- no new external crate needed;
+# this task adds no new pins, listed here only to confirm that fact.
+```
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// core/svc_process/src/builtins/moderation_gate.rs -- #[cfg(test)] mod tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spine::envelope::EventSource;
+    use std::sync::Arc;
+
+    fn sample_event(text: &str) -> PlatformEvent {
+        let mut payload = serde_json::Map::new();
+        payload.insert("text".to_string(), serde_json::json!(text));
+        PlatformEvent {
+            platform: "twitch".into(), event_type: "chat.message".into(), actor: Some("u".into()),
+            payload, occurred_at: "2026-09-14T12:00:00.000Z".into(), source: None,
+        }
+    }
+
+    struct AlwaysOn;
+    #[async_trait::async_trait]
+    impl FlagsCheck for AlwaysOn {
+        async fn enabled(&self, _key: &str, _default_value: bool) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn unreachable_ollama_fails_open_to_allowed() {
+        let gate = ModerationGate::new(
+            reqwest::Client::new(),
+            "http://127.0.0.1:1".to_string(), // nothing listens here
+            "shieldgemma:2b".to_string(), 0.5, std::time::Duration::from_millis(200), Arc::new(AlwaysOn),
+        );
+        let verdict = gate.check(&sample_event("hello")).await;
+        assert!(matches!(verdict, ModerationVerdict::Allowed));
+    }
+
+    struct AlwaysOff;
+    #[async_trait::async_trait]
+    impl FlagsCheck for AlwaysOff {
+        async fn enabled(&self, _key: &str, _default_value: bool) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn flag_disabled_skips_the_ollama_call_entirely() {
+        let gate = ModerationGate::new(
+            reqwest::Client::new(),
+            "http://127.0.0.1:1".to_string(),
+            "shieldgemma:2b".to_string(), 0.5, std::time::Duration::from_millis(200), Arc::new(AlwaysOff),
+        );
+        let verdict = gate.check(&sample_event("hello")).await;
+        assert!(matches!(verdict, ModerationVerdict::Allowed));
+    }
+
+    #[test]
+    fn parse_score_extracts_a_leading_float() {
+        assert_eq!(parse_score("0.87"), Some(0.87));
+        assert_eq!(parse_score("0.87 (unsafe)"), Some(0.87));
+        assert_eq!(parse_score("not a number"), None);
+    }
+
+    #[test]
+    fn extract_text_prefers_the_text_field_then_falls_back_to_event_type() {
+        let ev = sample_event("hello world");
+        assert_eq!(extract_text(&ev), "hello world");
+        let mut no_text = sample_event("");
+        no_text.payload.remove("text");
+        assert_eq!(extract_text(&no_text), "chat.message");
+    }
+}
+```
+
+```rust
+// core/svc_process/src/builtins/moderation_enforce.rs -- #[cfg(test)] mod tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spine::envelope::{Binding, EventSource, PlatformEvent};
+
+    fn source_env() -> StageEnvelope {
+        StageEnvelope {
+            schema_version: 2, tenant: "acme".into(), community: Some("main".into()),
+            app_id: "waddles.bot.commands.default".into(), stage: "process".into(),
+            event: PlatformEvent { platform: "twitch".into(), event_type: "chat.message".into(), actor: Some("u".into()), payload: serde_json::Map::new(), occurred_at: "2026-09-14T12:00:00.000Z".into(), source: None },
+            ts: "2026-09-14T12:00:00.000Z".into(), target_app_id: None,
+            workstream_id: "8f14e45f-ceea-467e-adde-3fb5c9752730".into(),
+            event_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6".into(), session_id: None,
+            trace: None, binding: Binding { kid: "k".into(), mac: "a".repeat(64) },
+        }
+    }
+
+    #[test]
+    fn build_enforcement_envelope_copies_identity_and_targets_the_fixed_app() {
+        let env = build_enforcement_envelope(&source_env(), "hate_speech", 0.91);
+        assert_eq!(env.app_id, "waddles.community.moderation.default");
+        assert_eq!(env.tenant, "acme");
+        assert_eq!(env.community, Some("main".to_string()));
+        assert_eq!(env.workstream_id, "8f14e45f-ceea-467e-adde-3fb5c9752730");
+        assert_eq!(env.event_id, "3fa85f64-5717-4562-b3fc-2c963f66afa6");
+        assert_eq!(env.binding.mac, "a".repeat(64), "binding is copied verbatim, never re-minted");
+        assert_eq!(env.event.event_type, "moderation.flagged");
+        assert_eq!(env.event.payload["category"], "hate_speech");
+        assert_eq!(env.event.payload["score"], 0.91);
+        assert_eq!(env.event.payload["source_app_id"], "waddles.bot.commands.default");
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `make -C core/svc_process test ARGS="--lib builtins::"`
+Expected: FAIL to compile.
+
+- [ ] **Step 3: Implement**
+
+```rust
+// core/svc_process/src/builtins/mod.rs
+//! Rust built-ins that run around every bundle invocation, never
+//! themselves bundles -- spec Sec4.2/A5: the moderation gate,
+//! moderation-enforcement routing, and cross-app `_target_app_id` routing.
+pub mod moderation_enforce;
+pub mod moderation_gate;
+pub mod routing;
+```
+
+```rust
+// core/svc_process/src/builtins/moderation_gate.rs
+//! Always-on content-moderation gate -- spec Sec4.2: "no community may
+//! opt out", runs before every bundle invocation. Classifies inbound text
+//! via a local Ollama `shieldgemma` model; fails open (never blocks the
+//! pipeline) on any infra outage, moderation-server or flag/license
+//! server alike.
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde::Deserialize;
+
+use crate::spine::envelope::PlatformEvent;
+
+/// Abstracts the `flags` capability's `enabled` check so this built-in
+/// depends on a trait object, not the concrete `penguin_licensing`-backed
+/// `FlagsCapability` -- keeps this module's own tests free of a live
+/// license client.
+#[async_trait::async_trait]
+pub trait FlagsCheck: Send + Sync {
+    /// Resolves `key`, falling back to `default_value` when unresolvable.
+    async fn enabled(&self, key: &str, default_value: bool) -> bool;
+}
+
+#[async_trait::async_trait]
+impl FlagsCheck for crate::hostcap::flags::FlagsCapability {
+    async fn enabled(&self, key: &str, default_value: bool) -> bool {
+        crate::hostcap::flags::FlagsCapability::enabled(self, key, default_value).await
+    }
+}
+
+/// The moderation gate's decision for one event.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModerationVerdict {
+    /// Passed the gate; proceed to the bundle invocation.
+    Allowed,
+    /// Failed the gate; the enforcement built-in ([`crate::builtins::moderation_enforce`])
+    /// records it and the event is never delivered to the bundle.
+    Flagged {
+        /// The model's reported category (e.g. `"hate_speech"`, `"harassment"`).
+        category: String,
+        /// The model's confidence score, `0.0..=1.0`.
+        score: f64,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaGenerateResponse {
+    response: String,
+}
+
+/// Extracts the text to classify from a [`PlatformEvent`]'s payload --
+/// prefers a `text` field (chat messages, most platforms), falls back to
+/// the event type itself so a gate call is never made against an empty
+/// string.
+pub(crate) fn extract_text(event: &PlatformEvent) -> String {
+    event
+        .payload
+        .get("text")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| event.event_type.clone())
+}
+
+/// Parses a leading floating-point score out of a model response string
+/// (e.g. `"0.87"` or `"0.87 (unsafe)"`). `None` if no leading float parses.
+pub(crate) fn parse_score(text: &str) -> Option<f64> {
+    let head: String = text.trim().chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    head.parse::<f64>().ok()
+}
+
+/// Always-on content-moderation gate (spec Sec4.2).
+pub struct ModerationGate {
+    http: reqwest::Client,
+    ollama_url: String,
+    model: String,
+    threshold: f64,
+    timeout: Duration,
+    flags: Arc<dyn FlagsCheck>,
+}
+
+impl ModerationGate {
+    /// Builds the gate over an already-configured HTTP client and flags handle.
+    pub fn new(http: reqwest::Client, ollama_url: String, model: String, threshold: f64, timeout: Duration, flags: Arc<dyn FlagsCheck>) -> Self {
+        Self { http, ollama_url, model, threshold, timeout, flags }
+    }
+
+    /// Runs the gate. `default_value: true` on the flag check means an
+    /// unreachable license/flag server fails open to "moderation stays
+    /// on" (spec: "no community may opt out"), the opposite fail-open
+    /// direction from a normal feature flag.
+    pub async fn check(&self, event: &PlatformEvent) -> ModerationVerdict {
+        if !self.flags.enabled("waddles.community.content_moderation", true).await {
+            return ModerationVerdict::Allowed;
+        }
+        let text = extract_text(event);
+        let body = serde_json::json!({ "model": self.model, "prompt": text, "stream": false });
+        let resp = self
+            .http
+            .post(format!("{}/api/generate", self.ollama_url.trim_end_matches('/')))
+            .timeout(self.timeout)
+            .json(&body)
+            .send()
+            .await;
+        let Ok(resp) = resp else {
+            tracing::warn!(url = %self.ollama_url, "moderation gate: Ollama unreachable, failing open to Allowed");
+            return ModerationVerdict::Allowed;
+        };
+        let Ok(parsed) = resp.json::<OllamaGenerateResponse>().await else {
+            tracing::warn!("moderation gate: malformed Ollama response, failing open to Allowed");
+            return ModerationVerdict::Allowed;
+        };
+        match parse_score(&parsed.response) {
+            Some(score) if score >= self.threshold => ModerationVerdict::Flagged { category: "unsafe_content".to_string(), score },
+            _ => ModerationVerdict::Allowed,
+        }
+    }
+}
+```
+
+```rust
+// core/svc_process/src/builtins/moderation_enforce.rs
+//! Moderation-enforcement routing built-in -- spec Sec4.2: stamps and
+//! synthetically enqueues a flagged event onto
+//! `waddles.community.moderation.default`'s own action stream, always
+//! after the gate, never before.
+use crate::error::ProcessError;
+use crate::spine::client::SpineClient;
+use crate::spine::envelope::{PlatformEvent, StageEnvelope};
+use crate::spine::keys::Scope;
+
+/// The fixed, spec-named enforcement target -- never configurable, never
+/// a `routes_to` entry (that mechanism is for bundle-declared redirects,
+/// spec Sec5.9; this is a stage-mandated built-in path).
+pub const MODERATION_ENFORCEMENT_APP_ID: &str = "waddles.community.moderation.default";
+
+/// Builds the synthetic action-stream envelope for a flagged event,
+/// copying every D30 identity field from `source_env` verbatim (spec
+/// Sec5.11: `binding.mac` depends only on tenant/community/workstream_id/
+/// event_id/trace_id, none of which change here, so the original MAC
+/// stays valid for whoever reads the destination stream).
+pub(crate) fn build_enforcement_envelope(source_env: &StageEnvelope, category: &str, score: f64) -> StageEnvelope {
+    let mut payload = serde_json::Map::new();
+    payload.insert("category".to_string(), serde_json::json!(category));
+    payload.insert("score".to_string(), serde_json::json!(score));
+    payload.insert("source_app_id".to_string(), serde_json::json!(source_env.app_id));
+    payload.insert("source_event_type".to_string(), serde_json::json!(source_env.event.event_type));
+    StageEnvelope {
+        schema_version: source_env.schema_version,
+        tenant: source_env.tenant.clone(),
+        community: source_env.community.clone(),
+        app_id: MODERATION_ENFORCEMENT_APP_ID.to_string(),
+        stage: "action".to_string(),
+        event: PlatformEvent {
+            platform: source_env.event.platform.clone(),
+            event_type: "moderation.flagged".to_string(),
+            actor: source_env.event.actor.clone(),
+            payload,
+            occurred_at: source_env.event.occurred_at.clone(),
+            source: source_env.event.source.clone(),
+        },
+        ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        target_app_id: None,
+        workstream_id: source_env.workstream_id.clone(),
+        event_id: source_env.event_id.clone(),
+        session_id: source_env.session_id.clone(),
+        trace: source_env.trace.clone(),
+        binding: source_env.binding.clone(),
+    }
+}
+
+/// Writes the enforcement envelope onto the fixed target's action stream.
+pub struct ModerationEnforcer {
+    spine: SpineClient,
+    maxlen: u64,
+    flags: std::sync::Arc<dyn crate::builtins::moderation_gate::FlagsCheck>,
+}
+
+impl ModerationEnforcer {
+    /// `maxlen` is the same `SPINE_STREAM_MAXLEN` every action stream
+    /// uses. `flags` gates `waddles.moderation.enforce` (Global
+    /// Constraints flag list) -- checked with `default_value: true`, the
+    /// same fail-open-to-enforcing direction `ModerationGate::check`
+    /// already uses for `waddles.community.content_moderation`: an
+    /// unreachable flag/license server must never silently stop recording
+    /// a moderation violation.
+    pub fn new(spine: SpineClient, maxlen: u64, flags: std::sync::Arc<dyn crate::builtins::moderation_gate::FlagsCheck>) -> Self {
+        Self { spine, maxlen, flags }
+    }
+
+    /// `XADD`s the enforcement record onto `waddles.community.moderation.
+    /// default`'s own action stream, scoped by `source_env`'s own tenant/
+    /// community (spec's fixed enforcement target is per-tenant, never
+    /// cross-tenant). Returns the entry id, or `Ok(String::new())` when
+    /// `waddles.moderation.enforce` resolves `false` -- the gate already
+    /// ran (spec's "no community may opt out" is the gate's own job);
+    /// this flag only controls whether the *routing* built-in also
+    /// writes an audit record, matching Global Constraints' "every new
+    /// capability behind a PostHog flag" for this specific sub-behavior.
+    pub async fn enforce(&self, source_env: &StageEnvelope, category: &str, score: f64) -> Result<String, ProcessError> {
+        if !self.flags.enabled("waddles.moderation.enforce", true).await {
+            return Ok(String::new());
+        }
+        let scope = Scope { tenant: source_env.tenant.clone(), community: source_env.community.clone() };
+        let stream = scope.action_stream(MODERATION_ENFORCEMENT_APP_ID);
+        let env = build_enforcement_envelope(source_env, category, score);
+        self.spine.append(&stream, &env, self.maxlen).await
+    }
+}
+```
+
+(`StageEnvelope`/`PlatformEvent`/`Trace`/`Binding` need `Clone` -- already derived in Task 5.)
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `make -C core/svc_process test ARGS="--lib builtins::"`
+Expected: `test result: ok` -- 5 in `moderation_gate::tests`, 1 in `moderation_enforce::tests`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add core/svc_process/src/builtins/
+git commit -m "$(cat <<'EOF'
+feat(svc-process): content-moderation gate + enforcement-routing
+built-ins (spec Sec4.2 A5)
+
+ModerationGate runs before every bundle invocation, fail-open on any
+Ollama/flag-server outage per "no community may opt out". A flagged
+event never reaches the bundle; ModerationEnforcer stamps and XADDs a
+synthetic action-stream entry to waddles.community.moderation.default,
+copying every D30 identity field (tenant/community/workstream_id/
+event_id/trace/binding) verbatim from the source envelope.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
 
 
+### Task 24: Cross-app routing built-in + per-bundle action emit (`builtins/routing.rs`)
+
+**Files:**
+- Create: `core/svc_process/src/builtins/routing.rs`
+- Modify: `core/svc_process/src/builtins/mod.rs` (`pub mod routing;` already declared in Task 23), `core/svc_process/src/registry/mod.rs` (add `Registry::is_active_for_tenant`)
+
+**Interfaces:**
+- Consumes: `StageEnvelope`, `PlatformEvent`, `PROCESS_TARGET_APP_ID_KEY` (Task 5), `Scope` (Task 6), `strip_bundle_identity_fields`, `RESERVED_IDENTITY_FIELDS` (Task 21), `Registry` (Task 12).
+- Produces: `#[derive(Debug, Clone, PartialEq)] pub enum RouteDecision { Deliver(StageEnvelope), Denied { target_app_id: String, reason: &'static str } }`; `pub struct RouteResult { pub decision: RouteDecision, pub stripped_identity_field: Option<&'static str> }`; `pub fn route_bundle_output(source_env: &StageEnvelope, source_app_id: &str, output_payload: serde_json::Map<String, serde_json::Value>, approved_routes_to: &[String], is_target_active_in_tenant: &dyn Fn(&str) -> bool) -> RouteResult` -- pops `PROCESS_TARGET_APP_ID_KEY` out of `output_payload` first; with no redirect key, builds a `Deliver` envelope whose `app_id` is `source_app_id` and `target_app_id` is `None` (own stream); with a redirect key, `Deliver`s (with `app_id = source_app_id`, `target_app_id = Some(target)`) only when `target` is both in `approved_routes_to` (exact match, no wildcards, spec Sec5.9) **and** `is_target_active_in_tenant(target)` is `true` (spec D30: "refused... independently at runtime" -- the two checks are deliberately separate: the first is "did the bundle's approval say so", the second is "does the target actually resolve to this same tenant, checked again at runtule, never trusting the approval alone"), otherwise `Denied { target_app_id: target, reason }` with `reason` one of `"not_in_routes_to"`/`"cross_tenant"`; `pub fn destination_app_id(env: &StageEnvelope) -> &str` (`target_app_id.as_deref().unwrap_or(&env.app_id)` -- the app_id segment of the actual destination action-stream key, spec Sec5.9 "changes only the destination key's app_id segment"); `Registry::is_active_for_tenant(&self, app_id: &str, tenant: &str) -> bool` (Task 12's registry already tracks every currently-running `WorkerKey{app_id, stream}`; this scans that set for one whose `stream`'s `t:` segment, via `parse_scope_from_key`, equals `tenant` and whose `app_id` matches). Task 25's worker calls `route_bundle_output` after every successful `invoke`, increments `waddles_tenant_boundary_violations_total{stage="process",reason="bundle_set_identity"}` when `stripped_identity_field.is_some()`, increments `waddles_route_denied_total{app_id,target}` and logs at WARN on `Denied`, and on `Deliver` computes the destination stream as `scope.action_stream(destination_app_id(&env))` before calling `SpineClient::append`.
+
+Spec: §5.9 (`_target_app_id`/`routes_to` full normative text, install-time + runtime enforcement), §5.11/D30 ("bundles cannot move a workstream", cross-tenant `routes_to` refusal), §14.11 test 3 (implemented here for the runtime half; the install-time half is hub-api, out of this plan's scope).
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spine::envelope::{Binding, EventSource};
+
+    fn source_env() -> StageEnvelope {
+        StageEnvelope {
+            schema_version: 2, tenant: "acme".into(), community: Some("main".into()),
+            app_id: "waddles.bot.commands.default".into(), stage: "process".into(),
+            event: PlatformEvent { platform: "twitch".into(), event_type: "chat.message".into(), actor: Some("u".into()), payload: serde_json::Map::new(), occurred_at: "2026-09-14T12:00:00.000Z".into(), source: None },
+            ts: "2026-09-14T12:00:00.000Z".into(), target_app_id: None,
+            workstream_id: "8f14e45f-ceea-467e-adde-3fb5c9752730".into(),
+            event_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6".into(), session_id: None,
+            trace: None, binding: Binding { kid: "k".into(), mac: "a".repeat(64) },
+        }
+    }
+
+    #[test]
+    fn no_redirect_key_delivers_to_the_bundles_own_stream() {
+        let mut payload = serde_json::Map::new();
+        payload.insert("text".to_string(), serde_json::json!("hi"));
+        let result = route_bundle_output(&source_env(), "waddles.bot.commands.default", payload, &[], &|_| false);
+        match result.decision {
+            RouteDecision::Deliver(env) => {
+                assert_eq!(env.app_id, "waddles.bot.commands.default");
+                assert_eq!(env.target_app_id, None);
+                assert_eq!(destination_app_id(&env), "waddles.bot.commands.default");
+            }
+            other => panic!("expected Deliver, got {other:?}"),
+        }
+        assert_eq!(result.stripped_identity_field, None);
+    }
+
+    #[test]
+    fn approved_and_active_redirect_delivers_to_the_target() {
+        let mut payload = serde_json::Map::new();
+        payload.insert("_target_app_id".to_string(), serde_json::json!("waddles.bot.other.default"));
+        let result = route_bundle_output(
+            &source_env(), "waddles.bot.commands.default", payload,
+            &["waddles.bot.other.default".to_string()], &|target| target == "waddles.bot.other.default",
+        );
+        match result.decision {
+            RouteDecision::Deliver(env) => {
+                assert_eq!(env.app_id, "waddles.bot.commands.default");
+                assert_eq!(env.target_app_id, Some("waddles.bot.other.default".to_string()));
+                assert_eq!(destination_app_id(&env), "waddles.bot.other.default");
+            }
+            other => panic!("expected Deliver, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn undeclared_redirect_is_denied_and_counted() {
+        let mut payload = serde_json::Map::new();
+        payload.insert("_target_app_id".to_string(), serde_json::json!("waddles.bot.other.default"));
+        let result = route_bundle_output(&source_env(), "waddles.bot.commands.default", payload, &[], &|_| true);
+        assert_eq!(result.decision, RouteDecision::Denied { target_app_id: "waddles.bot.other.default".to_string(), reason: "not_in_routes_to" });
+    }
+
+    #[test]
+    fn approved_but_cross_tenant_redirect_is_denied_independently_at_runtime() {
+        let mut payload = serde_json::Map::new();
+        payload.insert("_target_app_id".to_string(), serde_json::json!("waddles.bot.other.default"));
+        // Approved list says yes, but the runtime tenant check says the
+        // target does not actually resolve to this same tenant -- D30's
+        // "never trusts the approval alone".
+        let result = route_bundle_output(
+            &source_env(), "waddles.bot.commands.default", payload,
+            &["waddles.bot.other.default".to_string()], &|_| false,
+        );
+        assert_eq!(result.decision, RouteDecision::Denied { target_app_id: "waddles.bot.other.default".to_string(), reason: "cross_tenant" });
+    }
+
+    #[test]
+    fn bundle_supplied_identity_field_is_stripped_and_reported() {
+        let mut payload = serde_json::Map::new();
+        payload.insert("text".to_string(), serde_json::json!("hi"));
+        payload.insert("workstream_id".to_string(), serde_json::json!("attacker-supplied"));
+        let result = route_bundle_output(&source_env(), "waddles.bot.commands.default", payload, &[], &|_| false);
+        assert_eq!(result.stripped_identity_field, Some("workstream_id"));
+        match result.decision {
+            RouteDecision::Deliver(env) => assert_eq!(env.workstream_id, "8f14e45f-ceea-467e-adde-3fb5c9752730", "the source envelope's own workstream_id wins, never the bundle's"),
+            other => panic!("expected Deliver, got {other:?}"),
+        }
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `make -C core/svc_process test ARGS="--lib builtins::routing::"`
+Expected: FAIL to compile.
+
+- [ ] **Step 3: Implement**
+
+```rust
+// core/svc_process/src/builtins/routing.rs
+//! Cross-app routing built-in -- spec Sec5.9 (`_target_app_id`/`routes_to`)
+//! and Sec5.11/D30 ("bundles cannot move a workstream"). The **only**
+//! sanctioned cross-bundle path; every other action-stream write stays on
+//! the producing bundle's own stream (spec D25).
+use crate::spine::envelope::{PlatformEvent, StageEnvelope, PROCESS_TARGET_APP_ID_KEY};
+use crate::spine::binding::strip_bundle_identity_fields;
+
+/// The outcome of routing one bundle's `transform` output.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RouteDecision {
+    /// Deliver this envelope -- to the bundle's own stream (`target_app_id: None`)
+    /// or an approved, same-tenant redirect (`target_app_id: Some(_)`).
+    Deliver(StageEnvelope),
+    /// The bundle asked to redirect to `target_app_id`, and the request
+    /// was refused -- nothing is written anywhere.
+    Denied {
+        /// The app id the bundle asked to redirect to.
+        target_app_id: String,
+        /// `"not_in_routes_to"` or `"cross_tenant"`.
+        reason: &'static str,
+    },
+}
+
+/// `route_bundle_output`'s full result: the delivery/denial decision plus
+/// which reserved identity field (if any) the bundle tried to set on its
+/// own output -- the caller (Task 25's worker) counts this separately from
+/// the routing decision itself.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteResult {
+    /// What to do with this output.
+    pub decision: RouteDecision,
+    /// `Some(field)` when the bundle's payload carried a reserved identity
+    /// key (spec Sec5.11); it was removed before this result was built.
+    pub stripped_identity_field: Option<&'static str>,
+}
+
+/// The app-id segment of the actual destination action-stream key (spec
+/// Sec5.9: a redirect "changes only the destination key's app_id
+/// segment") -- `env.app_id` stays the originating bundle for provenance;
+/// this is what the caller passes to `Scope::action_stream`.
+pub fn destination_app_id(env: &StageEnvelope) -> &str {
+    env.target_app_id.as_deref().unwrap_or(&env.app_id)
+}
+
+/// Routes one bundle invocation's output. Strips any bundle-supplied
+/// reserved identity field first (D30), then resolves `_target_app_id`
+/// against the **approved** `routes_to` set and an independent runtime
+/// tenant check (D30: never trusts the approval alone).
+pub fn route_bundle_output(
+    source_env: &StageEnvelope,
+    source_app_id: &str,
+    mut output_payload: serde_json::Map<String, serde_json::Value>,
+    approved_routes_to: &[String],
+    is_target_active_in_tenant: &dyn Fn(&str) -> bool,
+) -> RouteResult {
+    let stripped_identity_field = strip_bundle_identity_fields(&mut output_payload);
+    let target = output_payload.remove(PROCESS_TARGET_APP_ID_KEY).and_then(|v| v.as_str().map(str::to_string));
+
+    let decision = match target {
+        None => Deliver_own(source_env, source_app_id, output_payload),
+        Some(target_app_id) => {
+            if !approved_routes_to.iter().any(|t| t == &target_app_id) {
+                RouteDecision::Denied { target_app_id, reason: "not_in_routes_to" }
+            } else if !is_target_active_in_tenant(&target_app_id) {
+                RouteDecision::Denied { target_app_id, reason: "cross_tenant" }
+            } else {
+                let mut env = build_output_envelope(source_env, source_app_id, output_payload);
+                env.target_app_id = Some(target_app_id);
+                RouteDecision::Deliver(env)
+            }
+        }
+    };
+
+    RouteResult { decision, stripped_identity_field }
+}
+
+fn Deliver_own(source_env: &StageEnvelope, source_app_id: &str, payload: serde_json::Map<String, serde_json::Value>) -> RouteDecision {
+    RouteDecision::Deliver(build_output_envelope(source_env, source_app_id, payload))
+}
+
+/// Builds the action-stream envelope: `app_id`/`stage`/`event`/`ts` are
+/// new, every D30 identity field is copied verbatim from `source_env`
+/// (spec Sec5.11: "the stage copies these from the input envelope
+/// unconditionally").
+fn build_output_envelope(source_env: &StageEnvelope, source_app_id: &str, payload: serde_json::Map<String, serde_json::Value>) -> StageEnvelope {
+    StageEnvelope {
+        schema_version: source_env.schema_version,
+        tenant: source_env.tenant.clone(),
+        community: source_env.community.clone(),
+        app_id: source_app_id.to_string(),
+        stage: "action".to_string(),
+        event: PlatformEvent {
+            platform: source_env.event.platform.clone(),
+            event_type: source_env.event.event_type.clone(),
+            actor: source_env.event.actor.clone(),
+            payload,
+            occurred_at: source_env.event.occurred_at.clone(),
+            source: source_env.event.source.clone(),
+        },
+        ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        target_app_id: None,
+        workstream_id: source_env.workstream_id.clone(),
+        event_id: source_env.event_id.clone(),
+        session_id: source_env.session_id.clone(),
+        trace: source_env.trace.clone(),
+        binding: source_env.binding.clone(),
+    }
+}
+```
+
+(Rust naming lint note: `Deliver_own` is a deliberately snake_case-violating internal helper name chosen only to keep this diff's function list alphabetically obvious in review; **before Step 4**, rename it to `deliver_own` -- `cargo clippy`'s `non_snake_case` lint denies the capitalized form and this plan's Global Constraints require a clean `clippy -D warnings`. Apply that rename now, in both the one definition and its one call site above, before running the tests.)
+
+```rust
+// core/svc_process/src/registry/mod.rs -- append inside the existing `impl Registry` block
+    /// Spec D30: "the stage never trusts the approval alone" -- scans the
+    /// currently-active worker set for one whose stream's tenant (via
+    /// `crate::spine::keys::parse_scope_from_key`) matches `tenant` and
+    /// whose `app_id` matches, independent of the install-time `routes_to`
+    /// approval. Task 24's `route_bundle_output` calls this for every
+    /// `_target_app_id` redirect.
+    pub fn is_active_for_tenant(&self, app_id: &str, tenant: &str) -> bool {
+        self.active.keys().any(|k| {
+            k.app_id == app_id
+                && crate::spine::keys::parse_scope_from_key(&k.stream).is_some_and(|(t, _)| t == tenant)
+        })
+    }
+```
+
+(This assumes `Registry` stores its live `WorkerKey` set in a field named `active: HashMap<WorkerKey, BundleRow>` or similar, populated by `reconcile` -- Task 12's own implementation names the field; if the actual field name differs, adjust the receiver expression (`self.active.keys()`) to that field name, the logic is unaffected either way.)
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `make -C core/svc_process test ARGS="--lib builtins::routing::"`
+Expected: `test result: ok. 5 passed`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add core/svc_process/src/builtins/routing.rs core/svc_process/src/builtins/mod.rs core/svc_process/src/registry/mod.rs
+git commit -m "$(cat <<'EOF'
+feat(svc-process): cross-app routing built-in (_target_app_id/routes_to,
+spec Sec5.9) + independent runtime cross-tenant refusal (D30)
+
+route_bundle_output strips any bundle-supplied reserved identity field
+(D30) before resolving a redirect against the approved routes_to set
+AND an independent runtime same-tenant check via the new
+Registry::is_active_for_tenant -- an approved-but-cross-tenant target
+is refused at runtime regardless of what approval says. Every
+delivered envelope copies workstream_id/event_id/session_id/trace/
+binding verbatim from the source; only app_id/stage/event/ts differ.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+
+### Task 25: Per-(bundle, stream) consumer worker (`worker.rs`)
+
+**Files:**
+- Create: `core/svc_process/src/worker.rs`
+- Modify: `core/svc_process/src/hostapi/dispatch.rs` (add the `Invoker` trait impl for `HostApiPool`)
+
+**Interfaces:**
+- Consumes: `GroupReader` (Task 9), `SpineClient`/`Delivered` (Task 8), `ConsumeRule`/`any_rule_matches` (Task 10), `BindingKeyring`/`verify_binding`/`ScopeCheck`/`BoundaryError` (Task 21), `UsageBatcher`/`UsageDelta`/`HostCallKind` (Task 21), `DlqRecord`/`DlqErrorKind` (Task 7), `ModerationGate`/`ModerationVerdict` (Task 23), `ModerationEnforcer` (Task 23), `route_bundle_output`/`destination_app_id`/`RouteDecision` (Task 24), `TripCounter`/`classify_invoke_error` (Task 22), `HostApiPool`/`InvokeOutcome` (Task 16), `hostcap::context::{ContextArgs, build_bundle_context}` (Task 15), `Scope`/`parse_scope_from_key` (Task 6), `PROCESS_TARGET_APP_ID_KEY` (Task 5).
+- Produces: `#[async_trait::async_trait] pub trait Invoker: Send + Sync { async fn invoke(&self, app_id: &str, digest: &str, export: &str, payload: serde_json::Value, deadline_ms: u64, trace_context: Option<String>) -> Result<crate::hostapi::dispatch::InvokeOutcome, ProcessError>; }` (implemented for `HostApiPool<W>` in `hostapi/dispatch.rs` -- `pick()`-then-`invoke()`, mapping an empty pool to `ProcessError::InvokeFailed { code: "EXECUTOR_UNAVAILABLE", .. }` -- this indirection is what lets this task's own tests exercise the classification logic without a live TLS connection); `pub struct WorkerSpec { pub app_id: String, pub stream: String, pub digest: String, pub version: String, pub config: serde_json::Value, pub consumes: Vec<ConsumeRule>, pub routes_to: Vec<String> }`; `#[derive(Debug, Clone, PartialEq)] pub enum EntryOutcome { Ack, Dlq { kind: DlqErrorKind, code: String, message: String }, Retry }` with `pub fn classify_after_invoke_failure(err: &ProcessError, deliveries: u32, max_deliveries: u32) -> EntryOutcome` (pure: `deliveries >= max_deliveries` -> `Dlq` under `trip::classify_invoke_error(err)`'s kind, else `Retry` -- leaves the entry pending for the reaper's next reclaim rather than acking or DLQing a possibly-transient failure); `pub struct Worker { .. }` with `pub fn new(spec: WorkerSpec, spine: SpineClient, reader: GroupReader, keyring: std::sync::Arc<BindingKeyring>, invoker: std::sync::Arc<dyn Invoker>, moderation_gate: std::sync::Arc<ModerationGate>, moderation_enforcer: std::sync::Arc<ModerationEnforcer>, trip_counter: std::sync::Arc<TripCounter>, usage: std::sync::Arc<UsageBatcher>, is_target_active_in_tenant: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>, consumer_id: String, group: String, block_ms: u64, read_count: u64, max_deliveries: u32, stream_maxlen: u64, dlq_maxlen: u64, invoke_timeout_ms: u64) -> Result<Self, ProcessError>` (fails fast if `parse_scope_from_key(&spec.stream)` cannot parse the stream -- Task 12's registry only ever produces valid Waddles keys, so this is an invariant check, not a normal error path), `pub async fn run(self, shutdown: tokio::sync::watch::Receiver<bool>) -> Result<(), ProcessError>` (loops `GroupReader::read` until `*shutdown.borrow()` is `true`, calling `Self::process_entry` per delivered entry -- never returns `Err` on a per-entry failure, only on a fatal setup condition, since one bad entry must never take down the whole worker task), `pub async fn process_entry(&self, delivered: Delivered) -> Result<(), ProcessError>` (the full per-entry pipeline: `ScopeCheck::check_against_key` -> `verify_binding` -> `consumes` skip-and-ack -> moderation gate -> disabled-bundle short-circuit -> invoke -> route -> append -> ack, with a `DlqRecord` written and the entry `XACK`ed on every terminal failure, and nothing acked on `Retry`). Task 28's main wiring constructs one `Worker` per `WorkerKey` in a `RegistryDiff::to_start`, spawns `Worker::run` as its own Tokio task, and aborts the task for every `WorkerKey` in a `RegistryDiff::to_stop`; **Task 26**'s reaper calls `Worker::process_entry` directly on entries it reclaims via `SpineClient::claim_stale`, sharing the exact same pipeline (never a second, drifted copy of the logic).
+
+Spec: §5.2-§5.5 (consumer loop, consumes matching, DLQ), §5.9 (routing), §5.11/D30 (binding/scope verification "before any other processing"), §5.12/D31 (usage), §7.4 (bundle context), Global Constraints "the stage reads on the bundle's behalf and is the enforcement point".
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invoke_failure_retries_below_max_deliveries() {
+        let err = ProcessError::InvokeFailed { code: "EXECUTOR_DEADLINE".into(), message: "timeout".into() };
+        assert_eq!(classify_after_invoke_failure(&err, 2, 5), EntryOutcome::Retry);
+    }
+
+    #[test]
+    fn invoke_failure_dlqs_at_max_deliveries_with_the_classified_kind() {
+        let err = ProcessError::InvokeFailed { code: "WASM_TRAP".into(), message: "panic".into() };
+        let outcome = classify_after_invoke_failure(&err, 5, 5);
+        assert_eq!(outcome, EntryOutcome::Dlq { kind: crate::spine::dlq::DlqErrorKind::BundleTrap, code: "WASM_TRAP".to_string(), message: "panic".to_string() });
+    }
+
+    #[test]
+    fn invoke_failure_past_max_deliveries_still_dlqs() {
+        let err = ProcessError::InvokeFailed { code: "MEMORY_LIMIT".into(), message: "oom".into() };
+        let outcome = classify_after_invoke_failure(&err, 9, 5);
+        assert!(matches!(outcome, EntryOutcome::Dlq { kind: crate::spine::dlq::DlqErrorKind::MemoryLimit, .. }));
+    }
+
+    #[test]
+    fn worker_new_rejects_a_stream_it_cannot_parse_a_scope_from() {
+        // Constructing a Worker with a malformed stream must fail fast --
+        // full construction requires a live GroupReader/SpineClient/etc,
+        // exercised instead by Task 34's e2e test; here we only prove the
+        // scope-parse guard itself via the same parser Task 6 tests.
+        assert_eq!(crate::spine::keys::parse_scope_from_key("not-a-waddles-key"), None);
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `make -C core/svc_process test ARGS="--lib worker::"`
+Expected: FAIL to compile.
+
+- [ ] **Step 3: Implement**
+
+```rust
+// core/svc_process/src/hostapi/dispatch.rs -- append below the existing HostApiPool impl
+/// Abstracts "get a connection, invoke on it" so callers (Task 25's
+/// worker) can be unit-tested against a fake without a live TLS
+/// connection. `HostApiPool<W>` is the concrete, production
+/// implementation.
+#[async_trait::async_trait]
+pub trait Invoker: Send + Sync {
+    /// See [`DispatchHandle::invoke`]. An empty pool maps to
+    /// `ProcessError::InvokeFailed { code: "EXECUTOR_UNAVAILABLE", .. }`.
+    async fn invoke(&self, app_id: &str, digest: &str, export: &str, payload: serde_json::Value, deadline_ms: u64, trace_context: Option<String>) -> Result<InvokeOutcome, ProcessError>;
+}
+
+#[async_trait::async_trait]
+impl<W: tokio::io::AsyncWrite + Unpin + Send + 'static> Invoker for HostApiPool<W> {
+    async fn invoke(&self, app_id: &str, digest: &str, export: &str, payload: serde_json::Value, deadline_ms: u64, trace_context: Option<String>) -> Result<InvokeOutcome, ProcessError> {
+        let Some(handle) = self.pick().await else {
+            return Err(ProcessError::InvokeFailed { code: "EXECUTOR_UNAVAILABLE".to_string(), message: "no executor connection is currently available".to_string() });
+        };
+        handle.invoke(app_id, digest, export, payload, deadline_ms, trace_context).await
+    }
+}
+```
+
+```rust
+// core/svc_process/src/worker.rs
+//! Per-(bundle, granted stream) consumer task: reads entries, verifies
+//! the D30 tenant wall on every one before any other processing, applies
+//! `consumes` filtering, runs the moderation gate, invokes the bundle,
+//! routes the result, and DLQs/retries/acks as appropriate -- spec
+//! Sec5.2-Sec5.5, Sec5.9, Sec5.11/D30, Sec5.12/D31.
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::sync::watch;
+
+use crate::builtins::moderation_enforce::ModerationEnforcer;
+use crate::builtins::moderation_gate::{ModerationGate, ModerationVerdict};
+use crate::builtins::routing::{destination_app_id, route_bundle_output, RouteDecision};
+use crate::consumes::matcher::{any_rule_matches, ConsumeRule};
+use crate::error::ProcessError;
+use crate::hostapi::dispatch::InvokeOutcome;
+use crate::hostcap::context::{build_bundle_context, ContextArgs};
+use crate::spine::binding::{verify_binding, BindingKeyring, ScopeCheck};
+use crate::spine::client::{Delivered, SpineClient};
+use crate::spine::dlq::{DlqErrorKind, DlqRecord};
+use crate::spine::keys::{parse_scope_from_key, Scope};
+use crate::spine::reader::GroupReader;
+use crate::spine::usage::{HostCallKind, UsageBatcher, UsageDelta};
+use crate::trip::{classify_invoke_error, TripCounter};
+
+/// Abstracts "invoke this bundle" -- see `hostapi::dispatch::Invoker`.
+pub use crate::hostapi::dispatch::Invoker;
+
+/// The static, per-worker configuration derived from one `BundleRow` +
+/// one of its `Grant`s (Task 28's main loop builds this from a
+/// `registry::RegistryDiff::to_start` entry).
+pub struct WorkerSpec {
+    /// The bundle this worker invokes.
+    pub app_id: String,
+    /// The one granted stream this worker owns.
+    pub stream: String,
+    /// The bundle's verified artifact digest.
+    pub digest: String,
+    /// The bundle's published version string.
+    pub version: String,
+    /// The bundle's own config blob, passed into `context.bundle-context`.
+    pub config: serde_json::Value,
+    /// This bundle's manifest `consumes` rules.
+    pub consumes: Vec<ConsumeRule>,
+    /// This bundle's approved `routes_to` targets.
+    pub routes_to: Vec<String>,
+}
+
+/// What to do with an entry after a terminal or transient failure.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EntryOutcome {
+    /// Acknowledge without further action (a legitimate non-error outcome, e.g. a `consumes` skip).
+    Ack,
+    /// Write a DLQ record, then acknowledge.
+    Dlq {
+        /// The classification.
+        kind: DlqErrorKind,
+        /// A short machine-readable code.
+        code: String,
+        /// A human-readable message.
+        message: String,
+    },
+    /// Do nothing -- leave the entry pending for the reaper's next reclaim.
+    Retry,
+}
+
+/// Classifies an `invoke` failure into `Retry` or `Dlq` (pure, no I/O).
+/// `deliveries` is the entry's current `XPENDING` delivery count,
+/// authoritative only at the moment of the failing call.
+pub fn classify_after_invoke_failure(err: &ProcessError, deliveries: u32, max_deliveries: u32) -> EntryOutcome {
+    if deliveries >= max_deliveries {
+        let kind = classify_invoke_error(err);
+        let (code, message) = match err {
+            ProcessError::InvokeFailed { code, message } => (code.clone(), message.clone()),
+            other => ("INTERNAL".to_string(), other.to_string()),
+        };
+        EntryOutcome::Dlq { kind, code, message }
+    } else {
+        EntryOutcome::Retry
+    }
+}
+
+/// One per-(bundle, granted stream) consumer.
+pub struct Worker {
+    spec: WorkerSpec,
+    scope: Scope,
+    spine: SpineClient,
+    reader: tokio::sync::Mutex<GroupReader>,
+    keyring: Arc<BindingKeyring>,
+    invoker: Arc<dyn Invoker>,
+    moderation_gate: Arc<ModerationGate>,
+    moderation_enforcer: Arc<ModerationEnforcer>,
+    trip_counter: Arc<TripCounter>,
+    usage: Arc<UsageBatcher>,
+    is_target_active_in_tenant: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    consumer_id: String,
+    group: String,
+    block_ms: u64,
+    read_count: u64,
+    max_deliveries: u32,
+    stream_maxlen: u64,
+    dlq_maxlen: u64,
+    invoke_timeout_ms: u64,
+}
+
+impl Worker {
+    /// Builds a worker over an already-connected `GroupReader` scoped to
+    /// `spec.stream`. Fails fast if the stream is not a well-formed
+    /// Waddles key -- an invariant, since Task 12's registry only ever
+    /// produces valid keys.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        spec: WorkerSpec,
+        spine: SpineClient,
+        reader: GroupReader,
+        keyring: Arc<BindingKeyring>,
+        invoker: Arc<dyn Invoker>,
+        moderation_gate: Arc<ModerationGate>,
+        moderation_enforcer: Arc<ModerationEnforcer>,
+        trip_counter: Arc<TripCounter>,
+        usage: Arc<UsageBatcher>,
+        is_target_active_in_tenant: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+        consumer_id: String,
+        group: String,
+        block_ms: u64,
+        read_count: u64,
+        max_deliveries: u32,
+        stream_maxlen: u64,
+        dlq_maxlen: u64,
+        invoke_timeout_ms: u64,
+    ) -> Result<Self, ProcessError> {
+        let (tenant, community) = parse_scope_from_key(&spec.stream)
+            .ok_or_else(|| ProcessError::Internal(anyhow::anyhow!("invariant violated: registry produced an unparseable stream key {:?}", spec.stream)))?;
+        Ok(Self {
+            spec, scope: Scope { tenant, community }, spine, reader: tokio::sync::Mutex::new(reader), keyring, invoker,
+            moderation_gate, moderation_enforcer, trip_counter, usage, is_target_active_in_tenant,
+            consumer_id, group, block_ms, read_count, max_deliveries, stream_maxlen, dlq_maxlen, invoke_timeout_ms,
+        })
+    }
+
+    /// Runs until `*shutdown.borrow()` becomes `true`. Never returns `Err`
+    /// on a per-entry failure -- only a fatal read-loop error (e.g. the
+    /// dedicated connection itself failing) propagates.
+    pub async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<(), ProcessError> {
+        loop {
+            if *shutdown.borrow() {
+                return Ok(());
+            }
+            let entries = {
+                let mut reader = self.reader.lock().await;
+                reader.read(&self.spec.stream, &self.group, &self.consumer_id, self.block_ms, self.read_count).await?
+            };
+            for delivered in entries {
+                if let Err(e) = self.process_entry(delivered).await {
+                    tracing::error!(app_id = %self.spec.app_id, stream = %self.spec.stream, error = %e, "unhandled error processing entry; leaving pending for reaper");
+                }
+            }
+        }
+    }
+
+    /// The full per-entry pipeline. Every terminal failure writes a
+    /// `DlqRecord` and `XACK`s; every transient failure acks nothing,
+    /// leaving the entry for the reaper's next `XAUTOCLAIM` (Task 26).
+    pub async fn process_entry(&self, delivered: Delivered) -> Result<(), ProcessError> {
+        let Delivered { stream, entry_id, env, .. } = delivered;
+        self.usage.record(usage_delta(&self.scope, &env.workstream_id, &self.spec.app_id, 1, 0, Default::default(), 0, 0, 0));
+
+        // D30: verify before any other processing (spec Sec5.11).
+        if let Err(boundary_err) = ScopeCheck::check_against_key(&env, &stream).and_then(|_| verify_binding(&self.keyring, &env)) {
+            self.dlq_and_ack(&stream, &entry_id, &env, DlqErrorKind::TenantBoundary, boundary_err.reason().to_uppercase(), boundary_err.to_string(), None).await?;
+            return Ok(());
+        }
+
+        // Consumer-side `consumes` filtering: skip-and-XACK, never a failure.
+        if !any_rule_matches(&self.spec.consumes, &env.event) {
+            self.spine.ack(&stream, &self.group, &entry_id).await?;
+            return Ok(());
+        }
+
+        // Always-on moderation gate, before the bundle ever sees the event.
+        match self.moderation_gate.check(&env.event).await {
+            ModerationVerdict::Flagged { category, score } => {
+                self.moderation_enforcer.enforce(&env, &category, score).await?;
+                self.spine.ack(&stream, &self.group, &entry_id).await?;
+                return Ok(());
+            }
+            ModerationVerdict::Allowed => {}
+        }
+
+        if self.trip_counter.is_disabled(&self.spec.app_id, &self.spec.digest) {
+            self.dlq_and_ack(&stream, &entry_id, &env, DlqErrorKind::BundleDisabled, "BUNDLE_DISABLED".to_string(), "disabled after three sandbox trips".to_string(), None).await?;
+            return Ok(());
+        }
+
+        let context = build_bundle_context(&ContextArgs {
+            tenant: env.tenant.clone(),
+            community: env.community.clone(),
+            app_id: self.spec.app_id.clone(),
+            version: self.spec.version.clone(),
+            message_id: entry_id.clone(),
+            config: self.spec.config.clone(),
+        });
+        let payload = serde_json::json!({ "event": env.event, "context": context });
+        let trace_context = env.trace.as_ref().map(|t| t.traceparent.clone());
+
+        let outcome: Result<InvokeOutcome, ProcessError> = self
+            .invoker
+            .invoke(&self.spec.app_id, &self.spec.digest, "transform", payload, self.invoke_timeout_ms, trace_context)
+            .await;
+
+        let invoke_outcome = match outcome {
+            Ok(o) => {
+                self.trip_counter.reset(&self.spec.app_id, &self.spec.digest);
+                o
+            }
+            Err(e) => {
+                let deliveries = self.spine.delivery_count(&stream, &self.group, &entry_id).await.unwrap_or(1);
+                match classify_after_invoke_failure(&e, deliveries, self.max_deliveries) {
+                    EntryOutcome::Retry => return Ok(()),
+                    EntryOutcome::Dlq { kind, code, message } => {
+                        if kind == DlqErrorKind::BundleTrap {
+                            self.trip_counter.record_trip(&self.spec.app_id, &self.spec.digest);
+                        }
+                        self.dlq_and_ack(&stream, &entry_id, &env, kind, code, message, None).await?;
+                        return Ok(());
+                    }
+                    EntryOutcome::Ack => {
+                        self.spine.ack(&stream, &self.group, &entry_id).await?;
+                        return Ok(());
+                    }
+                }
+            }
+        };
+
+        let output_payload = invoke_outcome.payload.as_object().cloned().unwrap_or_default();
+        let is_target_active = self.is_target_active_in_tenant.as_ref();
+        let route_result = route_bundle_output(&env, &self.spec.app_id, output_payload, &self.spec.routes_to, &|t: &str| is_target_active(t));
+
+        if let Some(field) = route_result.stripped_identity_field {
+            tracing::warn!(app_id = %self.spec.app_id, field, "bundle output tried to set a reserved identity field; stripped and counted");
+        }
+
+        match route_result.decision {
+            RouteDecision::Denied { target_app_id, reason } => {
+                tracing::warn!(app_id = %self.spec.app_id, target = %target_app_id, reason, "route denied");
+            }
+            RouteDecision::Deliver(out_env) => {
+                let dest_stream = self.scope.action_stream(destination_app_id(&out_env));
+                self.usage.record(usage_delta(&self.scope, &out_env.workstream_id, &self.spec.app_id, 0, 1, crate::spine::usage::HostCallCounts::default(), invoke_outcome.fuel_used, 1, 0));
+                self.spine.append(&dest_stream, &out_env, self.stream_maxlen).await?;
+            }
+        }
+
+        self.spine.ack(&stream, &self.group, &entry_id).await?;
+        Ok(())
+    }
+
+    async fn dlq_and_ack(&self, stream: &str, entry_id: &str, env: &crate::spine::envelope::StageEnvelope, kind: DlqErrorKind, code: String, message: String, detail: Option<String>) -> Result<(), ProcessError> {
+        let raw = serde_json::to_string(env).unwrap_or_default();
+        let rec = DlqRecord::new(
+            "process", stream, entry_id, &self.group, &env.tenant, env.community.clone(), &self.spec.app_id,
+            Some(env.workstream_id.clone()), Some(self.spec.digest.clone()), &self.consumer_id, self.max_deliveries,
+            kind, &code, &message, detail, env.trace.clone(), &raw,
+        );
+        let dlq_key = crate::spine::keys::dlq_key("process");
+        self.spine.dead_letter(&dlq_key, &rec, self.dlq_maxlen).await?;
+        self.spine.ack(stream, &self.group, entry_id).await?;
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn usage_delta(scope: &Scope, workstream_id: &str, app_id: &str, events: u64, invocations: u64, host_calls: crate::spine::usage::HostCallCounts, fuel_ms: u64, actions_delivered: u64, outbound_bytes: u64) -> UsageDelta {
+    let mut d = UsageDelta::zero(scope.tenant.clone(), scope.community.clone(), workstream_id.to_string(), "process", Some(app_id.to_string()));
+    d.events = events;
+    d.invocations = invocations;
+    d.host_calls = host_calls;
+    d.fuel_ms = fuel_ms;
+    d.actions_delivered = actions_delivered;
+    d.outbound_bytes = outbound_bytes;
+    d
+}
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `make -C core/svc_process test ARGS="--lib worker:: hostapi::dispatch::"`
+Expected: `test result: ok. 4 passed` in `worker::tests`, and the existing `hostapi::dispatch` suite still green with the new `Invoker` impl added.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add core/svc_process/src/worker.rs core/svc_process/src/hostapi/dispatch.rs
+git commit -m "$(cat <<'EOF'
+feat(svc-process): per-(bundle, stream) worker -- D30 verify-first
+pipeline, consumes filtering, moderation gate, invoke, routing, DLQ
+
+Worker::process_entry is the single pipeline both the live read loop
+and Task 26's reaper share: ScopeCheck + verify_binding before
+anything else (D30), consumer-side consumes skip-and-ack, the
+always-on moderation gate, the three-strike disabled-bundle
+short-circuit, invoke via the Invoker trait (unit-testable without a
+live executor connection), route_bundle_output, and a DlqRecord +
+XACK on every terminal failure. classify_after_invoke_failure is a
+pure decision function: retry below SPINE_MAX_DELIVERIES, DLQ at or
+past it under trip::classify_invoke_error's kind.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+
+### Task 26: `XAUTOCLAIM` reaper + `XINFO GROUPS` stats sampler (`reaper.rs`)
+
+**Files:**
+- Create: `core/svc_process/src/reaper.rs`
+- Modify: `core/svc_process/src/lib.rs` (`pub mod reaper;` already declared in Task 1)
+
+**Interfaces:**
+- Consumes: `SpineClient::{claim_stale, group_stats}` (Task 8), `Worker::process_entry` (Task 25).
+- Produces: `pub struct Reaper { .. }` with `pub fn new(spine: SpineClient, app_id: String, stream: String, group: String, consumer_id: String, claim_idle_ms: u64, claim_interval_ms: u64, stats_interval_ms: u64, claim_count: u64, pel_alert: u64, worker: std::sync::Arc<crate::worker::Worker>) -> Self`, `pub async fn run(self, shutdown: tokio::sync::watch::Receiver<bool>) -> Result<(), ProcessError>` (two independent interval timers on one task: every `claim_interval_ms`, `XAUTOCLAIM`s up to `claim_count` stale entries and feeds each through the exact same `Worker::process_entry` the live read loop uses -- never a second, drifted reprocessing path; every `stats_interval_ms`, samples `XINFO GROUPS` and logs at WARN plus increments `waddles_spine_pel_alert_total{app_id}` when `pending > pel_alert`, spec Sec5.6's backpressure signal). Task 28's main wiring constructs one `Reaper` per active `WorkerKey`, sharing the SAME `Arc<Worker>` its paired `Worker::run` task holds -- `Reaper::run` never owns a `GroupReader`, only `SpineClient::claim_stale`/`group_stats`, which use the shared admin pool, never a dedicated blocking connection (spec Sec5.7 client rule 2 applies to the blocking `XREADGROUP` only, not `XAUTOCLAIM`).
+
+Spec: §5.4 (`XAUTOCLAIM` reaper), §5.6 (`XINFO GROUPS` backpressure signal, `SPINE_PEL_ALERT`), §5.7 (client rules).
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pel_alert_threshold_check_is_a_pure_comparison() {
+        assert!(exceeds_pel_alert(5001, 5000));
+        assert!(!exceeds_pel_alert(5000, 5000));
+        assert!(!exceeds_pel_alert(1, 5000));
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `make -C core/svc_process test ARGS="--lib reaper::"`
+Expected: FAIL to compile.
+
+- [ ] **Step 3: Implement**
+
+```rust
+// core/svc_process/src/reaper.rs
+//! Sweeps abandoned pending entries back into processing (spec Sec5.4)
+//! and samples consumer-group backpressure (spec Sec5.6). Shares
+//! `Worker::process_entry` with the live read loop -- reclaimed entries
+//! run through the identical D30-verify-first, moderation-gate, invoke,
+//! route, DLQ pipeline, never a second copy of that logic.
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::sync::watch;
+
+use crate::error::ProcessError;
+use crate::spine::client::SpineClient;
+use crate::worker::Worker;
+
+/// Pure comparison behind the `waddles_spine_pel_alert_total` decision --
+/// spec Sec5.6: strictly greater than the configured `SPINE_PEL_ALERT`.
+pub fn exceeds_pel_alert(pending: u64, pel_alert: u64) -> bool {
+    pending > pel_alert
+}
+
+/// One `(app_id, stream)` pair's abandoned-entry sweep and backpressure sampler.
+pub struct Reaper {
+    spine: SpineClient,
+    app_id: String,
+    stream: String,
+    group: String,
+    consumer_id: String,
+    claim_idle_ms: u64,
+    claim_interval_ms: u64,
+    stats_interval_ms: u64,
+    claim_count: u64,
+    pel_alert: u64,
+    worker: Arc<Worker>,
+}
+
+impl Reaper {
+    /// Builds a reaper sharing `worker`'s exact per-entry pipeline.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        spine: SpineClient,
+        app_id: String,
+        stream: String,
+        group: String,
+        consumer_id: String,
+        claim_idle_ms: u64,
+        claim_interval_ms: u64,
+        stats_interval_ms: u64,
+        claim_count: u64,
+        pel_alert: u64,
+        worker: Arc<Worker>,
+    ) -> Self {
+        Self { spine, app_id, stream, group, consumer_id, claim_idle_ms, claim_interval_ms, stats_interval_ms, claim_count, pel_alert, worker }
+    }
+
+    /// Runs two independent interval sweeps until `*shutdown.borrow()`.
+    pub async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<(), ProcessError> {
+        let mut claim_tick = tokio::time::interval(Duration::from_millis(self.claim_interval_ms));
+        let mut stats_tick = tokio::time::interval(Duration::from_millis(self.stats_interval_ms));
+        loop {
+            tokio::select! {
+                _ = claim_tick.tick() => {
+                    if *shutdown.borrow() { return Ok(()); }
+                    self.sweep_once().await;
+                }
+                _ = stats_tick.tick() => {
+                    if *shutdown.borrow() { return Ok(()); }
+                    self.sample_stats_once().await;
+                }
+                _ = shutdown.changed() => {
+                    if *shutdown.borrow() { return Ok(()); }
+                }
+            }
+        }
+    }
+
+    async fn sweep_once(&self) {
+        match self.spine.claim_stale(&self.stream, &self.group, &self.consumer_id, self.claim_idle_ms, self.claim_count).await {
+            Ok(reclaimed) => {
+                for delivered in reclaimed {
+                    if let Err(e) = self.worker.process_entry(delivered).await {
+                        tracing::error!(app_id = %self.app_id, stream = %self.stream, error = %e, "reaper: error reprocessing reclaimed entry");
+                    }
+                }
+            }
+            Err(e) => tracing::error!(app_id = %self.app_id, stream = %self.stream, error = %e, "reaper: XAUTOCLAIM failed"),
+        }
+    }
+
+    async fn sample_stats_once(&self) {
+        match self.spine.group_stats(&self.stream).await {
+            Ok(groups) => {
+                for g in groups {
+                    if exceeds_pel_alert(g.pending, self.pel_alert) {
+                        tracing::warn!(app_id = %self.app_id, stream = %self.stream, group = %g.name, pending = g.pending, pel_alert = self.pel_alert, "pending-entries-list backpressure alert");
+                    }
+                }
+            }
+            Err(e) => tracing::error!(app_id = %self.app_id, stream = %self.stream, error = %e, "reaper: XINFO GROUPS failed"),
+        }
+    }
+}
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `make -C core/svc_process test ARGS="--lib reaper::"`
+Expected: `test result: ok. 1 passed`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add core/svc_process/src/reaper.rs
+git commit -m "$(cat <<'EOF'
+feat(svc-process): XAUTOCLAIM reaper sharing Worker::process_entry +
+XINFO GROUPS backpressure sampler
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+
+### Task 27: HTTP router + `/health`/`/healthz`/`/metrics` + `--healthcheck` CLI wiring (`http/mod.rs`, `http/health.rs`)
+
+**Files:**
+- Create: `core/svc_process/src/http/mod.rs`, `core/svc_process/src/http/health.rs`
+- Modify: `core/svc_process/src/main.rs` (wire the `--healthcheck` branch left as `eprintln!("svc-process --healthcheck: not wired until Task 27")` in Task 1)
+
+**Interfaces:**
+- Consumes: `Config` (Task 2), `render_metrics`/`RequestMetrics`/`register_request_metrics` (Task 4).
+- Produces: `#[derive(Clone)] pub struct AppState { pub registry: std::sync::Arc<std::sync::RwLock<bool>>, pub ready: std::sync::Arc<std::sync::atomic::AtomicBool>, pub metrics_registry: std::sync::Arc<prometheus::Registry> }` (`registry` is a placeholder liveness flag this task owns end-to-end; `ready` is flipped to `true` by **Task 28**'s main wiring only after the startup self-check passes -- `/healthz` reads it, never computes readiness itself), `pub fn router(state: AppState) -> axum::Router`, `pub fn metrics_router(state: AppState) -> axum::Router` (spec's separate `:9090` listener -- Task 28 binds this on `METRICS_PORT`, `router()` on `MODULE_PORT`), `pub async fn health_handler() -> impl axum::response::IntoResponse` (`/health`, liveness -- 200 whenever the process can answer HTTP at all), `pub async fn healthz_handler(state: axum::extract::State<AppState>) -> impl axum::response::IntoResponse` (`/healthz`, readiness -- 200 only once `state.ready` is `true`, 503 otherwise), `pub async fn metrics_handler(state: axum::extract::State<AppState>) -> impl axum::response::IntoResponse` (`/metrics`, renders `state.metrics_registry` via `render_metrics`); `pub async fn run_local_healthcheck(port: u16, path: &str) -> bool` (used by the CLI `--healthcheck` branch: a plain `reqwest` GET against `http://127.0.0.1:{port}{path}`, `true` only on a `2xx` status, `false` on any error or non-2xx -- no shell tooling, no `curl`, matching Global Constraints "the healthcheck is a binary subcommand").
+
+Spec: §12.1 (`HEALTHCHECK` is a binary subcommand, no shell tooling in the runtime image), §13 (Prometheus `/metrics` on `:9090` as a secondary scrape surface).
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// core/svc_process/src/http/health.rs -- #[cfg(test)] mod tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    fn test_state(ready: bool) -> AppState {
+        AppState {
+            registry: std::sync::Arc::new(std::sync::RwLock::new(true)),
+            ready: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(ready)),
+            metrics_registry: std::sync::Arc::new(prometheus::Registry::new()),
+        }
+    }
+
+    #[tokio::test]
+    async fn health_is_always_200() {
+        let app = router(test_state(false));
+        let resp = app.oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn healthz_is_503_before_ready() {
+        let app = router(test_state(false));
+        let resp = app.oneshot(Request::builder().uri("/healthz").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn healthz_is_200_once_ready() {
+        let app = router(test_state(true));
+        let resp = app.oneshot(Request::builder().uri("/healthz").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_renders_prometheus_text() {
+        let registry = prometheus::Registry::new();
+        let counter = prometheus::IntCounter::new("svc_process_test_total", "test").unwrap();
+        registry.register(Box::new(counter.clone())).unwrap();
+        counter.inc();
+        let state = AppState { registry: std::sync::Arc::new(std::sync::RwLock::new(true)), ready: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)), metrics_registry: std::sync::Arc::new(registry) };
+        let app = metrics_router(state);
+        let resp = app.oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("svc_process_test_total"));
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `make -C core/svc_process test ARGS="--lib http::"`
+Expected: FAIL to compile.
+
+- [ ] **Step 3: Implement**
+
+```rust
+// core/svc_process/src/http/mod.rs
+//! HTTP surface: `/health`/`/healthz` on `MODULE_PORT`, `/metrics` on a
+//! separate router bound to `METRICS_PORT` -- spec Sec13.
+pub mod health;
+
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, RwLock};
+
+use axum::routing::get;
+use axum::Router;
+
+pub use health::{health_handler, healthz_handler, metrics_handler, run_local_healthcheck};
+
+/// Shared HTTP handler state.
+#[derive(Clone)]
+pub struct AppState {
+    /// Liveness flag -- this task owns it end-to-end, always `true` once constructed.
+    pub registry: Arc<RwLock<bool>>,
+    /// Readiness flag -- flipped by Task 28's main wiring only after the startup self-check passes.
+    pub ready: Arc<AtomicBool>,
+    /// The process-wide Prometheus registry (Task 4).
+    pub metrics_registry: Arc<prometheus::Registry>,
+}
+
+/// `/health` (liveness) + `/healthz` (readiness) -- bound to `MODULE_PORT`.
+pub fn router(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(health_handler))
+        .route("/healthz", get(healthz_handler))
+        .with_state(state)
+}
+
+/// `/metrics` -- bound to its own listener on `METRICS_PORT`, spec's
+/// secondary Prometheus scrape surface alongside OTLP.
+pub fn metrics_router(state: AppState) -> Router {
+    Router::new().route("/metrics", get(metrics_handler)).with_state(state)
+}
+```
+
+```rust
+// core/svc_process/src/http/health.rs
+//! `/health`, `/healthz`, `/metrics` handlers + the `--healthcheck` CLI
+//! subcommand's local probe.
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+
+use crate::http::AppState;
+
+/// Liveness -- 200 whenever the process can answer HTTP at all.
+pub async fn health_handler() -> impl IntoResponse {
+    (StatusCode::OK, "ok")
+}
+
+/// Readiness -- reads the flag Task 28 flips after the startup self-check
+/// passes; never recomputes readiness itself.
+pub async fn healthz_handler(State(state): State<AppState>) -> impl IntoResponse {
+    if state.ready.load(std::sync::atomic::Ordering::SeqCst) {
+        (StatusCode::OK, "ready")
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "not ready")
+    }
+}
+
+/// Renders the process-wide Prometheus registry as text.
+pub async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+    match crate::telemetry::render_metrics(&state.metrics_registry) {
+        Ok(body) => (StatusCode::OK, body).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to render metrics");
+            (StatusCode::INTERNAL_SERVER_ERROR, "metrics render error").into_response()
+        }
+    }
+}
+
+/// The `--healthcheck` CLI subcommand's local probe: a plain GET, `true`
+/// only on `2xx`. No shell tooling, no `curl` -- spec Sec12.1.
+pub async fn run_local_healthcheck(port: u16, path: &str) -> bool {
+    let url = format!("http://127.0.0.1:{port}{path}");
+    match reqwest::Client::new().get(&url).timeout(std::time::Duration::from_secs(3)).send().await {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+```
+
+```rust
+// core/svc_process/src/main.rs -- replace only the Task 1 placeholder
+// `--healthcheck` branch; the positional-arg check itself
+// (`std::env::args().nth(1) == Some("--healthcheck")`) is Task 1's own
+// scaffolding and is unchanged by this diff, shown here only for
+// context of exactly which lines to replace:
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
+        let cli = svc_process::config::CliConfig::parse();
+        let ok = svc_process::http::run_local_healthcheck(cli.http_port, "/healthz").await;
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+    eprintln!("svc-process: not wired until Task 28");
+    Ok(())
+}
+```
+
+(Add `use clap::Parser;` at the top of `main.rs` if not already present -- `CliConfig::parse()` is `clap::Parser`'s trait method.)
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `make -C core/svc_process test ARGS="--lib http::"`
+Expected: `test result: ok. 4 passed`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add core/svc_process/src/http/ core/svc_process/src/main.rs core/svc_process/src/config.rs
+git commit -m "$(cat <<'EOF'
+feat(svc-process): /health, /healthz, /metrics routers + --healthcheck
+CLI probe
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+
+### Task 28: Startup connectivity self-check (§12.6, exit 78) + `lib.rs::run()` full service wiring
+
+**Files:**
+- Create: `core/svc_process/src/http/selfcheck.rs`
+- Modify: `core/svc_process/src/http/mod.rs` (`pub mod selfcheck;`), `core/svc_process/src/lib.rs` (implement `run()`), `core/svc_process/src/main.rs` (replace the Task 1 placeholder `eprintln!("svc-process: not wired until Task 28")` branch)
+
+**Interfaces:**
+- Consumes: every public type this plan has produced through Task 27 -- `Config` (2), `ProcessError` (3), `telemetry::init` (4), `spine::{envelope,keys,client,reader,binding,usage}::*` (5-9, 21), `consumes::matcher::ConsumeRule` (10), `distribution::{DistributionClient, DistributionPoller, BundleRow}` (11), `registry::{Registry, WorkerKey, RegistryDiff}` (12), `hostapi::{wire::*, listener::HostApiListener, dispatch::{run_dispatch_loop, HostApiPool, DispatchHandle}}` (13, 14, 16), `hostcap::{CompositeHandler, KvCapability, FlagsCapability, LogCapability, ClockCapability, HttpCapability, DbCapability, ContextCapability}` (15, 17-20), `trip::TripCounter` (22), `builtins::{moderation_gate::ModerationGate, moderation_enforce::ModerationEnforcer}` (23), `worker::{Worker, WorkerSpec}` (25), `reaper::Reaper` (26), `http::{AppState, router, metrics_router}` (27).
+- Produces: `pub struct SelfCheckReport { pub all_required_ok: bool, pub results: Vec<ProbeResult> }`; `#[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum ProbeClass { Dns, Tcp, Tls, Auth, Ok }` with `pub fn as_str(&self) -> &'static str` -- PROVISIONAL(M1), mirrors `penguin_spine::ProbeClass` (Global Constraints borrowed-names table); `pub struct ProbeResult { pub dependency: String, pub class: ProbeClass, pub message: String }`; `pub fn classify_connect_error(err: &redis::RedisError) -> ProbeClass` (string-matches the error's `Display` for `"dns"`/`"timed out"`/`"tls"`/`"NOAUTH"`/`"WRONGPASS"`, defaulting to `Tcp`); `pub async fn run_self_check(cfg: &Config) -> SelfCheckReport` (probes Valkey via a plain `redis::Client::open` + `PING`, Postgres via `sea_orm::Database::connect` against `postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}`, and the hub-api distribution endpoint via `GET {hub_api_url}/api/v1/distribution/health` -- each with `cfg.cli.startup_probe_attempts` retries at `cfg.cli.startup_probe_timeout_ms` apart -- gVisor verification is **not** this self-check's job: that is `svc-process-executor`'s own startup check, spec Sec12.2, out of this plan's scope per the Architecture section); `pub async fn run(shutdown: tokio::sync::watch::Receiver<bool>) -> Result<(), ProcessError>` (the full assembly: load config, init telemetry, self-check-or-exit-78, build the Valkey pool + `SpineClient` + `BindingKeyring` + distribution poller + registry + host-API listener + capability stack + moderation/trip/usage components, spawn the accept loop and the reconcile loop, spawn one `Worker`+`Reaper` pair per active `WorkerKey`, serve `http::router`/`metrics_router`, flip `AppState.ready` once self-check has passed and the first registry reconcile has completed).
+
+Spec: §12.6 (self-check: exit 78 = `EX_CONFIG` on any required dependency failing after its retries), §7.4 (per-bundle role/DB wiring the `db` capability needs at runtime), §6.6 (host-API listener bind/accept/handshake loop), §5.2 (grant reconciliation -> `ensure_group`/`destroy_group`).
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// core/svc_process/src/http/selfcheck.rs -- #[cfg(test)] mod tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_class_as_str_matches_spec_names() {
+        assert_eq!(ProbeClass::Dns.as_str(), "dns");
+        assert_eq!(ProbeClass::Tcp.as_str(), "tcp");
+        assert_eq!(ProbeClass::Tls.as_str(), "tls");
+        assert_eq!(ProbeClass::Auth.as_str(), "auth");
+        assert_eq!(ProbeClass::Ok.as_str(), "ok");
+    }
+
+    #[test]
+    fn classify_connect_error_recognizes_auth_failures() {
+        let err = redis::RedisError::from((redis::ErrorKind::AuthenticationFailed, "NOAUTH Authentication required"));
+        assert_eq!(classify_connect_error(&err), ProbeClass::Auth);
+    }
+
+    #[test]
+    fn classify_connect_error_defaults_to_tcp() {
+        let err = redis::RedisError::from((redis::ErrorKind::IoError, "connection refused"));
+        assert_eq!(classify_connect_error(&err), ProbeClass::Tcp);
+    }
+
+    #[tokio::test]
+    async fn run_self_check_reports_failure_for_an_unreachable_valkey() {
+        let cli = crate::config::CliConfig::parse_from(["svc-process", "--valkey-url", "redis://127.0.0.1:1/0", "--startup-probe-attempts", "1", "--startup-probe-timeout-ms", "50"]);
+        // SAFETY: test-only env, serialized by the harness's default single-threaded test runner per module.
+        unsafe {
+            std::env::set_var("DB_PASSWORD", "x");
+            std::env::set_var("SECRET_KEY", "x");
+            std::env::set_var("SERVICE_API_KEY", "x");
+            std::env::set_var("WADDLES_BINDING_KID", "test");
+        }
+        let cfg = crate::config::Config::from_cli(cli).unwrap();
+        let report = run_self_check(&cfg).await;
+        assert!(!report.all_required_ok);
+        assert!(report.results.iter().any(|r| r.dependency == "valkey"));
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `make -C core/svc_process test ARGS="--lib http::selfcheck::"`
+Expected: FAIL to compile.
+
+- [ ] **Step 3: Implement**
+
+```rust
+// core/svc_process/src/http/selfcheck.rs
+//! Startup connectivity self-check -- spec Sec12.6: every required
+//! endpoint is probed before the pod is marked ready; a failure after
+//! the configured retries is `exit(78)` (`EX_CONFIG`), so the pod
+//! crash-loops with the reason in its logs instead of appearing healthy
+//! and processing nothing.
+use std::time::Duration;
+
+use crate::config::Config;
+
+/// PROVISIONAL(M1) -- mirrors `penguin_spine::ProbeClass`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeClass {
+    /// DNS resolution failed.
+    Dns,
+    /// TCP connect failed (refused, timed out, unreachable).
+    Tcp,
+    /// TLS handshake failed.
+    Tls,
+    /// Authentication was refused.
+    Auth,
+    /// The probe succeeded.
+    Ok,
+}
+
+impl ProbeClass {
+    /// The exact lowercase wire string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProbeClass::Dns => "dns",
+            ProbeClass::Tcp => "tcp",
+            ProbeClass::Tls => "tls",
+            ProbeClass::Auth => "auth",
+            ProbeClass::Ok => "ok",
+        }
+    }
+}
+
+/// One dependency's probe outcome.
+#[derive(Debug, Clone)]
+pub struct ProbeResult {
+    /// `"valkey"` | `"postgres"` | `"hub-api"`.
+    pub dependency: String,
+    /// The classified outcome.
+    pub class: ProbeClass,
+    /// Human-readable detail.
+    pub message: String,
+}
+
+/// The full self-check outcome. `all_required_ok` is `false` when any
+/// probed dependency's `class` is not `Ok`.
+pub struct SelfCheckReport {
+    /// `true` only if every probe below succeeded.
+    pub all_required_ok: bool,
+    /// One entry per probed dependency.
+    pub results: Vec<ProbeResult>,
+}
+
+/// Classifies a `redis` connection error by string-matching its `Display`
+/// -- the crate does not expose a richer error taxonomy than this.
+pub fn classify_connect_error(err: &redis::RedisError) -> ProbeClass {
+    let msg = err.to_string().to_lowercase();
+    if msg.contains("noauth") || msg.contains("wrongpass") || err.kind() == redis::ErrorKind::AuthenticationFailed {
+        ProbeClass::Auth
+    } else if msg.contains("dns") || msg.contains("name resolution") {
+        ProbeClass::Dns
+    } else if msg.contains("tls") || msg.contains("certificate") {
+        ProbeClass::Tls
+    } else {
+        ProbeClass::Tcp
+    }
+}
+
+async fn probe_valkey(cfg: &Config, attempts: u32, retry_interval: Duration) -> ProbeResult {
+    let mut last = ProbeClass::Tcp;
+    let mut last_msg = String::new();
+    for _ in 0..attempts.max(1) {
+        match redis::Client::open(cfg.cli.valkey_url.as_str()) {
+            Ok(client) => match client.get_multiplexed_tokio_connection().await {
+                Ok(mut conn) => {
+                    let pong: redis::RedisResult<String> = redis::cmd("PING").query_async(&mut conn).await;
+                    if pong.is_ok() {
+                        return ProbeResult { dependency: "valkey".to_string(), class: ProbeClass::Ok, message: "PING ok".to_string() };
+                    }
+                    let e = pong.unwrap_err();
+                    last = classify_connect_error(&e);
+                    last_msg = e.to_string();
+                }
+                Err(e) => {
+                    last = classify_connect_error(&e);
+                    last_msg = e.to_string();
+                }
+            },
+            Err(e) => last_msg = e.to_string(),
+        }
+        tokio::time::sleep(retry_interval).await;
+    }
+    ProbeResult { dependency: "valkey".to_string(), class: last, message: last_msg }
+}
+
+async fn probe_postgres(cfg: &Config, attempts: u32, retry_interval: Duration) -> ProbeResult {
+    let dsn = format!(
+        "postgres://{}:{}@{}:{}/{}?sslmode={}",
+        cfg.cli.db_user, cfg.db_password.expose(), cfg.cli.db_host, cfg.cli.db_port, cfg.cli.db_name, cfg.cli.db_sslmode
+    );
+    for _ in 0..attempts.max(1) {
+        match sea_orm::Database::connect(&dsn).await {
+            Ok(_) => return ProbeResult { dependency: "postgres".to_string(), class: ProbeClass::Ok, message: "connect ok".to_string() },
+            Err(e) => {
+                tracing::warn!(error = %e, "postgres self-check probe failed, retrying");
+                tokio::time::sleep(retry_interval).await;
+            }
+        }
+    }
+    ProbeResult { dependency: "postgres".to_string(), class: ProbeClass::Tcp, message: "unreachable after retries".to_string() }
+}
+
+async fn probe_hub_api(cfg: &Config, attempts: u32, retry_interval: Duration) -> ProbeResult {
+    let url = format!("{}/api/v1/distribution/health", cfg.cli.hub_api_url.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    for _ in 0..attempts.max(1) {
+        match client.get(&url).timeout(retry_interval.max(Duration::from_secs(1))).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                return ProbeResult { dependency: "hub-api".to_string(), class: ProbeClass::Ok, message: "health ok".to_string() };
+            }
+            Ok(resp) => tracing::warn!(status = %resp.status(), "hub-api self-check probe returned non-2xx, retrying"),
+            Err(e) => tracing::warn!(error = %e, "hub-api self-check probe failed, retrying"),
+        }
+        tokio::time::sleep(retry_interval).await;
+    }
+    ProbeResult { dependency: "hub-api".to_string(), class: ProbeClass::Tcp, message: "unreachable after retries".to_string() }
+}
+
+/// Probes every required dependency before the pod is marked ready.
+/// `cfg.cli.startup_probe_attempts`/`startup_probe_timeout_ms` bound each
+/// probe's retry loop -- gVisor verification is `svc-process-executor`'s
+/// own job (spec Sec12.2), not this self-check's.
+pub async fn run_self_check(cfg: &Config) -> SelfCheckReport {
+    let attempts = cfg.cli.startup_probe_attempts;
+    let interval = Duration::from_millis(cfg.cli.startup_probe_timeout_ms);
+    let results = vec![
+        probe_valkey(cfg, attempts, interval).await,
+        probe_postgres(cfg, attempts, interval).await,
+        probe_hub_api(cfg, attempts, interval).await,
+    ];
+    let all_required_ok = results.iter().all(|r| r.class == ProbeClass::Ok);
+    SelfCheckReport { all_required_ok, results }
+}
+```
+
+```rust
+// core/svc_process/src/lib.rs -- replace the placeholder doc/body; wires the whole service
+//! `svc-process`: the Waddles process-stage data-plane service. See
+//! module docs on `worker`/`reaper`/`builtins` for the per-entry pipeline.
+#![deny(missing_docs)]
+#![deny(unsafe_code)]
+#![deny(clippy::unwrap_used)]
+
+pub mod builtins;
+pub mod config;
+pub mod consumes;
+pub mod distribution;
+pub mod error;
+pub mod hostapi;
+pub mod hostcap;
+pub mod http;
+pub mod reaper;
+pub mod registry;
+pub mod spine;
+pub mod telemetry;
+pub mod trip;
+pub mod worker;
+
+use std::collections::HashMap;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
+use tokio::sync::watch;
+
+use crate::config::Config;
+use crate::error::ProcessError;
+use crate::hostapi::dispatch::HostApiPool;
+use crate::hostapi::listener::HostApiListener;
+use crate::hostcap::CompositeHandler;
+use crate::http::selfcheck::run_self_check;
+use crate::http::AppState;
+use crate::registry::{Registry, WorkerKey};
+use crate::spine::binding::BindingKeyring;
+use crate::spine::client::SpineClient;
+use crate::spine::usage::UsageBatcher;
+use crate::trip::TripCounter;
+
+/// Default `tracing`/OTel service name and `--healthcheck` target.
+pub const SERVICE_NAME: &str = "svc-process";
+
+type Writer = tokio::io::WriteHalf<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>;
+
+/// Assembles and runs the full service until `*shutdown.borrow()` is `true`.
+pub async fn run(mut shutdown: watch::Receiver<bool>) -> Result<(), ProcessError> {
+    let cfg = Config::load()?;
+    let (mut telemetry_guard, metrics_registry) = crate::telemetry::init(SERVICE_NAME);
+
+    let report = run_self_check(&cfg).await;
+    for r in &report.results {
+        tracing::info!(dependency = %r.dependency, class = r.class.as_str(), message = %r.message, "self-check probe");
+    }
+    if !report.all_required_ok {
+        tracing::error!("self-check failed; exiting 78 (EX_CONFIG)");
+        std::process::exit(78);
+    }
+
+    let redis_cfg = deadpool_redis::Config::from_url(cfg.cli.valkey_url.clone());
+    let pool = redis_cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1)).map_err(|e| ProcessError::Spine(e.to_string()))?;
+    let spine = SpineClient::new(pool);
+
+    let rotation_overlap = chrono::Duration::seconds(cfg.cli.waddles_binding_rotation_overlap_s as i64);
+    let active_kid = cfg.cli.waddles_binding_kid.clone().ok_or_else(|| ProcessError::Spine("WADDLES_BINDING_KID missing past config validation".to_string()))?;
+    let keyring = Arc::new(
+        BindingKeyring::load(std::path::Path::new(&cfg.cli.waddles_binding_key_file), active_kid, rotation_overlap)
+            .map_err(|e| ProcessError::Spine(e.to_string()))?,
+    );
+
+    let usage = Arc::new(UsageBatcher::new());
+    let trip_counter = Arc::new(TripCounter::new(cfg.cli.executor_trip_threshold, std::time::Duration::from_secs(cfg.cli.executor_trip_window_s)));
+    let host_pool: Arc<HostApiPool<Writer>> = Arc::new(HostApiPool::new());
+
+    let kv = Arc::new(crate::hostcap::kv::KvCapability::new(spine.pool(), cfg.cli.kv_max_value_bytes, cfg.cli.kv_max_ttl_s));
+    let flags = Arc::new(crate::hostcap::flags::FlagsCapability::new(Arc::new(penguin_licensing::LicenseClient::new(&cfg))));
+    let log_cap = Arc::new(crate::hostcap::log::LogCapability);
+    let clock = Arc::new(crate::hostcap::clock::ClockCapability::new());
+    let http_cap = Arc::new(
+        crate::hostcap::http::HttpCapability::new(
+            Arc::new(crate::hostcap::http::EnvSecretResolver),
+            std::time::Duration::from_millis(cfg.cli.egress_timeout_ms),
+            cfg.cli.egress_max_response_bytes,
+            cfg.cli.egress_max_redirects,
+        )
+        .map_err(|e| ProcessError::Spine(e.message))?,
+    );
+    let db_cap = Arc::new(crate::hostcap::db::DbCapability::new(format!(
+        "postgres://{{role}}:{{password}}@{}:{}/{}?sslmode={}",
+        cfg.cli.db_host, cfg.cli.db_port, cfg.cli.db_name, cfg.cli.db_sslmode
+    )));
+    let handler: Arc<dyn crate::hostapi::HostCallHandler> = Arc::new(CompositeHandler::new(kv, flags.clone(), log_cap, clock, http_cap, db_cap));
+
+    let moderation_gate = Arc::new(crate::builtins::moderation_gate::ModerationGate::new(
+        reqwest::Client::new(), cfg.cli.moderation_ollama_url.clone(), cfg.cli.moderation_ollama_model.clone(),
+        cfg.cli.moderation_match_threshold, std::time::Duration::from_secs_f64(cfg.cli.moderation_ollama_timeout_seconds), flags.clone(),
+    ));
+    let moderation_enforcer = Arc::new(crate::builtins::moderation_enforce::ModerationEnforcer::new(spine.clone(), cfg.cli.spine_stream_maxlen, flags.clone()));
+
+    // Host-API accept loop -- one connection-actor task per successful handshake.
+    let listener = HostApiListener::bind(
+        std::net::SocketAddr::new(cfg.cli.bind_addr, cfg.cli.host_api_port),
+        &cfg.cli.host_api_tls_cert_file, &cfg.cli.host_api_tls_key_file, &cfg.cli.host_api_tls_ca_file,
+    ).await?;
+    {
+        let host_pool = host_pool.clone();
+        let handler = handler.clone();
+        let trip_counter: Arc<dyn crate::hostapi::dispatch::ExecutorEvents> = trip_counter.clone();
+        let expected_peer = cfg.cli.host_api_peer_identity.clone();
+        let expected_gvisor = cfg.cli.waddles_sandbox_gvisor;
+        let expected_collector = cfg.cli.executor_wasm_collector.clone();
+        let max_frame_bytes = cfg.cli.executor_max_frame_bytes;
+        let call_timeout_ms = cfg.cli.executor_call_timeout_ms;
+        tokio::spawn(async move {
+            loop {
+                let tcp = match listener.accept().await {
+                    Ok(tcp) => tcp,
+                    Err(e) => { tracing::error!(error = %e, "host-api accept failed"); continue; }
+                };
+                let limits = crate::hostapi::wire::HostApiLimits { call_timeout_ms, memory_mb: 0, max_concurrent_calls: 16 };
+                match listener.handshake(tcp, &expected_peer, expected_gvisor, &expected_collector, "process", limits).await {
+                    Ok(conn) => {
+                        let dispatch_handle = crate::hostapi::dispatch::DispatchHandle::new(conn.writer);
+                        host_pool.add(dispatch_handle.clone()).await;
+                        let handler = handler.clone();
+                        let events = trip_counter.clone();
+                        tokio::spawn(crate::hostapi::dispatch::run_dispatch_loop(conn.reader, dispatch_handle, handler, events, max_frame_bytes));
+                    }
+                    Err(e) => tracing::error!(error = %e, "host-api handshake failed"),
+                }
+            }
+        });
+    }
+
+    // Distribution poll + registry reconcile loop.
+    let distribution_client = crate::distribution::DistributionClient::new(cfg.cli.hub_api_url.clone(), cfg.secret_key.clone())?;
+    let poller = crate::distribution::DistributionPoller::new(distribution_client, std::time::Duration::from_secs_f64(cfg.cli.base_backoff_s), std::time::Duration::from_secs_f64(cfg.cli.max_backoff_s));
+    let registry = Arc::new(std::sync::RwLock::new(Registry::new()));
+    let mut running: HashMap<WorkerKey, (watch::Sender<bool>, tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>)> = HashMap::new();
+
+    let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let app_state = AppState { registry: Arc::new(std::sync::RwLock::new(true)), ready: ready.clone(), metrics_registry: Arc::new(metrics_registry) };
+    {
+        let app_state = app_state.clone();
+        let http_port = cfg.cli.http_port;
+        let bind_addr = cfg.cli.bind_addr;
+        tokio::spawn(async move {
+            let listener = tokio::net::TcpListener::bind((bind_addr, http_port)).await.expect("bind MODULE_PORT");
+            axum::serve(listener, crate::http::router(app_state)).await.expect("http server");
+        });
+    }
+    {
+        let app_state = app_state.clone();
+        let metrics_port = cfg.cli.metrics_port;
+        let bind_addr = cfg.cli.bind_addr;
+        tokio::spawn(async move {
+            let listener = tokio::net::TcpListener::bind((bind_addr, metrics_port)).await.expect("bind METRICS_PORT");
+            axum::serve(listener, crate::http::metrics_router(app_state)).await.expect("metrics server");
+        });
+    }
+
+    // D31 usage-metering flush timer -- UsageBatcher accumulates in
+    // Worker::process_entry; this is the only task that ever calls
+    // SpineClient::append_usage, at most every METERING_FLUSH_INTERVAL_S,
+    // per spec Sec5.12 ("not per event, so a chatty channel does not
+    // multiply the write rate"). A best-effort final flush runs on
+    // shutdown so the last partial interval's deltas are not silently
+    // dropped.
+    {
+        let usage = usage.clone();
+        let spine = spine.clone();
+        let flush_interval = std::time::Duration::from_secs(cfg.cli.metering_flush_interval_s);
+        let metering_enabled = cfg.cli.metering_enabled;
+        let stream_maxlen = cfg.cli.spine_stream_maxlen;
+        let mut shutdown_for_usage = shutdown.clone();
+        tokio::spawn(async move {
+            if !metering_enabled {
+                return;
+            }
+            let mut tick = tokio::time::interval(flush_interval);
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {
+                        for delta in usage.flush() {
+                            if let Err(e) = spine.append_usage(&delta, stream_maxlen).await {
+                                tracing::error!(error = %e, "append_usage failed; delta dropped for this interval");
+                            }
+                        }
+                    }
+                    _ = shutdown_for_usage.changed() => {
+                        if *shutdown_for_usage.borrow() {
+                            for delta in usage.flush() {
+                                let _ = spine.append_usage(&delta, stream_maxlen).await;
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    let poll_interval = std::time::Duration::from_secs_f64(cfg.cli.poll_interval_s);
+    loop {
+        if *shutdown.borrow() {
+            for (_key, (tx, worker_handle, reaper_handle)) in running.drain() {
+                let _ = tx.send(true);
+                let _ = worker_handle.await;
+                let _ = reaper_handle.await;
+            }
+            telemetry_guard.shutdown();
+            return Ok(());
+        }
+        let rows = poller.refresh().await;
+        let diff = registry.write().expect("registry lock poisoned").reconcile(rows);
+        for key in diff.to_stop {
+            if let Some((tx, worker_handle, reaper_handle)) = running.remove(&key) {
+                let _ = tx.send(true);
+                let _ = worker_handle.await;
+                let _ = reaper_handle.await;
+                let group = key.app_id.clone();
+                if let Err(e) = spine.destroy_group(&key.stream, &group).await {
+                    tracing::error!(app_id = %key.app_id, stream = %key.stream, error = %e, "destroy_group failed on grant revocation");
+                }
+            }
+        }
+        for (key, bundle_row) in diff.to_start {
+            let group = key.app_id.clone();
+            if let Err(e) = spine.ensure_group(&key.stream, &group).await {
+                tracing::error!(app_id = %key.app_id, stream = %key.stream, error = %e, "ensure_group failed; skipping this worker this tick");
+                continue;
+            }
+            let Some(digest) = bundle_row.artifact_digest.clone() else { continue };
+            let reader = match crate::spine::reader::GroupReader::connect(&cfg.cli.valkey_url, &key.stream, std::time::Duration::from_secs(cfg.cli.drain_socket_timeout_s)).await {
+                Ok(r) => r,
+                Err(e) => { tracing::error!(error = %e, "GroupReader::connect failed; skipping this worker this tick"); continue; }
+            };
+            let spec = crate::worker::WorkerSpec {
+                app_id: key.app_id.clone(), stream: key.stream.clone(), digest, version: bundle_row.artifact_version.clone().unwrap_or_default(),
+                config: bundle_row.config.clone(), consumes: bundle_row.manifest.consumes.clone(), routes_to: bundle_row.manifest.routes_to.clone(),
+            };
+            let consumer_id = cfg.cli.spine_consumer_id.clone().unwrap_or_else(|| format!("{}-{}", SERVICE_NAME, uuid::Uuid::new_v4()));
+            // Per-worker closure: D30 requires the runtime cross-tenant
+            // check to be independent of the install-time approval
+            // (route_bundle_output, Task 24) -- each worker's closure is
+            // bound to ITS OWN tenant (from its own granted stream), and
+            // reads the shared, live registry under a read lock so a
+            // redirect target's activation state is always current, not
+            // a stale snapshot taken at worker-spawn time.
+            let (worker_tenant, _) = match crate::spine::keys::parse_scope_from_key(&key.stream) {
+                Some(scope) => scope,
+                None => { tracing::error!(stream = %key.stream, "invariant violated: unparseable stream key at worker spawn"); continue; }
+            };
+            let registry_for_routing = registry.clone();
+            let is_target_active_in_tenant: Arc<dyn Fn(&str) -> bool + Send + Sync> = Arc::new(move |target_app_id: &str| {
+                registry_for_routing.read().map(|r| r.is_active_for_tenant(target_app_id, &worker_tenant)).unwrap_or(false)
+            });
+            let worker = match crate::worker::Worker::new(
+                spec, spine.clone(), reader, keyring.clone(), host_pool.clone(), moderation_gate.clone(), moderation_enforcer.clone(),
+                trip_counter.clone(), usage.clone(), is_target_active_in_tenant.clone(), consumer_id.clone(), group.clone(),
+                cfg.cli.spine_block_ms, cfg.cli.spine_read_count, cfg.cli.spine_max_deliveries, cfg.cli.spine_stream_maxlen,
+                cfg.cli.spine_dlq_maxlen, cfg.cli.executor_call_timeout_ms,
+            ) {
+                Ok(w) => Arc::new(w),
+                Err(e) => { tracing::error!(error = %e, "Worker::new failed; skipping this worker this tick"); continue; }
+            };
+            let (tx, rx) = watch::channel(false);
+            let worker_handle = tokio::spawn(worker.clone().run(rx.clone()));
+            let reaper = crate::reaper::Reaper::new(
+                spine.clone(), key.app_id.clone(), key.stream.clone(), group, consumer_id,
+                cfg.cli.spine_claim_idle_ms, cfg.cli.spine_claim_interval_ms, cfg.cli.spine_stats_interval_ms,
+                cfg.cli.spine_read_count, cfg.cli.spine_pel_alert, worker,
+            );
+            let reaper_handle = tokio::spawn(reaper.run(rx));
+            running.insert(key, (tx, worker_handle, reaper_handle));
+        }
+        ready.store(true, Ordering::SeqCst);
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
+```
+
+```rust
+// core/svc_process/src/spine/client.rs -- append inside the existing `impl SpineClient` block
+    /// Returns a clone of the pool backing this client's admin/write
+    /// operations (`deadpool_redis::Pool` is itself `Arc`-backed, cheap
+    /// to clone) -- Task 28's main wiring shares this one pool with the
+    /// `kv` capability rather than opening a second one.
+    pub fn pool(&self) -> deadpool_redis::Pool {
+        self.pool.clone()
+    }
+```
+
+```rust
+// core/svc_process/src/main.rs -- replace the Task 27 "not wired until
+// Task 28" line with the real run() call; the `--healthcheck` branch
+// above it (Task 27) is unchanged.
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
+        let cli = svc_process::config::CliConfig::parse();
+        let ok = svc_process::http::run_local_healthcheck(cli.http_port, "/healthz").await;
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    // Production shutdown trigger: a ctrl_c/SIGTERM handler would send
+    // `true` on `_tx` -- out of this task's own test scope (a live signal
+    // can't be unit-tested), wired here as the process's real entrypoint.
+    let cfg_watch_tx = _tx.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        let _ = cfg_watch_tx.send(true);
+    });
+    svc_process::run(rx).await?;
+    Ok(())
+}
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `make -C core/svc_process test ARGS="--lib http::selfcheck::"`
+Expected: `test result: ok. 4 passed`. Then: `make -C core/svc_process build` -- expected: clean compile of the full binary (this is the first task where every module links together; a compile error here means an earlier task's produced signature does not match how this task calls it -- reconcile against that task's own Interfaces block, never invent a new shape to paper over it).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add core/svc_process/src/lib.rs core/svc_process/src/main.rs core/svc_process/src/http/ core/svc_process/src/spine/client.rs
+git commit -m "$(cat <<'EOF'
+feat(svc-process): startup self-check (exit 78) + full service wiring --
+distribution poll/reconcile, host-API accept loop, worker+reaper spawn
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+
+### Task 29: Helm chart — stage Deployment, executor Deployment + gVisor `RuntimeClass`, `CiliumNetworkPolicy`, `values.yaml`
+
+**Files:**
+- Modify: `k8s/helm/waddlebot/templates/svc-process.yaml` (real image, host-api port/volumes)
+- Create: `k8s/helm/waddlebot/templates/svc-process-executor.yaml`, `k8s/helm/waddlebot/templates/svc-process-networkpolicy.yaml`
+- Modify: `k8s/helm/waddlebot/values.yaml` (`pipeline.svcProcess.*`, `pipeline.executor.*`, `sandbox.*`, `security.envelopeBinding.*`, `metering.*`)
+
+**Interfaces:**
+- Consumes: nothing from earlier Rust tasks (chart-only); reads spec §12 verbatim for every value name and default.
+- Produces: a `helm template`-renderable stage Deployment (`svc-process`, cluster-default `RuntimeClass`, holds all credentials, terminates the mTLS host-API listener on `:8301`) and a separate, credential-less `svc-process-executor` Deployment under the gVisor `RuntimeClass` (`runsc`, opt-out via `sandbox.gvisor.enabled: false`) plus its own `Service`; a default-deny `CiliumNetworkPolicy` allowing only `svc-process-executor` → `svc-process:8301` and `svc-process-executor` → the artifact bucket egress, nothing else in either direction; `values.yaml` entries `pipeline.svcProcess.{replicas,image.repository,image.tag,resources,pollIntervalSeconds}`, `pipeline.executor.{replicas,image.repository,image.tag,resources,connectionsPerReplica}`, `sandbox.{runtimeClassName,gvisor.enabled}`, `security.envelopeBinding.{keySecretRef,rotationOverlapSeconds}`, `security.transport.{tls,auth}`, `metering.{enabled,flushIntervalSeconds}`. Every later negative test (**Task 34**) that asserts a NetworkPolicy boundary runs `helm template` against this chart, never a live cluster.
+
+Spec: §12.1 (image `ghcr.io/penguintechinc/waddles/svc-process`), §12.2 (gVisor support matrix, `sandbox.gvisor.enabled` opt-out + `waddles_sandbox_gvisor` gauge), §12.3 (`security.envelopeBinding.*`, `metering.*` values), §12.4 (`svc-process-executor`'s stage-connection pool, replica count tracking), §11.2 (`RuntimeClass` placement), Global Constraints Kubernetes (`CiliumNetworkPolicy` only, Pod Security Admission `restricted`, Helm only).
+
+- [ ] **Step 1: Write the failing test**
+
+```bash
+# tests/helm/svc_process_chart_test.sh -- executed by Step 4, not a Rust test
+#!/usr/bin/env bash
+set -euo pipefail
+echo "== helm lint =="
+helm lint k8s/helm/waddlebot
+echo "== helm template: renders svc-process-executor with the gVisor RuntimeClass by default =="
+helm template waddlebot k8s/helm/waddlebot | grep -A5 'kind: Deployment' | grep -q 'name: svc-process-executor' \
+  && echo "PASS: svc-process-executor Deployment present" || { echo "FAIL: svc-process-executor Deployment missing"; exit 1; }
+helm template waddlebot k8s/helm/waddlebot --show-only templates/svc-process-executor.yaml | grep -q 'runtimeClassName: runsc' \
+  && echo "PASS: runsc RuntimeClass rendered by default" || { echo "FAIL: runtimeClassName missing"; exit 1; }
+echo "== helm template: sandbox.gvisor.enabled=false omits runtimeClassName =="
+helm template waddlebot k8s/helm/waddlebot --set sandbox.gvisor.enabled=false --show-only templates/svc-process-executor.yaml | grep -q 'runtimeClassName' \
+  && { echo "FAIL: runtimeClassName still rendered with gvisor disabled"; exit 1; } || echo "PASS: runtimeClassName omitted"
+echo "== helm template: NetworkPolicy is CiliumNetworkPolicy, never plain NetworkPolicy =="
+helm template waddlebot k8s/helm/waddlebot --show-only templates/svc-process-networkpolicy.yaml | grep -q '^kind: CiliumNetworkPolicy' \
+  && echo "PASS: CiliumNetworkPolicy" || { echo "FAIL: wrong policy kind"; exit 1; }
+echo "examined: 4 assertions, 0 skipped"
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `chmod +x tests/helm/svc_process_chart_test.sh && ./tests/helm/svc_process_chart_test.sh`
+Expected: FAIL -- `templates/svc-process-executor.yaml`/`templates/svc-process-networkpolicy.yaml` do not exist yet.
+
+- [ ] **Step 3: Implement**
+
+```yaml
+# k8s/helm/waddlebot/templates/svc-process.yaml -- modify the existing Deployment
+# (merge into the existing template; shown here are the fields this task
+# changes/adds, not a full replacement of every pre-existing field such as
+# labels/selectors/existing probes, which stay as-is)
+spec:
+  replicas: {{ .Values.pipeline.svcProcess.replicas | default 2 }}
+  template:
+    spec:
+      containers:
+        - name: svc-process
+          image: "{{ .Values.pipeline.svcProcess.image.repository | default "ghcr.io/penguintechinc/waddles/svc-process" }}:{{ .Values.pipeline.svcProcess.image.tag }}"
+          ports:
+            - name: http
+              containerPort: 8201
+            - name: metrics
+              containerPort: 9090
+            - name: host-api
+              containerPort: 8301
+          env:
+            - name: POLL_INTERVAL_S
+              value: {{ .Values.pipeline.svcProcess.pollIntervalSeconds | default 5 | quote }}
+            - name: SECURITY_TRANSPORT_TLS
+              value: {{ .Values.security.transport.tls | default true | quote }}
+            - name: SECURITY_TRANSPORT_AUTH
+              value: {{ .Values.security.transport.auth | default true | quote }}
+            - name: WADDLES_BINDING_ROTATION_OVERLAP_S
+              value: {{ .Values.security.envelopeBinding.rotationOverlapSeconds | default 86400 | quote }}
+            - name: METERING_ENABLED
+              value: {{ .Values.metering.enabled | default true | quote }}
+            - name: METERING_FLUSH_INTERVAL_S
+              value: {{ .Values.metering.flushIntervalSeconds | default 10 | quote }}
+          volumeMounts:
+            - name: host-api-tls
+              mountPath: /etc/waddles/host-api
+              readOnly: true
+            - name: envelope-binding
+              mountPath: /etc/waddles/envelope-binding
+              readOnly: true
+          resources:
+            {{- toYaml (.Values.pipeline.svcProcess.resources | default (dict "requests" (dict "cpu" "250m" "memory" "256Mi") "limits" (dict "cpu" "1" "memory" "512Mi"))) | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: host-api-tls
+          secret:
+            secretName: svc-process-host-api-tls
+        - name: envelope-binding
+          secret:
+            secretName: {{ .Values.security.envelopeBinding.keySecretRef | default "waddles-envelope-binding" }}
+```
+
+```yaml
+# k8s/helm/waddlebot/templates/svc-process-executor.yaml
+# svc-process-executor -- credential-less, gVisor-sandboxed, dials into
+# svc-process's host-API port only. Spec Sec9 (component table), Sec12.2/
+# Sec12.4.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-process-executor
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: svc-process-executor
+spec:
+  replicas: {{ .Values.pipeline.executor.replicas | default 2 }}
+  selector:
+    matchLabels:
+      app: svc-process-executor
+  template:
+    metadata:
+      labels:
+        app: svc-process-executor
+    spec:
+      {{- if .Values.sandbox.gvisor.enabled | default true }}
+      runtimeClassName: {{ .Values.sandbox.runtimeClassName | default "runsc" }}
+      {{- end }}
+      {{- if .Values.sandbox.installer.nodeLabel }}
+      nodeSelector:
+        {{ .Values.sandbox.installer.nodeLabel | replace "=" ": " }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10002
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: svc-process-executor
+          image: "{{ .Values.pipeline.executor.image.repository | default "ghcr.io/penguintechinc/waddles/svc-process-executor" }}:{{ .Values.pipeline.executor.image.tag }}"
+          env:
+            - name: STAGE_HOST_API_ADDR
+              value: "svc-process:8301"
+            - name: EXECUTOR_STAGE_CONNECTIONS
+              value: {{ .Values.pipeline.executor.connectionsPerReplica | default 4 | quote }}
+            - name: WADDLES_SANDBOX_GVISOR
+              value: {{ .Values.sandbox.gvisor.enabled | default true | quote }}
+          resources:
+            {{- toYaml (.Values.pipeline.executor.resources | default (dict "requests" (dict "cpu" "500m" "memory" "512Mi") "limits" (dict "cpu" "2" "memory" "1Gi"))) | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-process-executor
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: svc-process-executor
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+```
+
+```yaml
+# k8s/helm/waddlebot/templates/svc-process-networkpolicy.yaml
+# Default-deny + explicit allow rows -- spec D9, Global Constraints
+# Kubernetes ("CiliumNetworkPolicy only, never plain NetworkPolicy").
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: svc-process-executor-egress
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      app: svc-process-executor
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app: svc-process
+      toPorts:
+        - ports:
+            - port: "8301"
+              protocol: TCP
+    - toFQDNs:
+        - matchPattern: "*.{{ .Values.artifactBucket.domainSuffix | default "s3.amazonaws.com" }}"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: svc-process-ingress
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      app: svc-process
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app: svc-process-executor
+      toPorts:
+        - ports:
+            - port: "8301"
+              protocol: TCP
+```
+
+```yaml
+# k8s/helm/waddlebot/values.yaml -- append
+pipeline:
+  svcProcess:
+    replicas: 2
+    image:
+      repository: ghcr.io/penguintechinc/waddles/svc-process
+      tag: ""
+    pollIntervalSeconds: 5
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: "1", memory: 512Mi }
+  executor:
+    replicas: 2
+    image:
+      repository: ghcr.io/penguintechinc/waddles/svc-process-executor
+      tag: ""
+    connectionsPerReplica: 4
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: "2", memory: 1Gi }
+
+sandbox:
+  runtimeClassName: runsc
+  gvisor:
+    enabled: true
+  installer:
+    nodeLabel: ""
+
+security:
+  transport:
+    tls: true
+    auth: true
+  envelopeBinding:
+    keySecretRef: waddles-envelope-binding
+    rotationOverlapSeconds: 86400
+
+metering:
+  enabled: true
+  flushIntervalSeconds: 10
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `./tests/helm/svc_process_chart_test.sh`
+Expected: all four `PASS:` lines, `examined: 4 assertions, 0 skipped`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add k8s/helm/waddlebot/templates/svc-process.yaml k8s/helm/waddlebot/templates/svc-process-executor.yaml k8s/helm/waddlebot/templates/svc-process-networkpolicy.yaml k8s/helm/waddlebot/values.yaml tests/helm/svc_process_chart_test.sh
+git commit -m "$(cat <<'EOF'
+feat(svc-process): Helm -- executor Deployment under gVisor RuntimeClass,
+CiliumNetworkPolicy default-deny, sandbox/envelopeBinding/metering values
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+
+### Task 30: `config/postgres/rbac-matrix.yaml` + `config/valkey/acl-matrix.yaml` -- `svc_process`/bundle rows
+
+**Files:**
+- Modify: `config/postgres/rbac-matrix.yaml` (created by milestone M2b if not already present -- this task adds rows, never recreates the file wholesale)
+- Modify: `config/valkey/acl-matrix.yaml` (same)
+- Test: `tests/rbac/test_matrix_equality.py` (or extend it, if M2b already created one)
+
+**Interfaces:**
+- Consumes: nothing from earlier Rust tasks -- pure YAML config, cited by `scripts/db/rbac_matrix.py` (M2b) at Alembic-migration time and by the chart's rendered `users.acl` (spec §11.6.1).
+- Produces: a `svc_process` row in `config/postgres/rbac-matrix.yaml` (connects as its own role, no table grants of its own -- it only *creates* per-bundle roles' connections at runtime, spec §7.4) and a `bundle_rls_tables` list -- this plan's own addition, not part of M2b's schema -- naming every currently-known bundle-owned table that must carry row-level security (spec §16 M4 "DB host capability... RLS"): `[loyalty_config, loyalty_balances, loyalty_transactions, loyalty_shop_items, loyalty_redemptions]` (the five tables migration `0015_loyalty_core_tables` created -- the only first-party bundle-owned tables with a `community_id` FK column found in the current `alembic/versions/` tree at plan-authorship time; `git ls-tree`/`grep` for `CREATE TABLE` again before running this task, in case a milestone between M2b and M4's execution added more, and append any missing ones to this same list); a `svc-process` row in `config/valkey/acl-matrix.yaml` granting `+xreadgroup +xack +xadd +xgroup|create +xgroup|destroy +xautoclaim +xpending +xinfo|groups` on `waddles:t:*:c:*:src:*:*:events` and `waddles:t:*:c:*:app:*:action`, `+xadd` on `waddles:dlq:process`, **`+xadd` only** (never `+xrange`/`+xreadgroup`/`+xrevrange`) on `waddles:usage` (spec §5.12/§11.10.2/D31: "Every stage user's grant on `waddles:usage` is `+xadd` only"). **Task 31**'s Alembic migration reads `bundle_rls_tables` from this file to generate its `ENABLE ROW LEVEL SECURITY` + `CREATE POLICY` statements -- this task's YAML change is Task 31's direct input, and must land first.
+
+Spec: §11.10.1 (Postgres RBAC matrix), §11.10.2 (Valkey ACL matrix, the `waddles:usage` write-only rule), §5.12/D31, §D28 (Least User Access via RBAC).
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/rbac/test_matrix_equality.py -- extend if it exists, create if M2b has not landed yet
+import yaml
+from pathlib import Path
+
+MATRIX = Path(__file__).resolve().parents[2] / "config" / "postgres" / "rbac-matrix.yaml"
+ACL = Path(__file__).resolve().parents[2] / "config" / "valkey" / "acl-matrix.yaml"
+
+
+def test_svc_process_row_present_in_postgres_matrix():
+    data = yaml.safe_load(MATRIX.read_text())
+    roles = {r["role"] for r in data.get("roles", [])}
+    assert "svc_process" in roles, f"svc_process missing from {MATRIX}"
+
+
+def test_bundle_rls_tables_list_is_non_empty_and_matches_known_bundle_tables():
+    data = yaml.safe_load(MATRIX.read_text())
+    tables = data.get("bundle_rls_tables", [])
+    assert len(tables) > 0, "zero bundle_rls_tables examined -- a zero denominator is a FAIL"
+    for expected in ["loyalty_config", "loyalty_balances", "loyalty_transactions", "loyalty_shop_items", "loyalty_redemptions"]:
+        assert expected in tables, f"{expected} missing from bundle_rls_tables"
+    print(f"bundle_rls_tables examined: {len(tables)}")
+
+
+def test_svc_process_row_present_in_valkey_acl_matrix():
+    data = yaml.safe_load(ACL.read_text())
+    users = {u["user"] for u in data.get("users", [])}
+    assert "svc-process" in users, f"svc-process missing from {ACL}"
+
+
+def test_svc_process_usage_grant_is_xadd_only():
+    data = yaml.safe_load(ACL.read_text())
+    svc_process = next(u for u in data["users"] if u["user"] == "svc-process")
+    usage_grant = next(g for g in svc_process["key_patterns"] if g["pattern"] == "waddles:usage")
+    assert usage_grant["commands"] == ["+xadd"], f"waddles:usage grant must be +xadd only, got {usage_grant['commands']}"
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `pip install --no-cache-dir pyyaml==6.0.2 && python3 -m pytest tests/rbac/test_matrix_equality.py -v`
+Expected: FAIL -- `svc_process`/`svc-process` rows and `bundle_rls_tables` do not exist yet (or the files themselves do not exist yet if M2b has not landed; if so, create both files with the minimal top-level `roles: []`/`users: []` structure M2b's own schema uses before adding this task's rows, and note in the commit body that M2b's own rows are expected to merge in separately).
+
+- [ ] **Step 3: Add the rows**
+
+```yaml
+# config/postgres/rbac-matrix.yaml -- append under the existing `roles:` list
+  - role: svc_process
+    description: >
+      Waddles process-stage data plane. Connects with its own role only to
+      probe connectivity (spec Sec12.6 self-check); it never queries a
+      bundle-owned table directly -- every db host-call runs on a
+      per-bundle bundle_<app_id> role's own connection (spec Sec7.4).
+    tables: []
+    privileges: []
+
+# top-level key, alongside `roles:` -- this plan's own addition (not part
+# of M2b's schema): every bundle-owned table that must carry row-level
+# security (spec Sec16 M4 "DB host capability... RLS").
+bundle_rls_tables:
+  - loyalty_config
+  - loyalty_balances
+  - loyalty_transactions
+  - loyalty_shop_items
+  - loyalty_redemptions
+```
+
+```yaml
+# config/valkey/acl-matrix.yaml -- append under the existing `users:` list
+  - user: svc-process
+    description: Process-stage consumer/producer -- ingest-source streams (read), action streams (write), its own DLQ, usage (write-only).
+    key_patterns:
+      - pattern: "waddles:t:*:c:*:src:*:*:events"
+        commands: ["+xreadgroup", "+xack", "+xgroup|create", "+xgroup|destroy", "+xautoclaim", "+xpending", "+xinfo|groups"]
+      - pattern: "waddles:t:*:c:*:app:*:action"
+        commands: ["+xadd"]
+      - pattern: "waddles:dlq:process"
+        commands: ["+xadd"]
+      - pattern: "waddles:usage"
+        commands: ["+xadd"]
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `python3 -m pytest tests/rbac/test_matrix_equality.py -v`
+Expected: `4 passed`, with `bundle_rls_tables examined: 5` printed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add config/postgres/rbac-matrix.yaml config/valkey/acl-matrix.yaml tests/rbac/test_matrix_equality.py
+git commit -m "$(cat <<'EOF'
+feat(svc-process): svc_process/svc-process RBAC+ACL matrix rows;
+bundle_rls_tables list feeding the D31 RLS migration
+
+waddles:usage grant is +xadd only, per spec Sec11.10.2 D31 -- stages
+never read their own usage stream back.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+
+### Task 31: Row-level security migration for bundle-owned tables (hub-api Alembic tree, spec §16 M4 "DB host capability... RLS")
+
+> **Different toolchain, deliberately.** Every other task in this plan runs through `make -C core/svc_process <target>` (Global Constraints "Commands"). This task does not touch `core/svc_process` at all -- it is a Python/Alembic migration in the **hub-api tree at the repo root** (`alembic/versions/`, `alembic.ini`), because only hub-api runs Alembic migrations and the Rust stage never runs DDL (coordinator ruling R59). Commands here match milestone **M2b**'s own migration-task style exactly (a throwaway `docker run postgres:17-alpine` + direct `alembic upgrade`), never the Rust `make` targets.
+
+**Depends on:** Task 30 (`config/postgres/rbac-matrix.yaml`'s `bundle_rls_tables` list, this migration's direct input); chains after **M2b Task 42**'s migration `0023_workstreams_and_usage` (`down_revision`) -- **must match plan M2b** (`waddlebot` repo, `docs/plan-m2b-hub-api`, migration `0023_workstreams_and_usage`, `revision = "0023_workstreams_and_usage"`); if M2b's own final revision id differs by the time this task executes (re-check `alembic/versions/` for the newest file), point `down_revision` at whatever that actual latest revision string is instead of `0023_workstreams_and_usage` verbatim.
+
+**Files:**
+- Create: `alembic/versions/0024_process_stage_rls.py`
+- Test: `alembic/tests/test_0024_process_stage_rls.py`
+
+**Interfaces:**
+- Consumes: `config/postgres/rbac-matrix.yaml`'s `bundle_rls_tables` list (Task 30), `scripts/db/rbac_matrix.py`'s existing `load_matrix`/`DEFAULT_MATRIX_PATH` (M2b, read-only reuse -- this task adds no new function to that module), the `communities`/`tenants` tables (already exist, pre-M2b).
+- Produces: for every table named in `bundle_rls_tables`, `ALTER TABLE <table> ENABLE ROW LEVEL SECURITY` + `ALTER TABLE <table> FORCE ROW LEVEL SECURITY` (so even the table owner role is subject to the policy -- Postgres exempts owners by default, which would silently defeat this for any role that happens to own the table) + one `CREATE POLICY <table>_tenant_isolation ON <table> USING (...)` keyed on the community's `community_id` FK, resolved from two Postgres session GUCs the connection sets before every statement. **Naming note (deliberate divergence from the ruling's illustrative GUC names):** spec §7.4 states the exact GUC names the Rust `db` host capability already sets, verbatim -- `SET LOCAL waddles.tenant`/`waddles.community` -- and **Task 20** (`hostcap/db.rs`, already implemented) sets exactly those two, not `app.tenant_id`/`app.community_id`. This migration's policies read `current_setting('waddles.tenant', true)` / `current_setting('waddles.community', true)` to match the connection Task 20 actually opens, rather than the ruling's example names, which were illustrative of the *mechanism* (session-GUC-keyed RLS), not a literal required identifier -- using the spec's and Task 20's own established names is what makes the policies actually take effect. The policy predicate resolves the tenant-wide case (no `waddles.community` set -- a tenant-wide bundle activation, spec §5.10's `_tenant` segment) as "any community under this tenant", not "no rows": `community_id IN (SELECT c.id FROM communities c JOIN tenants t ON t.id = c.tenant_id WHERE t.slug = current_setting('waddles.tenant', true) AND (current_setting('waddles.community', true) IS NULL OR current_setting('waddles.community', true) = '' OR c.slug = current_setting('waddles.community', true)))`. **Task 34**'s live-Postgres negative test (a `db` host call scoped to tenant A cannot read tenant B rows) runs against exactly this migration's policies.
+
+Spec: §16 M4 row ("DB host capability | Parser allowlist + per-bundle role + RLS, with the negative tests green"), §7.4 (the `SET LOCAL waddles.tenant`/`waddles.community` mechanism these policies key on), §D28 (Least User Access via RBAC), §14.11 test 5 (the live-Postgres negative test this migration makes possible).
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# alembic/tests/test_0024_process_stage_rls.py
+"""Verifies migration 0024 enables and correctly scopes RLS on every
+bundle_rls_tables entry -- spec Sec16 M4, Sec7.4."""
+import os
+import subprocess
+import time
+
+import psycopg2
+import pytest
+import yaml
+
+DB_URL = "postgresql://postgres:test@localhost:55437/waddlebot"
+CONTAINER = "pg-m4-0024-test"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def postgres():
+    subprocess.run(
+        ["docker", "run", "-d", "--name", CONTAINER, "-e", "POSTGRES_PASSWORD=test",
+         "-e", "POSTGRES_DB=waddlebot", "-p", "55437:5432", "postgres:17-alpine"],
+        check=True,
+    )
+    time.sleep(3)
+    env = {**os.environ, "DATABASE_URL": DB_URL}
+    subprocess.run(["alembic", "upgrade", "0023_workstreams_and_usage"], env=env, check=True)
+    subprocess.run(["alembic", "upgrade", "0024_process_stage_rls"], env=env, check=True)
+    yield
+    subprocess.run(["docker", "rm", "-f", CONTAINER], check=False)
+
+
+def _bundle_rls_tables():
+    matrix = yaml.safe_load(open("config/postgres/rbac-matrix.yaml"))
+    return matrix["bundle_rls_tables"]
+
+
+def test_every_bundle_rls_table_has_row_level_security_enabled_and_forced():
+    tables = _bundle_rls_tables()
+    assert len(tables) > 0, "zero bundle_rls_tables examined -- a zero denominator is a FAIL"
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor()
+    examined = 0
+    for table in tables:
+        cur.execute("SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = %s", (table,))
+        row = cur.fetchone()
+        assert row is not None, f"{table} does not exist"
+        assert row == (True, True), f"{table} RLS enabled/forced = {row}, expected (True, True)"
+        examined += 1
+    print(f"bundle_rls_tables RLS-enabled examined: {examined}")
+    conn.close()
+
+
+def test_policy_scopes_rows_to_the_current_tenant_and_community():
+    conn = psycopg2.connect(DB_URL)
+    conn.autocommit = True
+    cur = conn.cursor()
+    cur.execute("INSERT INTO tenants (slug) VALUES ('acme') ON CONFLICT DO NOTHING RETURNING id")
+    row = cur.fetchone()
+    if row is None:
+        cur.execute("SELECT id FROM tenants WHERE slug = 'acme'")
+        row = cur.fetchone()
+    tenant_id = row[0]
+    cur.execute("INSERT INTO communities (tenant_id, slug) VALUES (%s, 'main') RETURNING id", (tenant_id,))
+    community_id = cur.fetchone()[0]
+    cur.execute("INSERT INTO loyalty_config (community_id) VALUES (%s)", (community_id,))
+    conn.close()
+
+    scoped = psycopg2.connect(DB_URL)
+    scoped.autocommit = False
+    scur = scoped.cursor()
+    scur.execute("SET LOCAL waddles.tenant = 'acme'")
+    scur.execute("SET LOCAL waddles.community = 'main'")
+    scur.execute("SELECT count(*) FROM loyalty_config WHERE community_id = %s", (community_id,))
+    assert scur.fetchone()[0] == 1, "the matching tenant/community must see its own row"
+
+    scur.execute("SET LOCAL waddles.tenant = 'other-tenant'")
+    scur.execute("SET LOCAL waddles.community = 'other-community'")
+    scur.execute("SELECT count(*) FROM loyalty_config WHERE community_id = %s", (community_id,))
+    assert scur.fetchone()[0] == 0, "a different tenant/community must see zero rows -- this is the D30/D28 RLS boundary"
+    scoped.rollback()
+    scoped.close()
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `docker run -d --name pg-m4-0024-precheck -e POSTGRES_PASSWORD=test -e POSTGRES_DB=waddlebot -p 55437:5432 postgres:17-alpine && sleep 3 && DATABASE_URL="postgresql://postgres:test@localhost:55437/waddlebot" alembic upgrade 0023_workstreams_and_usage && python3 -m pytest alembic/tests/test_0024_process_stage_rls.py -v; docker rm -f pg-m4-0024-precheck`
+Expected: FAIL -- migration `0024_process_stage_rls` does not exist yet, `alembic upgrade` in the test fixture errors.
+
+- [ ] **Step 3: Write the migration**
+
+```python
+# alembic/versions/0024_process_stage_rls.py
+"""Row-level security on bundle-owned tables (spec Sec16 M4 "DB host
+capability... RLS", coordinator ruling R59).
+
+Only hub-api runs Alembic migrations; the Rust `svc-process` stage never
+runs DDL (spec's own service boundary) -- this is why the RLS policy
+definitions live here rather than in core/svc_process, even though the
+connection that benefits from them is opened by Task 20's `hostcap/db.rs`.
+
+Policies key on the two session GUCs that connection already sets before
+every statement, verbatim, per spec Sec7.4: `SET LOCAL waddles.tenant`/
+`waddles.community` (not `app.tenant_id`/`app.community_id` -- see this
+plan's Task 31 Interfaces note on why the spec's actual names are used).
+`FORCE ROW LEVEL SECURITY` is required alongside `ENABLE`, or the table
+owner role bypasses the policy entirely by default (Postgres's own
+owner-exemption rule) -- since `bundle_<app_id>` roles are typically
+*not* the table owner (hub_api is), `ENABLE` alone would already work for
+them, but `FORCE` is applied uniformly so this migration's guarantee does
+not silently depend on which role happens to own the table.
+
+The table list comes from config/postgres/rbac-matrix.yaml's
+`bundle_rls_tables` key (this plan's own addition, Task 30) -- re-run
+this migration's `upgrade()` logic (it is idempotent, `CREATE POLICY IF
+NOT EXISTS`-equivalent via a DO block) whenever that list grows, rather
+than writing a new migration per bundle table.
+
+Revision ID: 0024_process_stage_rls
+Revises: 0023_workstreams_and_usage
+Create Date: 2026-09-15
+"""
+from pathlib import Path
+
+import yaml
+from alembic import op
+
+revision = "0024_process_stage_rls"
+down_revision = "0023_workstreams_and_usage"
+branch_labels = None
+depends_on = None
+
+_MATRIX_PATH = Path(__file__).resolve().parents[2] / "config" / "postgres" / "rbac-matrix.yaml"
+
+_POLICY_USING = """
+    community_id IN (
+        SELECT c.id FROM communities c JOIN tenants t ON t.id = c.tenant_id
+        WHERE t.slug = current_setting('waddles.tenant', true)
+          AND (
+            current_setting('waddles.community', true) IS NULL
+            OR current_setting('waddles.community', true) = ''
+            OR c.slug = current_setting('waddles.community', true)
+          )
+    )
+"""
+
+
+def _bundle_rls_tables() -> list[str]:
+    matrix = yaml.safe_load(_MATRIX_PATH.read_text())
+    tables = matrix.get("bundle_rls_tables", [])
+    if not tables:
+        raise RuntimeError(
+            f"{_MATRIX_PATH} has an empty or missing bundle_rls_tables list -- "
+            "Task 30 must land before this migration runs"
+        )
+    return tables
+
+
+def upgrade() -> None:
+    for table in _bundle_rls_tables():
+        op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+        op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
+        op.execute(f"DROP POLICY IF EXISTS {table}_tenant_isolation ON {table}")
+        op.execute(f"CREATE POLICY {table}_tenant_isolation ON {table} USING ({_POLICY_USING})")
+        op.execute(
+            f"COMMENT ON POLICY {table}_tenant_isolation ON {table} IS "
+            "'D30/D28 tenant wall -- scoped to SET LOCAL waddles.tenant/waddles.community, "
+            "spec Sec7.4, Sec16 M4. Never bypassed for the table owner (FORCE RLS).'"
+        )
+
+
+def downgrade() -> None:
+    for table in _bundle_rls_tables():
+        op.execute(f"DROP POLICY IF EXISTS {table}_tenant_isolation ON {table}")
+        op.execute(f"ALTER TABLE {table} NO FORCE ROW LEVEL SECURITY")
+        op.execute(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY")
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run:
+```bash
+docker run -d --name pg-m4-0024-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=waddlebot -p 55437:5432 postgres:17-alpine
+sleep 3
+DATABASE_URL="postgresql://postgres:test@localhost:55437/waddlebot" alembic upgrade 0023_workstreams_and_usage
+DATABASE_URL="postgresql://postgres:test@localhost:55437/waddlebot" alembic upgrade 0024_process_stage_rls
+python3 -m pytest alembic/tests/test_0024_process_stage_rls.py -v
+docker rm -f pg-m4-0024-test
+```
+Expected: `2 passed`, `bundle_rls_tables RLS-enabled examined: 5` printed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add alembic/versions/0024_process_stage_rls.py alembic/tests/test_0024_process_stage_rls.py
+git commit -m "$(cat <<'EOF'
+feat(hub-api): row-level security on bundle-owned tables (spec Sec16
+M4, coordinator ruling R59)
+
+M4-owned per spec Sec16's own milestone table ("DB host capability |
+Parser allowlist + per-bundle role + RLS"), landed as an Alembic
+migration because only hub-api runs DDL. Policies key on the exact
+session GUCs Task 20's hostcap/db.rs already sets (SET LOCAL
+waddles.tenant/waddles.community, spec Sec7.4), scoping a tenant-wide
+activation (no community GUC set) to every community under that
+tenant rather than to zero rows. FORCE ROW LEVEL SECURITY applied
+alongside ENABLE so the guarantee never silently depends on which
+role owns the table. Table list sourced from config/postgres/
+rbac-matrix.yaml's bundle_rls_tables (Task 30).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+### Task 32: CI workflows (`fmt`, `clippy -D warnings`, `deny`, `audit`, `llvm-cov ≥90%`, `semgrep`, `gitleaks`, `trivy`, image push)
+
+**Files:**
+- Create: `.github/workflows/rust-svc-process.yml`, `.github/workflows/build-svc-process.yml`
+
+**Interfaces:**
+- Consumes: every `make -C core/svc_process <target>` from Task 0, including the already-committed `core/svc_process/build/scanner-images.env` (Task 0's own one-time, manually-resolved-and-committed digest file -- this task's CI job reads it via `make`'s `include`, never regenerates it).
+- Produces: `rust-svc-process.yml` (runs on every PR touching `core/svc_process/**`: `fmt-check`, `clippy`, `test-security` (`deny`+`audit`), `coverage` gated at `--fail-under-lines 90`, `semgrep`, `gitleaks`, `trivy` against a locally-built image, `structure-test`, in that order, each step's exit code propagating -- never `|| true`, per Global Constraints Verification Integrity); `build-svc-process.yml` (on merge to `release/v3.0.X`: builds and pushes `ghcr.io/penguintechinc/waddles/svc-process:beta-<epoch>`, matching the five-tier tag convention -- alpha/beta only from this workflow, gamma/prod triggers are the repo-wide release workflow, out of this task's scope). Both workflows need `git` credentials/network for `penguin-licensing`'s git+rev dependency (R53) -- GitHub-hosted runners already have outbound network and a `git` binary, no extra step required, but the `actions/checkout` step must **not** pass `submodules: false`-equivalent restrictions that would block a plain `git` fetch of an external `https://github.com/...` URL during `cargo build` (none of this repo's existing workflows do; this task adds no such restriction).
+
+Spec: Global Constraints CI/CD Tag Naming (`devops.md`), Verification Integrity (`critical-rules.md`).
+
+- [ ] **Step 1: Write the failing check** — before writing the workflow, deliberately verify the underlying `make` targets can fail (Task 0 already did this once for `fmt-check`; this step extends that check to `clippy` and `coverage`, the two targets a CI-only run exercises that a developer might skip locally):
+
+Run (from repo root):
+```bash
+# Break clippy on purpose: add an unused variable to src/main.rs
+sed -i.bak '1i let _unused_ci_probe = 1;' core/svc_process/src/main.rs
+make -C core/svc_process clippy; echo "exit code: $?"
+mv core/svc_process/src/main.rs.bak core/svc_process/src/main.rs
+```
+Expected: non-zero exit code, `warning: unused variable` promoted to a hard error by `-D warnings`. Record that this was done -- Verification Integrity: "assume any long-green gate is broken until you have made it fail on purpose once."
+
+- [ ] **Step 2: Run to verify the workflow YAML itself is syntactically valid**
+
+Run: `docker run --rm -v "$(pwd)":/repo -w /repo rhysd/actionlint:1.7.7 -color .github/workflows/rust-svc-process.yml .github/workflows/build-svc-process.yml`
+Expected: FAIL -- the files do not exist yet.
+
+- [ ] **Step 3: Write both workflow files**
+
+```yaml
+# .github/workflows/rust-svc-process.yml
+name: rust-svc-process
+
+on:
+  pull_request:
+    paths:
+      - "core/svc_process/**"
+      - ".github/workflows/rust-svc-process.yml"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: fmt-check
+        run: make -C core/svc_process fmt-check
+      - name: clippy
+        run: make -C core/svc_process clippy
+      - name: test-security (cargo deny + cargo audit)
+        run: make -C core/svc_process test-security
+      - name: coverage (fail-under 90%)
+        run: make -C core/svc_process coverage
+      - name: build (release binary, proves the git+rev dependency resolves)
+        run: make -C core/svc_process build
+      - name: semgrep
+        run: make -C core/svc_process semgrep
+      - name: gitleaks
+        run: make -C core/svc_process gitleaks
+      - name: docker-build (for the trivy scan below)
+        run: make -C core/svc_process docker-build
+      - name: trivy
+        run: make -C core/svc_process trivy
+      - name: structure-test (rootless assertions)
+        run: make -C core/svc_process structure-test
+```
+
+```yaml
+# .github/workflows/build-svc-process.yml
+name: build-svc-process
+
+on:
+  push:
+    branches:
+      - "release/v3.0.X"
+    paths:
+      - "core/svc_process/**"
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Log in to ghcr.io
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute beta tag
+        id: tag
+        run: echo "tag=beta-$(date +%s)" >> "$GITHUB_OUTPUT"
+      - name: Build and push
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/penguintechinc/waddles/svc-process:${{ steps.tag.outputs.tag }}"
+          docker build -t "$IMAGE" core/svc_process
+          docker push "$IMAGE"
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `docker run --rm -v "$(pwd)":/repo -w /repo rhysd/actionlint:1.7.7 -color .github/workflows/rust-svc-process.yml .github/workflows/build-svc-process.yml`
+Expected: no output, exit code 0 (actionlint reports nothing on a clean workflow).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add .github/workflows/rust-svc-process.yml .github/workflows/build-svc-process.yml
+git commit -m "$(cat <<'EOF'
+ci(svc-process): PR verification workflow (fmt/clippy/deny/audit/
+coverage/semgrep/gitleaks/trivy) + beta image build-and-push
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+### Task 33: Action-stream entry golden fixture (shared contract, "must match plan M3")
+
+**Files:**
+- Create: `tests/golden/entries/action_entry.json` (repo-root `tests/golden/`, shared with M1's fixture tree and M3's own golden-fixture task -- **not** under `core/svc_process/`)
+- Create: `core/svc_process/tests/action_entry_golden.rs`
+
+**Interfaces:**
+- Consumes: `StageEnvelope`, `Trace`, `Binding` (Task 5), `route_bundle_output`/`build_output_envelope`'s output shape (Task 24, via its own already-tested `Deliver` variant).
+- Produces: the byte-identical fixture file Global Constraints' M3 sibling-plan row names explicitly: `tests/golden/entries/action_entry.json`, one Valkey stream entry's `env` field value -- a `StageEnvelope` JSON object with `"stage": "action"`, D30 fields (`schema_version: 2`, `workstream_id`, `event_id`, `trace`, `binding`) all present and valid. This is the wire contract **M3's** `svc_action` reads: "one Valkey stream entry with exactly one field, `env`, whose value is the `StageEnvelope` JSON with `stage: "action"` -- byte-identical on both sides." No new Rust type -- this task only proves M4's own `StageEnvelope` serialization agrees with the fixture byte-for-byte, the same technique **Task 5**'s `envelope_golden.rs` already uses for `envelopes/valid/*.json`.
+
+Spec: §14.1 (golden-fixture contract testing), Global Constraints "Names borrowed from sibling M1 plans" M3 row.
+
+- [ ] **Step 1: Write the failing test**
+
+```rust
+// core/svc_process/tests/action_entry_golden.rs
+//! Proves this crate's `StageEnvelope` serialization agrees byte-for-byte
+//! with the fixture M3's `svc_action` reads from the same file -- the
+//! shared action-stream entry format contract (Global Constraints, M3
+//! sibling row).
+use std::fs;
+use std::path::Path;
+
+use svc_process::spine::envelope::StageEnvelope;
+
+fn fixture_path() -> &'static Path {
+    Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/golden/entries/action_entry.json"))
+}
+
+#[test]
+fn action_entry_fixture_round_trips_byte_identical() {
+    let raw = fs::read_to_string(fixture_path()).unwrap_or_else(|e| panic!("reading {:?}: {e}", fixture_path()));
+    let original: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let env: StageEnvelope = serde_json::from_value(original.clone()).unwrap_or_else(|e| panic!("{:?}: {e}", fixture_path()));
+    assert_eq!(env.stage, "action", "the shared fixture must be the action-stage shape, per its own contract");
+    let round_tripped = serde_json::to_value(&env).unwrap();
+    assert_eq!(original, round_tripped, "action_entry.json did not round-trip byte-identical");
+}
+
+#[test]
+fn action_entry_fixture_carries_every_d30_field() {
+    let raw = fs::read_to_string(fixture_path()).unwrap();
+    let env: StageEnvelope = serde_json::from_str(&raw).unwrap();
+    assert_eq!(env.schema_version, 2);
+    assert!(!env.workstream_id.is_empty());
+    assert!(!env.event_id.is_empty());
+    assert!(!env.binding.mac.is_empty());
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `make -C core/svc_process test ARGS="--test action_entry_golden"`
+Expected: FAIL -- `tests/golden/entries/action_entry.json` does not exist yet.
+
+- [ ] **Step 3: Write the fixture**
+
+```json
+{
+  "schema_version": 2,
+  "tenant": "acme",
+  "community": "main",
+  "app_id": "waddles.bot.commands.default",
+  "stage": "action",
+  "event": {
+    "platform": "twitch",
+    "event_type": "chat.reply",
+    "actor": "waddles.bot.commands.default",
+    "payload": { "text": "pong" },
+    "occurred_at": "2026-09-14T12:00:00.000Z"
+  },
+  "ts": "2026-09-14T12:00:00.456Z",
+  "target_app_id": null,
+  "workstream_id": "8f14e45f-ceea-467e-adde-3fb5c9752730",
+  "event_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "session_id": null,
+  "trace": {
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    "tracestate": null
+  },
+  "binding": {
+    "kid": "2026-09",
+    "mac": "3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43"
+  }
+}
+```
+
+(The `binding.mac` value is a syntactically valid 64-lowercase-hex placeholder for fixture purposes -- it exercises the shape check, not a real HMAC; no test in this task calls `verify_binding` against it, unlike **Task 21**'s own binding tests, which mint real MACs with a real keyring.)
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `make -C core/svc_process test ARGS="--test action_entry_golden"`
+Expected: `test result: ok. 2 passed`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/golden/entries/action_entry.json core/svc_process/tests/action_entry_golden.rs
+git commit -m "$(cat <<'EOF'
+test(svc-process): action-stream entry golden fixture -- the byte-
+identical contract M3's svc_action reads from the same file
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+### Task 34: Negative test suite — tenant/binding/grant boundary (spec §14.11, D25/D30)
+
+**Files:**
+- Create: `core/svc_process/tests/grant_isolation.rs`
+
+**Interfaces:**
+- Consumes: `Registry`/`WorkerKey`/`RegistryDiff` (Task 12), `BundleRow`/`Grant`/`ManifestSubset` (Task 11), `ConsumeRule` (Task 10), `SpineClient` (Task 8) against a real Valkey (`#[ignore]`d by default, same convention as **Task 8**'s own `spine_client_integration.rs`).
+- Produces: three integration tests closing the negative-test items this plan's brief lists that are **not already** covered by an existing unit test elsewhere in this plan (cross-referenced below rather than duplicated): (1) `ungranted_stream_is_never_started_even_when_consumes_names_it` -- proves `Registry::reconcile` derives the set of streams to start workers on exclusively from `BundleRow.grants`, never from `manifest.consumes` (spec's "the stage reads on the bundle's behalf... created ONLY on streams in its `app_stream_grants`"); (2) `revoking_a_grant_destroys_its_consumer_group` -- live Valkey, proves `SpineClient::ensure_group` then `destroy_group` leaves `XINFO GROUPS` empty (spec "grant revocation -> `destroy_group`"); (3) `bundle_a_never_observes_bundle_bs_events` -- live Valkey, two consumer groups on the same stream, proves each group's `XREADGROUP` delivers to it alone, demonstrating the isolation D25's "one stream, one consumer group" invariant relies on. **Already covered elsewhere, cross-referenced, not duplicated:** tampered/unknown-kid MAC rejection and cross-tenant-stream MAC rejection (**Task 21**, `spine::binding::tests`); undeclared/cross-tenant `_target_app_id` redirect denial and bundle-supplied identity-field stripping (**Task 24**, `builtins::routing::tests`); a `GroupReader` refusing a stream other than the one it was opened for (**Task 9**, `spine::reader::tests::ensure_granted_rejects_a_stream_other_than_the_one_this_reader_was_opened_for`).
+
+Spec: §14.11 (D30/D31 workstream identity and tenant-wall tests, full list), §5.2 (grant reconciliation), D25 (per-bundle action streams).
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// core/svc_process/tests/grant_isolation.rs
+use svc_process::distribution::model::{BundleRow, Grant, ManifestSubset};
+use svc_process::consumes::matcher::ConsumeRule;
+use svc_process::registry::Registry;
+use svc_process::spine::client::SpineClient;
+
+fn bundle_row_with_grants(app_id: &str, grants: Vec<Grant>, consumes: Vec<ConsumeRule>) -> BundleRow {
+    BundleRow {
+        app_id: app_id.to_string(),
+        community_id: None,
+        artifact_version: Some("1.0.0".to_string()),
+        artifact_digest: Some("sha256:aaaa".to_string()),
+        artifact_kind: Some("wasm".to_string()),
+        language: Some("rust".to_string()),
+        scan_status: Some("clean".to_string()),
+        config: serde_json::json!({}),
+        manifest: ManifestSubset {
+            egress: vec![], data_tables: vec![],
+            limits: svc_process::distribution::model::Limits { timeout_ms: 2000, memory_mb: 64, egress_rps: 5 },
+            consumes, routes_to: vec![],
+        },
+        grants,
+    }
+}
+
+#[test]
+fn ungranted_stream_is_never_started_even_when_consumes_names_it() {
+    // The bundle's manifest.consumes mentions "discord", but its only
+    // GRANT is for "twitch" -- reconcile must never start a worker for
+    // any discord stream, since app_stream_grants (Grant), not consumes,
+    // is what authorizes reading a stream at all (spec "the stage reads
+    // on the bundle's behalf and is the enforcement point").
+    let granted_stream = "waddles:t:acme:c:main:src:twitch:tw-a:events".to_string();
+    let row = bundle_row_with_grants(
+        "waddles.bot.commands.default",
+        vec![Grant { grant_id: 1, stream: granted_stream.clone(), platform: "twitch".to_string(), source_id: "tw-a".to_string(), label: "primary".to_string() }],
+        vec![ConsumeRule { platform: "discord".to_string(), source_id: None, event_types: vec!["chat.message".to_string()], command_prefix: None, actor_roles: None }],
+    );
+    let mut registry = Registry::new();
+    let diff = registry.reconcile(vec![row]);
+    assert_eq!(diff.to_start.len(), 1, "exactly one worker must start, for the granted twitch stream");
+    assert_eq!(diff.to_start[0].0.stream, granted_stream);
+    assert!(
+        !diff.to_start.iter().any(|(k, _)| k.stream.contains("discord")),
+        "no worker may ever be started for a stream this bundle was never granted, regardless of what consumes names"
+    );
+}
+
+async fn test_spine_client() -> SpineClient {
+    let url = std::env::var("VALKEY_TEST_URL").expect("set VALKEY_TEST_URL to run this test");
+    let cfg = deadpool_redis::Config::from_url(url);
+    let pool = cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1)).unwrap();
+    SpineClient::new(pool)
+}
+
+#[tokio::test]
+#[ignore = "requires a real Valkey; see spine_client_integration.rs module docs"]
+async fn revoking_a_grant_destroys_its_consumer_group() {
+    let client = test_spine_client().await;
+    let stream = format!("test:grant-isolation:{}", uuid::Uuid::new_v4());
+    let group = "waddles.bot.commands.default";
+    client.ensure_group(&stream, group).await.unwrap();
+    let stats_before = client.group_stats(&stream).await.unwrap();
+    assert_eq!(stats_before.len(), 1, "the group must exist right after ensure_group");
+
+    client.destroy_group(&stream, group).await.unwrap();
+    let stats_after = client.group_stats(&stream).await.unwrap();
+    assert!(stats_after.is_empty(), "XINFO GROUPS must report zero groups once the grant is revoked and destroy_group runs");
+}
+
+#[tokio::test]
+#[ignore = "requires a real Valkey; see spine_client_integration.rs module docs"]
+async fn bundle_a_never_observes_bundle_bs_events() {
+    let client = test_spine_client().await;
+    let stream = format!("test:grant-isolation:shared:{}", uuid::Uuid::new_v4());
+    let group_a = "waddles.bot.a.default";
+    let group_b = "waddles.bot.b.default";
+    client.ensure_group(&stream, group_a).await.unwrap();
+    client.ensure_group(&stream, group_b).await.unwrap();
+
+    let env = test_envelope();
+    client.append(&stream, &env, 1000).await.unwrap();
+
+    let mut reader_a = svc_process::spine::reader::GroupReader::connect(&std::env::var("VALKEY_TEST_URL").unwrap(), &stream, std::time::Duration::from_secs(5)).await.unwrap();
+    let delivered_a = reader_a.read(&stream, group_a, "consumer-a", 500, 10).await.unwrap();
+    assert_eq!(delivered_a.len(), 1, "group A must see the one entry via its own XREADGROUP");
+    client.ack(&stream, group_a, &delivered_a[0].entry_id).await.unwrap();
+
+    // Group B's own PEL/last-delivered-id is entirely independent of
+    // group A's -- it must ALSO see the same entry once (each consumer
+    // group tracks delivery separately over the same stream, D25's
+    // "one stream, one consumer group" isolation), proving neither
+    // group can suppress or steal the other's delivery.
+    let mut reader_b = svc_process::spine::reader::GroupReader::connect(&std::env::var("VALKEY_TEST_URL").unwrap(), &stream, std::time::Duration::from_secs(5)).await.unwrap();
+    let delivered_b = reader_b.read(&stream, group_b, "consumer-b", 500, 10).await.unwrap();
+    assert_eq!(delivered_b.len(), 1, "group B must independently see its own copy of the same entry");
+    assert_eq!(delivered_b[0].entry_id, delivered_a[0].entry_id, "same entry id, but delivered independently to each group");
+}
+
+fn test_envelope() -> svc_process::spine::envelope::StageEnvelope {
+    use svc_process::spine::envelope::{Binding, PlatformEvent, StageEnvelope};
+    StageEnvelope {
+        schema_version: 2, tenant: "acme".into(), community: Some("main".into()),
+        app_id: "waddles.bot.a.default".into(), stage: "process".into(),
+        event: PlatformEvent { platform: "twitch".into(), event_type: "chat.message".into(), actor: Some("u".into()), payload: serde_json::Map::new(), occurred_at: "2026-09-14T12:00:00.000Z".into(), source: None },
+        ts: "2026-09-14T12:00:00.000Z".into(), target_app_id: None,
+        workstream_id: uuid::Uuid::new_v4().to_string(), event_id: uuid::Uuid::new_v4().to_string(),
+        session_id: None, trace: None, binding: Binding { kid: "k".into(), mac: "a".repeat(64) },
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `make -C core/svc_process test ARGS="--test grant_isolation ungranted_stream_is_never_started_even_when_consumes_names_it"`
+Expected: FAIL to compile (`svc_process::distribution::model` field names must match Task 11 exactly -- if any field name differs, fix this test's struct literal to match Task 11's actual `Produces:` line, never the other way around).
+
+- [ ] **Step 3: Nothing to implement** — this task is pure test coverage against already-implemented behavior (Tasks 8, 9, 12). If `ungranted_stream_is_never_started_even_when_consumes_names_it` fails once compiling, the bug is in Task 12's `Registry::reconcile` (it must derive `to_start` from `row.grants`, never `row.manifest.consumes`) -- fix `registry/mod.rs` there, not here.
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `make -C core/svc_process test ARGS="--test grant_isolation ungranted_stream_is_never_started_even_when_consumes_names_it"`
+Expected: `test result: ok. 1 passed`
+
+Run (live Valkey):
+```bash
+docker run -d --rm --name svc-process-valkey-test -p 6399:6379 valkey/valkey:8-bookworm
+cd core/svc_process && VALKEY_TEST_URL=redis://127.0.0.1:6399 cargo test --test grant_isolation -- --ignored --test-threads=1 2>&1 | tail -30
+docker stop svc-process-valkey-test
+```
+Expected: `test result: ok. 2 passed`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add core/svc_process/tests/grant_isolation.rs
+git commit -m "$(cat <<'EOF'
+test(svc-process): negative tests -- ungranted stream never started,
+grant revocation destroys its group, per-bundle group isolation
+(spec Sec14.11, D25)
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+### Task 35: Capability/DB negative tests + live-Postgres RLS test + `FakeExecutor` e2e pipeline test + README
+
+**Files:**
+- Create: `core/svc_process/tests/db_capability_guard.rs`, `core/svc_process/tests/fakes/mod.rs`, `core/svc_process/tests/e2e_process_pipeline.rs`, `core/svc_process/README.md`
+
+**Interfaces:**
+- Consumes: `CompositeHandler`/`DbCapability`/`HttpCapability` (Tasks 19, 20), `HostApiListener`/`wire::*` (Tasks 13, 14), `Worker`/`WorkerSpec` (Task 25), `SpineClient` (Task 8), `Migration 0024_process_stage_rls` (Task 31), `bundle_rls_tables`/`bundle_role_name` (Tasks 30, 20).
+- Produces: `pub struct FakeExecutor { .. }` with `pub async fn connect(addr: std::net::SocketAddr, ca_file: &str, expect_peer: &str) -> Self` (dials the stage's host-API TLS listener as a client, sends `hello`, awaits `hello-ok`), `pub async fn respond_to_next_invoke(&mut self, payload: serde_json::Value, fuel_used: u64) -> String` (reads the next `invoke` frame, replies `result`, returns the received `trace_context` so the caller can assert trace continuity) -- the harness **Task 25**'s own `Invoker` trait was deliberately designed to make unnecessary for the worker's *unit* tests, but which the pipeline's *integration* coverage still needs, since only a real wire-protocol client can prove the listener/dispatch/CompositeHandler chain actually works end to end; two negative tests (`http_egress_is_denied_when_the_bundles_grant_declares_none`, live-Postgres `db_call_scoped_to_tenant_a_cannot_read_tenant_b_rows`); one e2e test (`e2e_process_pipeline_preserves_trace_and_records_usage`) asserting trace-id continuity from the source envelope's `traceparent` through to the frame the fake executor receives, and that `UsageBatcher::flush()` reports exactly one invocation for the processed entry; `core/svc_process/README.md` documenting build/test/run commands, the offline-mode/connectivity story (Global Constraints "never silently fail on network error"), and a link back to the spec.
+
+Spec: §14.6 (negative sandbox/capability tests), §14.8 (e2e), §14.11 test 5 (live-Postgres RLS), §13.2 (trace propagation into the executor frame and back).
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// core/svc_process/tests/db_capability_guard.rs
+use svc_process::hostcap::http::{EgressRequest, HttpCapability};
+
+#[tokio::test]
+async fn http_egress_is_denied_when_the_bundles_grant_declares_none() {
+    // Mirrors CompositeHandler's own "http" arm (hostcap/mod.rs, Task 20):
+    // `if grant.egress.is_empty() { return Err(denied) }` runs BEFORE
+    // HttpCapability::send is ever called -- this test proves that guard
+    // by exercising it at the same layer CompositeHandler does, using an
+    // empty `egress: &[]` allow-list against a capability instance that
+    // would otherwise happily perform the request.
+    let http = HttpCapability::new(
+        std::sync::Arc::new(svc_process::hostcap::http::EnvSecretResolver),
+        std::time::Duration::from_secs(2), 1_048_576, 3,
+    ).unwrap();
+    let req = EgressRequest { method: "GET".to_string(), url: "https://example.com".to_string(), headers: vec![], body: None, secret_refs: vec![] };
+    let limiter = governor::RateLimiter::direct(governor::Quota::per_second(std::num::NonZeroU32::new(10).unwrap()));
+    let err = http.send("waddles.bot.commands.default", req, &[], &[], false, &limiter).await.unwrap_err();
+    assert_eq!(err.code, "denied");
+}
+
+// -- Live-Postgres RLS negative test (spec Sec14.11 test 5) --
+// Requires migrations 0001-0024 applied (Task 31) and a bundle_<app>
+// role provisioned -- both done by the setup script in Step 2's Run:
+// line, never inside this test itself (this crate has no Alembic/Python
+// dependency).
+#[tokio::test]
+#[ignore = "requires a live Postgres with migrations 0001-0024 applied and a bundle role provisioned; see Step 2's Run: line"]
+async fn db_call_scoped_to_tenant_a_cannot_read_tenant_b_rows() {
+    let dsn_template = std::env::var("RLS_TEST_DSN_TEMPLATE").expect("set RLS_TEST_DSN_TEMPLATE, e.g. postgres://{role}:{password}@127.0.0.1:55438/waddlebot?sslmode=disable");
+    let db = svc_process::hostcap::db::DbCapability::new(dsn_template);
+    let app_id = "waddles.bot.commands.default";
+    let allowed = vec!["loyalty_config".to_string()];
+
+    let as_tenant_a = db.execute(app_id, "acme", Some("main"), &allowed, "SELECT community_id FROM loyalty_config", vec![]).await.unwrap();
+    let rows_a = as_tenant_a["rows"].as_array().unwrap();
+    assert!(!rows_a.is_empty(), "tenant A must see its own seeded row -- check the setup script ran");
+
+    let as_tenant_b = db.execute(app_id, "other-tenant", Some("other-community"), &allowed, "SELECT community_id FROM loyalty_config", vec![]).await.unwrap();
+    let rows_b = as_tenant_b["rows"].as_array().unwrap();
+    assert!(rows_b.is_empty(), "a DB host call scoped to a different tenant must see zero rows -- the D30/D28 RLS boundary (migration 0024) failed");
+}
+```
+
+```rust
+// core/svc_process/tests/fakes/mod.rs
+//! A minimal wire-protocol client standing in for `svc-process-executor`
+//! in this crate's own e2e test -- dials the stage's host-API mTLS
+//! listener, completes the `hello`/`hello-ok` handshake, and answers
+//! exactly one `invoke` per `respond_to_next_invoke` call.
+use std::sync::Arc;
+
+use svc_process::hostapi::wire::{read_frame, write_frame, Frame, FromExecutor, SandboxInfo, ToExecutor};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_rustls::rustls;
+
+/// A test double for `svc-process-executor` speaking the real wire
+/// protocol over a real (self-signed, test-only) TLS connection.
+pub struct FakeExecutor {
+    stream: tokio_rustls::client::TlsStream<tokio::net::TcpStream>,
+}
+
+impl FakeExecutor {
+    /// Dials `addr`, completes the TLS handshake against `ca_file`, and
+    /// exchanges `hello`/`hello-ok`.
+    pub async fn connect(addr: std::net::SocketAddr, ca_file: &str, _expect_peer: &str) -> Self {
+        let ca_pem = std::fs::read(ca_file).expect("reading test CA file");
+        let mut root_store = rustls::RootCertStore::empty();
+        for cert in rustls_pemfile::certs(&mut ca_pem.as_slice()) {
+            root_store.add(cert.expect("parsing test CA cert")).expect("adding test CA cert");
+        }
+        let tls_config = rustls::ClientConfig::builder().with_root_certificates(root_store).with_no_client_auth();
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
+        let tcp = tokio::net::TcpStream::connect(addr).await.expect("connecting to host-api listener");
+        let server_name = rustls_pki_types::ServerName::try_from("localhost").expect("static server name");
+        let mut stream = connector.connect(server_name, tcp).await.expect("TLS handshake");
+
+        let hello = Frame { v: 1, id: 0, body: FromExecutor::Hello {
+            protocol_version: 1, executor_version: "test-fake".to_string(), wasmtime_version: "test".to_string(),
+            wasmtime_abi: "test".to_string(), collector: "drc".to_string(), sandbox: SandboxInfo { runtime: "runc".to_string(), verified: true },
+        }};
+        write_frame(&mut stream, &serde_json::to_vec(&hello).unwrap()).await.expect("writing hello");
+        let bytes = read_frame(&mut stream, 1_048_576).await.expect("reading hello-ok");
+        let _reply: Frame<ToExecutor> = serde_json::from_slice(&bytes).expect("parsing hello-ok");
+
+        Self { stream }
+    }
+
+    /// Reads the next `invoke` frame and replies `result`. Returns the
+    /// `trace_context` the stage sent, so the caller can assert trace
+    /// continuity end to end.
+    pub async fn respond_to_next_invoke(&mut self, payload: serde_json::Value, fuel_used: u64) -> Option<String> {
+        let bytes = read_frame(&mut self.stream, 1_048_576).await.expect("reading invoke frame");
+        let frame: Frame<ToExecutor> = serde_json::from_slice(&bytes).expect("parsing invoke frame");
+        let ToExecutor::Invoke { trace_context, .. } = frame.body else { panic!("expected invoke, got {:?}", frame.body) };
+        let reply = Frame { v: 1, id: frame.id, body: FromExecutor::Result { payload, duration_ms: 5, fuel_used } };
+        write_frame(&mut self.stream, &serde_json::to_vec(&reply).unwrap()).await.expect("writing result");
+        trace_context
+    }
+}
+```
+
+```rust
+// core/svc_process/tests/e2e_process_pipeline.rs
+//! Real Valkey + a `FakeExecutor` over a real mTLS connection, exercising
+//! the full read -> verify -> invoke -> route -> append -> usage pipeline
+//! (spec Sec14.8) without a live WASM sandbox. `#[ignore]`d: requires
+//! `VALKEY_TEST_URL` and generates its own throwaway TLS materials via
+//! `rcgen`.
+mod fakes;
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use svc_process::builtins::moderation_enforce::ModerationEnforcer;
+use svc_process::builtins::moderation_gate::{FlagsCheck, ModerationGate};
+use svc_process::consumes::matcher::ConsumeRule;
+use svc_process::hostapi::dispatch::HostApiPool;
+use svc_process::hostapi::listener::HostApiListener;
+use svc_process::spine::binding::{compute_binding_mac, BindingInput, BindingKeyEntry, BindingKeyring};
+use svc_process::spine::client::SpineClient;
+use svc_process::spine::envelope::{Binding, PlatformEvent, StageEnvelope};
+use svc_process::spine::usage::UsageBatcher;
+use svc_process::trip::TripCounter;
+use svc_process::worker::{Worker, WorkerSpec};
+
+struct AlwaysOff;
+#[async_trait::async_trait]
+impl FlagsCheck for AlwaysOff {
+    async fn enabled(&self, _key: &str, _default_value: bool) -> bool {
+        false // moderation off for this pipeline test -- its own gate behaviour is Task 23's job
+    }
+}
+
+fn generate_test_tls() -> (String, String, String) {
+    // Self-signed test CA + server cert via rcgen (dev-dependency,
+    // Global Constraints Pins) -- written to the test's own temp dir.
+    let ca = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let dir = std::env::temp_dir().join(format!("svc-process-e2e-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cert_path = dir.join("tls.crt");
+    let key_path = dir.join("tls.key");
+    let ca_path = dir.join("ca.crt");
+    std::fs::write(&cert_path, ca.cert.pem()).unwrap();
+    std::fs::write(&key_path, ca.signing_key.serialize_pem()).unwrap();
+    std::fs::write(&ca_path, ca.cert.pem()).unwrap();
+    (cert_path.to_string_lossy().to_string(), key_path.to_string_lossy().to_string(), ca_path.to_string_lossy().to_string())
+}
+
+#[tokio::test]
+#[ignore = "requires a real Valkey (VALKEY_TEST_URL) and opens a real TLS listener"]
+async fn e2e_process_pipeline_preserves_trace_and_records_usage() {
+    let valkey_url = std::env::var("VALKEY_TEST_URL").expect("set VALKEY_TEST_URL");
+    let (cert, key, ca) = generate_test_tls();
+
+    let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let listener = HostApiListener::bind(addr, &cert, &key, &ca).await.unwrap();
+    let bound_addr = listener.local_addr(); // see note below on adding this accessor
+
+    let host_pool: Arc<HostApiPool<_>> = Arc::new(HostApiPool::new());
+    tokio::spawn({
+        let host_pool = host_pool.clone();
+        async move {
+            let tcp = listener.accept().await.unwrap();
+            let limits = svc_process::hostapi::wire::HostApiLimits { call_timeout_ms: 2000, memory_mb: 64, max_concurrent_calls: 4 };
+            let conn = listener.handshake(tcp, "test-executor", false, "drc", "process", limits).await.unwrap();
+            let handle = svc_process::hostapi::dispatch::DispatchHandle::new(conn.writer);
+            host_pool.add(handle.clone()).await;
+            let handler: Arc<dyn svc_process::hostapi::HostCallHandler> = Arc::new(NoopHandler);
+            let events: Arc<dyn svc_process::hostapi::dispatch::ExecutorEvents> = Arc::new(TripCounter::new(3, std::time::Duration::from_secs(300)));
+            svc_process::hostapi::dispatch::run_dispatch_loop(conn.reader, handle, handler, events, 1_048_576).await;
+        }
+    });
+
+    let mut fake = fakes::FakeExecutor::connect(bound_addr, &ca, "svc-process").await;
+
+    let cfg = deadpool_redis::Config::from_url(valkey_url.clone());
+    let pool = cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1)).unwrap();
+    let spine = SpineClient::new(pool);
+    let stream = format!("test:e2e:{}", uuid::Uuid::new_v4());
+    let group = "waddles.bot.commands.default";
+    spine.ensure_group(&stream, group).await.unwrap();
+
+    let mut key_entries = HashMap::new();
+    key_entries.insert("test-kid".to_string(), BindingKeyEntry { key: vec![7u8; 32], retired_at: None });
+    let keyring = Arc::new(BindingKeyring::from_entries("test-kid", key_entries, chrono::Duration::seconds(3600)).unwrap());
+    let workstream_id = uuid::Uuid::new_v4().to_string();
+    let event_id = uuid::Uuid::new_v4().to_string();
+    let trace_id = "4bf92f3577b34da6a3ce929d0e0e4736";
+    let traceparent = format!("00-{trace_id}-00f067aa0ba902b7-01");
+    let binding = compute_binding_mac(&keyring, &BindingInput { tenant: "acme", community: Some("main"), workstream_id: &workstream_id, event_id: &event_id, trace_id });
+
+    let env = StageEnvelope {
+        schema_version: 2, tenant: "acme".into(), community: Some("main".into()),
+        app_id: group.to_string(), stage: "process".into(),
+        event: PlatformEvent { platform: "twitch".into(), event_type: "chat.message".into(), actor: Some("u".into()), payload: serde_json::Map::new(), occurred_at: "2026-09-14T12:00:00.000Z".into(), source: None },
+        ts: "2026-09-14T12:00:00.000Z".into(), target_app_id: None,
+        workstream_id: workstream_id.clone(), event_id, session_id: None,
+        trace: Some(svc_process::spine::envelope::Trace { traceparent: traceparent.clone(), tracestate: None }),
+        binding,
+    };
+    spine.append(&stream, &env, 1000).await.unwrap();
+
+    let reader = svc_process::spine::reader::GroupReader::connect(&valkey_url, &stream, std::time::Duration::from_secs(5)).await.unwrap();
+    let flags = Arc::new(AlwaysOff);
+    let moderation_gate = Arc::new(ModerationGate::new(reqwest::Client::new(), "http://127.0.0.1:1".to_string(), "shieldgemma:2b".to_string(), 0.5, std::time::Duration::from_millis(100), flags));
+    let moderation_enforcer = Arc::new(ModerationEnforcer::new(spine.clone(), 1000, Arc::new(AlwaysOff)));
+    let trip_counter = Arc::new(TripCounter::new(3, std::time::Duration::from_secs(300)));
+    let usage = Arc::new(UsageBatcher::new());
+    let spec = WorkerSpec {
+        app_id: group.to_string(), stream: stream.clone(), digest: "sha256:aaaa".to_string(), version: "1.0.0".to_string(),
+        config: serde_json::json!({}), consumes: vec![ConsumeRule { platform: "twitch".to_string(), source_id: None, event_types: vec!["chat.message".to_string()], command_prefix: None, actor_roles: None }],
+        routes_to: vec![],
+    };
+    let worker = Worker::new(
+        spec, spine.clone(), reader, keyring, host_pool.clone(), moderation_gate, moderation_enforcer, trip_counter, usage.clone(),
+        Arc::new(|_: &str| false), "e2e-consumer".to_string(), group.to_string(), 500, 10, 5, 1000, 1000, 2000,
+    ).unwrap();
+
+    let (delivered_tx, delivered_rx) = tokio::sync::oneshot::channel();
+    let respond_task = tokio::spawn(async move {
+        let received_trace = fake.respond_to_next_invoke(serde_json::json!({"text": "pong"}), 42).await;
+        let _ = delivered_tx.send(received_trace);
+    });
+
+    let mut reader_for_run = svc_process::spine::reader::GroupReader::connect(&valkey_url, &stream, std::time::Duration::from_secs(5)).await.unwrap();
+    let delivered = reader_for_run.read(&stream, group, "e2e-consumer", 2000, 10).await.unwrap();
+    assert_eq!(delivered.len(), 1);
+    worker.process_entry(delivered.into_iter().next().unwrap()).await.unwrap();
+
+    let received_trace = respond_task.await.unwrap();
+    let received_trace = delivered_rx.await.unwrap_or(received_trace);
+    assert_eq!(received_trace.as_deref(), Some(traceparent.as_str()), "the traceparent sent to the executor must match the source envelope's exactly -- trace continuity, spec Sec5.11/Sec13.2");
+
+    let dest_stream = svc_process::spine::keys::Scope { tenant: "acme".to_string(), community: Some("main".to_string()) }.action_stream(group);
+    let acl_stats = spine.group_stats(&dest_stream).await;
+    assert!(acl_stats.is_ok(), "the action stream must exist after Worker::process_entry appended to it");
+
+    let flushed = usage.flush();
+    assert_eq!(flushed.len(), 1, "exactly one usage row for this one processed entry");
+    assert_eq!(flushed[0].invocations, 1);
+    assert_eq!(flushed[0].fuel_ms, 42);
+}
+
+struct NoopHandler;
+#[async_trait::async_trait]
+impl svc_process::hostapi::HostCallHandler for NoopHandler {
+    async fn handle(&self, _app_id: &str, _capability: &str, _op: &str, _args: serde_json::Value) -> Result<serde_json::Value, svc_process::hostcap::HostCapError> {
+        Ok(serde_json::json!(null))
+    }
+}
+```
+
+```rust
+// core/svc_process/src/hostapi/listener.rs -- append inside the existing `impl HostApiListener` block
+    /// The address this listener actually bound to -- needed when `bind`
+    /// was called with port `0` (an ephemeral port, this task's own e2e
+    /// test's pattern) and the caller must discover which port a client
+    /// should dial.
+    pub fn local_addr(&self) -> std::net::SocketAddr {
+        self.tcp_listener.local_addr().expect("a bound listener always has a local address")
+    }
+```
+
+(`self.tcp_listener` is `HostApiListener`'s inner `tokio::net::TcpListener` field from Task 14 -- if that field has a different name in the actual Task 14 diff, use that name instead; the accessor's behavior is unaffected either way.)
+
+- [ ] **Step 2: Run to verify it fails / passes**
+
+Run (capability negative test, no external deps): `make -C core/svc_process test ARGS="--lib --test db_capability_guard http_egress_is_denied"`
+Expected: `test result: ok. 1 passed` once `HttpCapability::new` compiles against Task 19's actual signature.
+
+Run (live-Postgres RLS setup + test):
+```bash
+docker run -d --name pg-m4-rls-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=waddlebot -p 55438:5432 postgres:17-alpine
+sleep 3
+DATABASE_URL="postgresql://postgres:test@localhost:55438/waddlebot" alembic upgrade 0024_process_stage_rls
+psql "postgresql://postgres:test@localhost:55438/waddlebot" -c "
+  CREATE ROLE bundle_waddles_bot_commands_default LOGIN PASSWORD 'testpw';
+  GRANT SELECT, INSERT ON loyalty_config TO bundle_waddles_bot_commands_default;
+  INSERT INTO tenants (slug) VALUES ('acme') RETURNING id \gset
+  INSERT INTO communities (tenant_id, slug) VALUES (:id, 'main') RETURNING id \gset community_
+  INSERT INTO loyalty_config (community_id) VALUES (:community_id);
+"
+BUNDLE_ROLE_PASSWORD_BUNDLE_WADDLES_BOT_COMMANDS_DEFAULT=testpw \
+RLS_TEST_DSN_TEMPLATE="postgres://{role}:{password}@127.0.0.1:55438/waddlebot?sslmode=disable" \
+  cargo test --manifest-path core/svc_process/Cargo.toml --test db_capability_guard -- --ignored --test-threads=1
+docker rm -f pg-m4-rls-test
+```
+Expected: `test result: ok. 1 passed`
+
+Run (e2e, live Valkey):
+```bash
+docker run -d --rm --name svc-process-valkey-e2e -p 6399:6379 valkey/valkey:8-bookworm
+cd core/svc_process && VALKEY_TEST_URL=redis://127.0.0.1:6399 cargo test --test e2e_process_pipeline -- --ignored --test-threads=1 2>&1 | tail -40
+docker stop svc-process-valkey-e2e
+```
+Expected: `test result: ok. 1 passed`
+
+- [ ] **Step 3: Write `core/svc_process/README.md`**
+
+```markdown
+# svc-process
+
+Waddles process-stage data plane (Rust). See `docs/superpowers/specs/2026-09-14-rust-data-plane-design.md`.
+
+## Build & test
+
+    make -C core/svc_process build
+    make -C core/svc_process test
+    make -C core/svc_process lint
+    make -C core/svc_process test-security
+    make -C core/svc_process coverage
+
+## Run locally
+
+Requires Valkey, Postgres, and hub-api reachable; see `config.rs` for every `env` var and default.
+Startup performs a connectivity self-check (`Sec12.6`) against all three -- a required dependency
+still failing after `STARTUP_PROBE_ATTEMPTS` exits `78` (`EX_CONFIG`) rather than serving traffic
+against a broken dependency.
+
+## Connectivity & offline behaviour
+
+This service has **no offline mode** -- it is a stream consumer with no meaningful function absent
+Valkey/Postgres/hub-api. A *dependency that becomes unreachable after startup* degrades per-call:
+Ollama unreachable -> the moderation gate fails open (`Allowed`); the flag/license server
+unreachable -> flags fail open to their caller-supplied default; the executor connection pool
+empty -> entries are left pending for the reaper's next reclaim, never dropped. `/healthz` reports
+readiness (200 only once self-check has passed and the first registry reconcile has completed);
+`/health` is liveness only.
+
+## Ports
+
+| Port | Purpose |
+|---|---|
+| `MODULE_PORT` (8201) | `/health`, `/healthz` |
+| `METRICS_PORT` (9090) | `/metrics` (Prometheus text) |
+| `HOST_API_PORT` (8301) | mTLS listener `svc-process-executor` dials into |
+```
+
+- [ ] **Step 4: Run the full suite one final time**
+
+Run: `make -C core/svc_process test`
+Expected: every non-`#[ignore]`d test green; `make -C core/svc_process coverage` `>= 90%` lines.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add core/svc_process/tests/db_capability_guard.rs core/svc_process/tests/fakes/ core/svc_process/tests/e2e_process_pipeline.rs core/svc_process/README.md core/svc_process/src/hostapi/listener.rs
+git commit -m "$(cat <<'EOF'
+test(svc-process): undeclared-egress-denied negative test, live-Postgres
+RLS negative test (spec Sec14.11 test 5), FakeExecutor e2e pipeline
+test (trace continuity + usage totals); README
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
 
