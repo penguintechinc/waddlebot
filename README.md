@@ -46,9 +46,9 @@ for exactly what's real vs. scaffolded.
 
 | Container | Carries | Language | Port |
 |---|---|---|---|
-| `svc-ingest` | Platform receivers + inbound webhooks; loads each activated bundle's `ingest` component | RustLang | 8200 |
-| `svc-process` | Event bus, routing, command dispatch, workflow; bundles' `process` component | RustLang | 8201 |
-| `svc-action` | Outbound actions/interactions/3rd-party calls; bundles' `action` component + target adapters | RustLang | 8202 |
+| `svc-ingest` | Platform receivers + inbound webhooks (Twitch, Slack, Discord, Kick, YouTube + generic intake) | RustLang | 8200 |
+| `svc-process` | Event bus, routing, command dispatch, workflow; orchestrates `process`-stage WASM components | RustLang | 8201 |
+| `svc-action` | Outbound actions/interactions/3rd-party calls; orchestrates `action`-stage WASM components + target adapters | RustLang | 8202 |
 | `svc-core` | Identity, security, credentials, entitlement — called synchronously by every other stage | RustLang, gRPC | 8203 / grpc 50203 |
 | `hub-api` | Admin, tenancy, marketplace, billing, AI routing control plane + gRPC + REST + MCP | Python/Quart | 8204 / grpc 50204 |
 | `hub-webui` | SPA assets, static-serve + `/api` proxy for the ReactJS webui | ExpressScript + ReactJS | 8205 |
@@ -58,15 +58,9 @@ for exactly what's real vs. scaffolded.
 A ninth container, `svc-rtc` (Go, WebRTC/SFU), still runs standalone and is the planned absorption
 target into `svc-streaming` — not yet merged.
 
-Each pipeline stage publishes onto the next stage's own Valkey stream — `process` never calls
-`action` directly. A slow `action` handler only backs up its own queue, never blocks `ingest` or
-`process`. Streams are isolated per `(tenant, community, app_id, stage)`:
-`waddles:t:{tenant}:c:{community}:app:{app_id}:{stage}`.
+The Data Plane services (`svc-*`) communicate over per-`(tenant, community, workstream, stage)` **Valkey Streams** (`XADD`, `XREADGROUP`, `XAUTOCLAIM`). TLS encryption and authentication are enabled by default for PostgreSQL and Valkey in every environment (`security.transport.tls` / `security.transport.auth`).
 
-Messages crossing a stage boundary are typed `flask_core.stream_pipeline` dataclasses
-(`PlatformEvent`, `StageEnvelope`), not raw dicts — see
-[Architecture: Typed stage contract](docs/ARCHITECTURE.md#typed-stage-contract) for the full
-shape and per-stage entrypoint signatures.
+Messages crossing stage boundaries are typed JSON envelopes (`PlatformEvent`, `StageEnvelope`) carrying cryptographically signed MAC workstream bindings (`binding.mac`) to enforce zero-trust tenant boundary isolation.
 
 ## App Bundle model
 
@@ -78,9 +72,9 @@ Core → Module → Feature → App (Bundle)
 - **Module** — one of the SCCEBM modules (+ Streaming), globally toggleable via Helm.
 - **Feature** — a capability inside a module (`waddles.community.chat`, `waddles.streaming.music_station`).
 - **App (Bundle)** — the code implementing a Feature. A bundle **is** the App, not a group of Apps:
-  `bundle.yaml` manifest + a `{config, spec, script}` directory per stage it implements
-  (`ingest`/`process`/`action`, optionally `presentation`).
-- **Runtime Environment** — going forward, all App Bundles execute within a sandboxed **gVisor + WASM runtime environment** providing multi-tenant isolation, memory safety, and strict capability gating.
+  `bundle.yaml` manifest + a `{config, spec, script}` directory per stage it implements (`process`/`action`, optionally `presentation`).
+- **gVisor + WASM Sandbox Runtime** — all App Bundles (first-party and third-party) execute as **WASI 0.2 WebAssembly components** inside a credential-less executor (`bundle-executor`) running under a **gVisor `RuntimeClass` (`runsc`)** for complete multi-tenant isolation, memory safety, and capability-scoped egress.
+- **Multi-Language Support** — Python, Rust, and JavaScript/TypeScript (Tier 1) are compiled via gVisor-sandboxed build Jobs (e.g. `componentize-py` for Python with `penguin-dal`). Any WASI 0.2 component implementing the WIT world is accepted prebuilt (Tier 2). `ingest` is fixed Rust code and not bundle-pluggable.
 
 **3-tier lifecycle**, strict subset invariant `activated ⊆ available ⊆ installed`:
 
@@ -250,12 +244,12 @@ helm install waddlebot ./k8s/helm/waddlebot -n waddlebot --create-namespace \
 
 ## Technology Stack
 
-**Services (`svc-*`):** RustLang
+**Data Plane (`svc-*`):** RustLang (Axum, tokio, SeaORM, gRPC, OTel)
 **Control Plane (`hub-api`):** Python 3.13, Quart (async)
 **Web UI (`hub-webui`):** ExpressScript + ReactJS (React 18), Vite, TailwindCSS v4
-**App Bundle Runtime:** gVisor + WASM sandbox runtime environment
-**Infrastructure:** Docker, Kubernetes (Helm v3), GitHub Actions
-**Data & Caching:** PostgreSQL, Valkey, MinIO (S3), Qdrant (vectors)
+**App Bundle Runtime:** Sandboxed WASI 0.2 WASM components in gVisor (`runsc`)
+**Pipeline Spine:** Valkey Streams (TLS + ACL authenticated)
+**Storage & Infrastructure:** PostgreSQL, Valkey, MinIO (S3), Qdrant (vectors), Docker, Kubernetes (Helm v3)
 
 ## License
 
