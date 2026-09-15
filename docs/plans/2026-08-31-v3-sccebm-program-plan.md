@@ -73,19 +73,19 @@ hub-api (not a container).
 
   svc-core   identity · security · credentials · entitlement (every stage depends on it)
   hub-api    admin + tenancy + marketplace module + MCP  (Python/Quart, control plane)
-  hub-webui  React + Express (static serve + /api proxy) — the ONLY Node container
+  hub-webui  Python/Quart backend serving the ReactJS webui
 ```
 
 | Container | Carries | Language |
 |---|---|---|
-| `svc-ingest` | platform receivers + inbound webhooks; loads activated bundles' `ingest` component | Python |
-| `svc-process` | event bus, routing, command dispatch, workflow; bundles' `process` component | Python |
-| `svc-action` | outbound actions, interactions, 3rd-party calls, target adapters; bundles' `action` component | Python |
-| `svc-core` | identity/security/credentials/entitlement (gRPC :50051) | Python |
-| `svc-presentation` | core overlays (full_screen/media/crawler) + music station + bundles' `presentation` component | Python |
-| `svc-streaming` | RTC + HLS/RTMP/AV1 record/forward/transcode (absorbs svc-rtc + video_proxy) | **Go→Rust** |
+| `svc-ingest` | platform receivers + inbound webhooks; loads activated bundles' `ingest` component | RustLang |
+| `svc-process` | event bus, routing, command dispatch, workflow; bundles' `process` component | RustLang |
+| `svc-action` | outbound actions, interactions, 3rd-party calls, target adapters; bundles' `action` component | RustLang |
+| `svc-core` | identity/security/credentials/entitlement (gRPC :50051) | RustLang |
+| `svc-presentation` | core overlays (full_screen/media/crawler) + music station + bundles' `presentation` component | RustLang |
+| `svc-streaming` | RTC + HLS/RTMP/AV1 record/forward/transcode (absorbs svc-rtc + video_proxy) | RustLang |
 | `hub-api` | admin/tenancy control plane + **marketplace module** + gRPC + REST + **MCP** | Python/Quart |
-| `hub-webui` | SPA assets, Express static-serve + `/api` proxy | **Node/React only** |
+| `hub-webui` | SPA assets, static-serve + `/api` proxy for ReactJS webui | Python/Quart + ReactJS |
 
 Container topology is a **packaging** decision, decoupled from the logical Core→Module→Feature→App
 model (`2026-08-26-v3-scbm-apps-design.md:486-490`). Modules cut across stages vertically; the
@@ -179,28 +179,6 @@ tier-gated Feature contracts merged (`.PLAN:184-186`); it **grows** to per-capab
 under §9 P4. **Tier-name collision (OPEN, §11):** license-server enum is
 `community/professional/enterprise`; v3 wants `free`. `api/routes/api.py:166` hardcodes `tier !=
 "community"` — renaming mis-tiers that heuristic. Seed keeps `community` for now.
-
-### 3.3 License-bypass domains + the bypass-DEPTH gap
-
-Bypass satisfies **only the license/tier gate**, never the PostHog flag gate. Domains
-(`penguintech.md`; full-hostname match required, never substring):
-
-- `*.penguincloud.io`, `*.penguintech.cloud`, product `*.waddles.app`.
-
-**Design intent — per-host bypass DEPTH** (`.PLAN:36`, `2026-08-26-...:1097-1101`):
-
-| Host class | SaaS | Bypass depth |
-|---|---|---|
-| `waddles*.penguintech.cloud` (alpha/beta/gamma) | on | **global + community** — so Enterprise features are exercisable pre-prod |
-| `app.waddles.app`, `{region}-app.waddles.app` | on | **global only** — communities pay |
-| anything else | off | none — validate vs `license.penguintech.io` |
-
-**⚠️ GAP TO CLOSE:** the code today is **flat** — `entitlement.py` does a single license-bypass
-decision with no per-host *depth* distinction, and the legacy match is substring (`if d in
-domain_lower`), spoofable by a controlled hostname (`2026-08-26-...:1186-1198`). Two fixes owed
-(schedule under §9 P4/P1): (a) full-hostname structural match with anchored suffix; (b)
-per-host-class bypass **depth** (global vs global+community), with the resolver taking the domain
-as an **argument** (not ambient config) so denial cases are testable.
 
 ---
 

@@ -25,14 +25,14 @@ lifecycle and coexistence model.
 
 | Container | Responsibility | Language |
 |---|---|---|
-| `svc-ingest` | Platform receivers + inbound webhooks | Python/Quart |
-| `svc-process` | Event bus, command routing, workflow | Python/Quart |
-| `svc-action` | Outbound actions + standardized target adapters | Python/Quart |
-| `svc-core` | Identity, security, credentials, entitlement (gRPC) | Python/Quart |
+| `svc-ingest` | Platform receivers + inbound webhooks | RustLang |
+| `svc-process` | Event bus, command routing, workflow | RustLang |
+| `svc-action` | Outbound actions + standardized target adapters | RustLang |
+| `svc-core` | Identity, security, credentials, entitlement (gRPC) | RustLang |
 | `hub-api` | Admin, tenancy, marketplace, billing, MCP | Python/Quart |
-| `hub-webui` | SPA assets, static-serve + `/api` proxy | Node/React |
-| `svc-presentation` | Overlays + Music Station | Python/Quart |
-| `svc-streaming` | RTC + broadcast media control plane | Python (Rust planned) |
+| `hub-webui` | SPA assets, static-serve + `/api` proxy for ReactJS webui | Python/Quart + ReactJS |
+| `svc-presentation` | Overlays + Music Station | RustLang |
+| `svc-streaming` | RTC + broadcast media control plane | RustLang |
 
 Full per-container port table, build status, and module ownership:
 [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md).

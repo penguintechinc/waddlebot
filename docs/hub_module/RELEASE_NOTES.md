@@ -108,10 +108,6 @@
 - Database: `user_access_tokens`, `community_access_tokens` tables (migration 048)
 - Scope catalog reused from existing `permission_scopes` table
 
-#### License Bypass for Waddles-Branded Domains
-- `waddles.penguintech.cloud` and `waddles.penguincloud.io` added to premium bypass list
-- All services with `is_premium()` bypass logic updated consistently
-
 #### Signup Controls & CAPTCHA
 - Super Admin can enable/disable public signup (`allow_public_signup`)
 - CAPTCHA support: reCAPTCHA v2 and Cloudflare Turnstile; site/secret keys stored in `hub_settings`

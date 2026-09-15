@@ -39,21 +39,21 @@ for exactly what's real vs. scaffolded.
    └───────▶│ svc-streaming │ RTC + HLS/RTMP/AV1 record/forward/transcode
             └───────────────┘
 
-  svc-core   identity · security · credentials · entitlement (gRPC :50203, every stage depends on it)
+  svc-core   identity · security · credentials · entitlement (RustLang, gRPC :50203, every stage depends on it)
   hub-api    admin + tenancy + marketplace + billing + gRPC/REST/MCP  (Python/Quart control plane)
-  hub-webui  React SPA + Express static-serve/proxy — the only Node container
+  hub-webui  Python/Quart backend serving the ReactJS webui SPA
 ```
 
 | Container | Carries | Language | Port |
 |---|---|---|---|
-| `svc-ingest` | Platform receivers + inbound webhooks; loads each activated bundle's `ingest` component | Python/Quart | 8200 |
-| `svc-process` | Event bus, routing, command dispatch, workflow; bundles' `process` component | Python/Quart | 8201 |
-| `svc-action` | Outbound actions/interactions/3rd-party calls; bundles' `action` component + target adapters | Python/Quart | 8202 |
-| `svc-core` | Identity, security, credentials, entitlement — called synchronously by every other stage | Python/Quart, gRPC | 8203 / grpc 50203 |
+| `svc-ingest` | Platform receivers + inbound webhooks; loads each activated bundle's `ingest` component | RustLang | 8200 |
+| `svc-process` | Event bus, routing, command dispatch, workflow; bundles' `process` component | RustLang | 8201 |
+| `svc-action` | Outbound actions/interactions/3rd-party calls; bundles' `action` component + target adapters | RustLang | 8202 |
+| `svc-core` | Identity, security, credentials, entitlement — called synchronously by every other stage | RustLang, gRPC | 8203 / grpc 50203 |
 | `hub-api` | Admin, tenancy, marketplace, billing, AI routing control plane + gRPC + REST + MCP | Python/Quart | 8204 / grpc 50204 |
-| `hub-webui` | SPA assets, static-serve + `/api` proxy | Node/React + Express | 8205 |
-| `svc-presentation` | Core overlays (`full_screen`/`media`/`crawler`) + Music Station + bundles' `presentation` component | Python/Quart | 8207 |
-| `svc-streaming` | RTC + HLS/RTMP/AV1 record/forward/transcode control plane | Python (Rust migration planned) | 8208 / grpc 50208 |
+| `hub-webui` | SPA assets, static-serve + `/api` proxy for the ReactJS webui | Python/Quart + ReactJS | 8205 |
+| `svc-presentation` | Core overlays (`full_screen`/`media`/`crawler`) + Music Station + bundles' `presentation` component | RustLang | 8207 |
+| `svc-streaming` | RTC + HLS/RTMP/AV1 record/forward/transcode control plane | RustLang | 8208 / grpc 50208 |
 
 A ninth container, `svc-rtc` (Go, WebRTC/SFU), still runs standalone and is the planned absorption
 target into `svc-streaming` — not yet merged.
@@ -142,15 +142,6 @@ never seen. Entitlement resolves narrowest-first: community → tenant.
 | Free | ≤50 employees, 1 admin, 1 tenant | Core product |
 | Professional | 50–200 employees | Whitelabelling, Google OAuth2 SSO, unlimited workflows/admins |
 | Enterprise | 200+ employees or 10+ years, many tenants | SAML 2.0/OIDC SSO, audit & compliance, advanced analytics, WaddleAI |
-
-**License-bypass domains** skip the license gate only — the PostHog flag gate always still runs —
-and resolve to a **depth**, not a flat yes/no:
-
-| Host pattern | Depth |
-|---|---|
-| `*.penguintech.cloud`, `*.penguincloud.io` (PenguinTech's own pre-prod SaaS) | Global **and** per-community — every tier is demoable pre-prod |
-| `*.waddles.app` (the product's own prod domain) | Global only — individual communities still pay for community-scoped entitlement |
-| Anything else | None — validated against `license.penguintech.io` |
 
 ## Hero features
 
@@ -258,11 +249,11 @@ helm install waddlebot ./k8s/helm/waddlebot -n waddlebot --create-namespace \
 
 ## Technology Stack
 
-**Backend:** Python 3.13, Quart (async), PostgreSQL, Valkey
-**Frontend:** React 18, Vite, TailwindCSS v4 (`hub-webui`)
+**Services (`svc-*`):** RustLang
+**Control Plane (`hub-api`, `hub-webui`):** Python 3.13, Quart (async)
+**Frontend (`webui`):** ReactJS (React 18), Vite, TailwindCSS v4
 **Infrastructure:** Docker, Kubernetes (Helm v3), GitHub Actions
-**AI/LLM:** Ollama (free-local), OpenAI/Anthropic (BYOK), premium-metered local models
-**Storage:** PostgreSQL, MinIO (S3), Qdrant (vectors)
+**Data & Caching:** PostgreSQL, Valkey, MinIO (S3), Qdrant (vectors)
 
 ## License
 

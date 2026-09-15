@@ -25,14 +25,14 @@ hub-api**, not its own container.
 
 | Container | Responsibility | Language | HTTP port | gRPC port |
 |---|---|---|---|---|
-| `svc-ingest` | Platform receivers + inbound webhooks; loads each activated bundle's `ingest` component | Python/Quart | 8200 | — |
-| `svc-process` | Event bus, command routing, workflow orchestration; bundles' `process` component | Python/Quart | 8201 | — |
-| `svc-action` | Outbound actions/interactions/3rd-party calls; bundles' `action` component + target adapters | Python/Quart | 8202 | — |
-| `svc-core` | Identity, security, credentials, entitlement — synchronous gRPC, every stage depends on it | Python/Quart | 8203 | 50203 |
+| `svc-ingest` | Platform receivers + inbound webhooks; loads each activated bundle's `ingest` component | RustLang | 8200 | — |
+| `svc-process` | Event bus, command routing, workflow orchestration; bundles' `process` component | RustLang | 8201 | — |
+| `svc-action` | Outbound actions/interactions/3rd-party calls; bundles' `action` component + target adapters | RustLang | 8202 | — |
+| `svc-core` | Identity, security, credentials, entitlement — synchronous gRPC, every stage depends on it | RustLang | 8203 | 50203 |
 | `hub-api` | Admin, tenancy, marketplace, billing, AI routing, MCP — control plane | Python/Quart | 8204 | 50204 |
-| `hub-webui` | SPA assets, static-serve + `/api` proxy — the **only** Node container | Node/React + Express | 8205 | — |
-| `svc-presentation` | Core overlays (`full_screen`/`media`/`crawler`) + Music Station + bundles' `presentation` component | Python/Quart | 8207 | — |
-| `svc-streaming` | RTC + HLS/RTMP/AV1 record/forward/transcode control plane | Python today; Rust migration planned, not started | 8208 | 50208 |
+| `hub-webui` | SPA assets, static-serve + `/api` proxy for the ReactJS webui | Python/Quart + ReactJS | 8205 | — |
+| `svc-presentation` | Core overlays (`full_screen`/`media`/`crawler`) + Music Station + bundles' `presentation` component | RustLang | 8207 | — |
+| `svc-streaming` | RTC + HLS/RTMP/AV1 record/forward/transcode control plane | RustLang | 8208 | 50208 |
 
 `svc-core` is synchronous gRPC, not a pipeline stage — every other container calls it directly for
 auth/entitlement checks rather than going through a Valkey queue, since those calls block the
@@ -226,23 +226,12 @@ A Feature is available iff **both** gates pass. Unreachable license/flag server 
 last-known cached value — never fails open on a flag it has never seen. Entitlement resolution
 order: community → tenant (narrowest first).
 
-**License-bypass domains** (`libs/flask_core/flask_core/entitlement.py`) skip the license gate
-only — the PostHog flag gate always still runs — matched against the **full hostname** via
-`fnmatch` (never a substring check, so `waddles.penguintech.cloud.attacker.com` cannot spoof
-`*.penguintech.cloud`). Bypass resolves to a **depth**:
-
-| Host pattern | Depth | Why |
-|---|---|---|
-| `penguincloud.io`, `*.penguincloud.io`, `penguintech.cloud`, `*.penguintech.cloud` | `global_community` | PenguinTech's own pre-prod SaaS (alpha/beta/gamma) — every tier, including per-community Enterprise features, must be exercisable pre-prod |
-| `waddles.app`, `*.waddles.app` | `global` | The product's own prod domain — individual communities still pay for community-scoped entitlement |
-| Anything else | `none` | Validated against `license.penguintech.io` |
-
 ## Build status caveats
 
 Read this before assuming a container is production-ready:
 
 - **App code is real** for `svc-ingest`, `svc-process`, `svc-action`, `svc-presentation`,
-  `svc-streaming`, `hub-api`, and `hub-webui` — each has a working `app.py`/`runner.py`, tests, and
+  `svc-streaming`, `hub-api`, and `hub-webui` — each has a working implementation, tests, and
   its own `Dockerfile`.
 - **Helm chart wiring lags the code**: every pipeline container's Deployment template still pins
   `image:` to a shared placeholder base digest (`pipeline.pythonBaseImage` /
@@ -257,8 +246,7 @@ Read this before assuming a container is production-ready:
   [`k8s/helm/waddlebot/PIPELINE_MAPPING.md`](../k8s/helm/waddlebot/PIPELINE_MAPPING.md).
 - **`svc-streaming` fronts external engines**, it does not implement its own media transport: an
   internal RTMP/AV1 transcode proxy and LiveKit (SFU) sit behind it today. A native Rust data
-  plane is a documented future direction (`docs/plans/2026-08-31-svc-streaming-design.md`), not
-  shipped.
+  plane is a documented future direction (`docs/plans/2026-08-31-svc-streaming-design.md`).
 - **Music Station**: the presentation layer (player, overlay, live SSE push to OBS) and the
   YouTube/Spotify provider resolvers (normalized `Track` model, `hub_api/services/music_providers/`)
   are real. Per-source `ingest` bundles, a shared `process`-stage queue manager, and SoundCloud
@@ -266,11 +254,11 @@ Read this before assuming a container is production-ready:
 
 ## Technology stack
 
-**Backend:** Python 3.13, Quart (async), PostgreSQL, Valkey
-**Frontend:** React 18, Vite, TailwindCSS v4 (`hub-webui`)
+**Services (`svc-*`):** RustLang
+**Control Plane (`hub-api`, `hub-webui`):** Python 3.13, Quart (async)
+**Frontend (`webui`):** ReactJS (React 18), Vite, TailwindCSS v4
 **Infrastructure:** Docker, Kubernetes (Helm v3), GitHub Actions
-**AI/LLM:** Ollama (free-local), OpenAI/Anthropic (BYOK), premium-metered local models
-**Storage:** PostgreSQL, MinIO (S3), Qdrant (vectors)
+**Data & Caching:** PostgreSQL, Valkey, MinIO (S3), Qdrant (vectors)
 
 ## See also
 
