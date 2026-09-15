@@ -1,4 +1,4 @@
-"""ACTION stage-runner dispatch audit log -- pydal binding + write helper.
+"""ACTION stage-runner dispatch audit log -- write helper.
 
 Schema owned by `config/postgres/migrations/074_action_dispatch_log.sql`
 (the source of truth) -- this module's `define_table` passes
@@ -15,27 +15,8 @@ bodies").
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from penguin_dal import AsyncDB
-
-
-def init_action_dispatch_log_table(dal: Any) -> None:
-    """Define `action_dispatch_log` on `dal`. Call once per process during startup."""
-    dal.define_table(
-        "action_dispatch_log",
-        dal.Field("tenant_id", "reference tenants", notnull=True),
-        dal.Field("community_id", "reference communities", ondelete="CASCADE"),
-        dal.Field("app_id", "string", notnull=True),
-        dal.Field("target_type", "string", notnull=True),
-        dal.Field("status", "string", notnull=True),
-        dal.Field("attempt", "integer", default=1),
-        dal.Field("http_status", "integer"),
-        dal.Field("detail", "string", default=""),
-        dal.Field("envelope_ts", "datetime"),
-        dal.Field("dispatched_at", "datetime", default=datetime.utcnow),
-        migrate=False,
-    )
 
 
 async def record_dispatch(

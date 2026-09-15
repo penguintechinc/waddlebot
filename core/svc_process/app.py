@@ -7,15 +7,15 @@ entrypoint, and LPUSHes the result onto that bundle's `:action` key.
 
 DB: as of the App Bundle bundle-runtime freeze (`docs/
 APP_BUNDLE_AUTHORING.md`, 'Accessing the database / shared state'),
-svc-process also constructs its own `AsyncDAL` here (mirroring
-`core/svc_action/app.py`'s existing DAL construction exactly) and binds it
-once via `flask_core.set_bundle_dal()` so a stateful process bundle can
-call `get_bundle_dal()` from inside its own `transform()` body -- the
-frozen `transform(event) -> PlatformEvent | None` signature itself carries
-no DAL parameter. Startup also binds the `live_activity_events` table on
-that same DAL (`services.activity_feed.init_live_activity_events_table`)
-so `runner.py`'s best-effort activity emit has a table to write to -- see
-that module's docstring.
+svc-process also constructs a `penguin_dal.AsyncDB` here (mirroring
+`core/svc_action/app.py`'s DAL construction) and binds it once via
+`flask_core.set_bundle_dal()` after calling `await async_dal.reflect()`,
+which discovers `live_activity_events` (and every other real table) from
+the live schema directly -- so a stateful process bundle can call
+`get_bundle_dal()` from inside its own `transform()` body, and `runner.py`'s
+best-effort activity emit has a table to write to with no separate
+per-table binding step. The frozen `transform(event) -> PlatformEvent | None`
+signature itself carries no DAL parameter.
 """
 
 from __future__ import annotations
