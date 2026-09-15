@@ -171,7 +171,6 @@ fi
 
 # Final Report
 echo ""
-echo "========================================="
 total_cases=$((cases_passed + cases_failed))
 if [ "$cases_failed" -eq 0 ]; then
     echo "✓ Test PASSED: $cases_passed/$total_cases cases passed"
