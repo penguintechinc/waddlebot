@@ -135,8 +135,7 @@ stream directly from its own JS for live data.
 | Transport | Direct function call | `webhook_push` (HMAC-SHA256 signed) or `rest_pull` (bearer/HMAC) |
 | Failure mode | Exception → DLQ | Timeout (default 5000ms) or non-2xx → DLQ |
 
-Community/third-party-authored **native** scripts are deferred until a real sandbox exists — today
-`native` execution is first-party-only.
+Going forward, all App Bundles execute within a sandboxed **gVisor + WASM runtime environment**, ensuring strong multi-tenant isolation, memory safety, and controlled syscall capability gating across native and third-party bundles.
 
 ### Standardized action targets
 

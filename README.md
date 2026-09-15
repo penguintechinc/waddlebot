@@ -80,6 +80,7 @@ Core → Module → Feature → App (Bundle)
 - **App (Bundle)** — the code implementing a Feature. A bundle **is** the App, not a group of Apps:
   `bundle.yaml` manifest + a `{config, spec, script}` directory per stage it implements
   (`ingest`/`process`/`action`, optionally `presentation`).
+- **Runtime Environment** — going forward, all App Bundles execute within a sandboxed **gVisor + WASM runtime environment** providing multi-tenant isolation, memory safety, and strict capability gating.
 
 **3-tier lifecycle**, strict subset invariant `activated ⊆ available ⊆ installed`:
 
@@ -252,6 +253,7 @@ helm install waddlebot ./k8s/helm/waddlebot -n waddlebot --create-namespace \
 **Services (`svc-*`):** RustLang
 **Control Plane (`hub-api`):** Python 3.13, Quart (async)
 **Web UI (`hub-webui`):** ExpressScript + ReactJS (React 18), Vite, TailwindCSS v4
+**App Bundle Runtime:** gVisor + WASM sandbox runtime environment
 **Infrastructure:** Docker, Kubernetes (Helm v3), GitHub Actions
 **Data & Caching:** PostgreSQL, Valkey, MinIO (S3), Qdrant (vectors)
 
