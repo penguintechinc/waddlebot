@@ -175,22 +175,26 @@ class TestNewInlineCommands:
         assert result is not None
         assert "coming soon" in result.payload["text"]
 
-    async def test_uptime_reports_elapsed_time(self) -> None:
-        with patch("bundles.bot_process.time.monotonic", return_value=bot_process._START_TIME + 65):
+    async def test_uptime_reports_elapsed_time(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Pin _START_TIME too -- the real (ambient) value from module import
+        # combined with a mocked "now" can round to N-1 via float subtraction;
+        # fixing both sides removes the dependency on real wall-clock state.
+        monkeypatch.setattr("bundles.bot_process._START_TIME", 1_000.0)
+        with patch("bundles.bot_process.time.monotonic", return_value=1_065.0):
             result = await transform(_event("!uptime"))
         assert result is not None
         assert result.payload["text"] == "waddles has been up for 1m 5s \U0001f427"
 
-    async def test_uptime_reports_hours(self) -> None:
-        with patch(
-            "bundles.bot_process.time.monotonic", return_value=bot_process._START_TIME + 3725
-        ):
+    async def test_uptime_reports_hours(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("bundles.bot_process._START_TIME", 1_000.0)
+        with patch("bundles.bot_process.time.monotonic", return_value=4_725.0):
             result = await transform(_event("!uptime"))
         assert result is not None
         assert result.payload["text"] == "waddles has been up for 1h 2m 5s \U0001f427"
 
-    async def test_uptime_reports_seconds_only(self) -> None:
-        with patch("bundles.bot_process.time.monotonic", return_value=bot_process._START_TIME + 9):
+    async def test_uptime_reports_seconds_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("bundles.bot_process._START_TIME", 1_000.0)
+        with patch("bundles.bot_process.time.monotonic", return_value=1_009.0):
             result = await transform(_event("!uptime"))
         assert result is not None
         assert result.payload["text"] == "waddles has been up for 9s \U0001f427"

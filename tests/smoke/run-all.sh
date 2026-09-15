@@ -62,22 +62,7 @@ run_test() {
 run_test "Branding Smoke Test" \
     "cd '$SCRIPT_DIR' && bash smoke-branding.sh"
 
-# Flutter configuration integrity
-run_test "Flutter Config Integrity" \
-    "cd '$SCRIPT_DIR' && bash smoke-flutter-config.sh"
-
 # === Phase 2: Build tests (toolchain required) ===
-
-# Android build smoke test (if Flutter is available)
-if command -v flutter &> /dev/null; then
-    run_test "Android Build Smoke Test" \
-        "cd '$SCRIPT_DIR' && bash android-smoke.sh"
-
-    run_test "iOS Build Smoke Test" \
-        "cd '$SCRIPT_DIR' && bash ios-smoke.sh"
-else
-    echo -e "${YELLOW}⊘ Skipping Android/iOS smoke tests (Flutter not installed)${NC}"
-fi
 
 # Desktop Go build smoke test (if Go is available)
 if command -v go &> /dev/null; then

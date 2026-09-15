@@ -199,7 +199,6 @@ node_modules/
 mobile/android/app/build/
 mobile/android/.cxx/
 mobile/android/local.properties
-mobile/flutter_gazer/android/build/
 *.apk
 *.aab
 
