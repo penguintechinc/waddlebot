@@ -14,7 +14,7 @@ temp_dirs=()
 
 # Setup: create a cleanup trap
 cleanup_temp_dirs() {
-    for tmpdir in "${temp_dirs[@]}"; do
+    [ ${#temp_dirs[@]} -eq 0 ] || for tmpdir in "${temp_dirs[@]}"; do
         if [ -d "$tmpdir" ]; then
             rm -rf "$tmpdir"
         fi
@@ -24,9 +24,7 @@ trap cleanup_temp_dirs EXIT
 
 echo "Running test_check_bundle_dal_imports.sh..."
 
-# ==============================================================================
 # Test Case 1: Clean tree (exit 0, files_scanned > 0)
-# ==============================================================================
 echo ""
 echo "Test 1: Clean tree should exit 0 with files_scanned > 0"
 
@@ -38,18 +36,27 @@ mkdir -p "$sandbox1/core/svc_process/bundles"
 mkdir -p "$sandbox1/core/svc_action/bundles"
 mkdir -p "$sandbox1/core/svc_ingest/bundles"
 
-cp -r "$REPO_ROOT/core/svc_process/bundles/"*.py "$sandbox1/core/svc_process/bundles/" 2>/dev/null || true
-cp -r "$REPO_ROOT/core/svc_action/bundles/"*.py "$sandbox1/core/svc_action/bundles/" 2>/dev/null || true
-cp -r "$REPO_ROOT/core/svc_ingest/bundles/"*.py "$sandbox1/core/svc_ingest/bundles/" 2>/dev/null || true
+cp -r "$REPO_ROOT/core/svc_process/bundles/"*.py "$sandbox1/core/svc_process/bundles/"
+cp -r "$REPO_ROOT/core/svc_action/bundles/"*.py "$sandbox1/core/svc_action/bundles/"
+cp -r "$REPO_ROOT/core/svc_ingest/bundles/"*.py "$sandbox1/core/svc_ingest/bundles/"
+
+# Verify files were copied
+files_copied=$(find "$sandbox1/core" -maxdepth 3 -name '*.py' | wc -l)
+if [ "$files_copied" -eq 0 ]; then
+    echo "  ✗ No files copied to sandbox (copy failed)"
+    cases_failed=$((cases_failed + 1))
+    exit 1
+fi
 
 # Run gate from sandbox
 cd "$sandbox1"
-output1=$(bash "$GATE_SCRIPT" 2>&1) || exit_code1=$? && exit_code1=${exit_code1:-0}
+output1=$(bash "$GATE_SCRIPT" 2>&1) && exit_code1=0 || exit_code1=$?
 cd "$REPO_ROOT"
 
 # Check exit code
 if [ "$exit_code1" -eq 0 ]; then
     echo "  ✓ Exit code is 0"
+    cases_passed=$((cases_passed + 1))
 else
     echo "  ✗ Exit code is $exit_code1 (expected 0)"
     cases_failed=$((cases_failed + 1))
@@ -72,9 +79,7 @@ else
     echo "    Output: $output1"
 fi
 
-# ==============================================================================
 # Test Case 2: Missing directory should exit 1 with error message
-# ==============================================================================
 echo ""
 echo "Test 2: Missing directory should exit 1 with error in stderr"
 
@@ -95,6 +100,7 @@ cd "$REPO_ROOT"
 # Check exit code
 if [ "$exit_code2" -eq 1 ]; then
     echo "  ✓ Exit code is 1"
+    cases_passed=$((cases_passed + 1))
 else
     echo "  ✗ Exit code is $exit_code2 (expected 1)"
     cases_failed=$((cases_failed + 1))
@@ -110,9 +116,7 @@ else
     echo "    Output: $output2"
 fi
 
-# ==============================================================================
 # Test Case 3: Seeded violation should exit 1 with path:line in output
-# ==============================================================================
 echo ""
 echo "Test 3: Seeded violation should exit 1 with path:line in stderr"
 
@@ -124,9 +128,17 @@ mkdir -p "$sandbox3/core/svc_process/bundles"
 mkdir -p "$sandbox3/core/svc_action/bundles"
 mkdir -p "$sandbox3/core/svc_ingest/bundles"
 
-cp -r "$REPO_ROOT/core/svc_process/bundles/"*.py "$sandbox3/core/svc_process/bundles/" 2>/dev/null || true
-cp -r "$REPO_ROOT/core/svc_action/bundles/"*.py "$sandbox3/core/svc_action/bundles/" 2>/dev/null || true
-cp -r "$REPO_ROOT/core/svc_ingest/bundles/"*.py "$sandbox3/core/svc_ingest/bundles/" 2>/dev/null || true
+cp -r "$REPO_ROOT/core/svc_process/bundles/"*.py "$sandbox3/core/svc_process/bundles/"
+cp -r "$REPO_ROOT/core/svc_action/bundles/"*.py "$sandbox3/core/svc_action/bundles/"
+cp -r "$REPO_ROOT/core/svc_ingest/bundles/"*.py "$sandbox3/core/svc_ingest/bundles/"
+
+# Verify files were copied
+files_copied=$(find "$sandbox3/core" -maxdepth 3 -name '*.py' | wc -l)
+if [ "$files_copied" -eq 0 ]; then
+    echo "  ✗ No files copied to sandbox (copy failed)"
+    cases_failed=$((cases_failed + 1))
+    exit 1
+fi
 
 # Inject a legacy import into one bundle
 echo "" >> "$sandbox3/core/svc_action/bundles/social_quote_action.py"
@@ -141,24 +153,23 @@ cd "$REPO_ROOT"
 # Check exit code
 if [ "$exit_code3" -eq 1 ]; then
     echo "  ✓ Exit code is 1"
+    cases_passed=$((cases_passed + 1))
 else
     echo "  ✗ Exit code is $exit_code3 (expected 1)"
     cases_failed=$((cases_failed + 1))
 fi
 
 # Check that output contains the file:line reference
-if echo "$output3" | grep -q "core/svc_action/bundles/social_quote_action.py"; then
-    echo "  ✓ Output contains file path"
+if echo "$output3" | grep -qE "core/svc_action/bundles/social_quote_action\.py:[0-9]+:"; then
+    echo "  ✓ Output contains path:line format"
     cases_passed=$((cases_passed + 1))
 else
-    echo "  ✗ Output does not contain file path"
+    echo "  ✗ Output does not contain path:line format"
     cases_failed=$((cases_failed + 1))
     echo "    Output: $output3"
 fi
 
-# ==============================================================================
 # Final Report
-# ==============================================================================
 echo ""
 echo "========================================="
 total_cases=$((cases_passed + cases_failed))
