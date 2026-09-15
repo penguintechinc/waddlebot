@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 from sqlalchemy import Boolean, Column, Integer, MetaData, String, Table, text
 
-from penguin_dal import AsyncDB, Row, Rows
+from penguin_dal import AsyncDB
 
 
 def _load_bundle_runtime_module() -> Any:
