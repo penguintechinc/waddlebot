@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Any
 
 from flask_core import AsyncDAL
+from penguin_dal import AsyncDB
 
 
 def init_action_dispatch_log_table(dal: Any) -> None:
@@ -39,7 +40,7 @@ def init_action_dispatch_log_table(dal: Any) -> None:
 
 
 async def record_dispatch(
-    dal: AsyncDAL,
+    dal: AsyncDB,
     *,
     tenant_id: int,
     community_id: int | None,
@@ -57,8 +58,7 @@ async def record_dispatch(
     and log rather than let an audit-log write failure mask or retry-loop
     the dispatch outcome it's trying to record.
     """
-    await dal.insert_async(
-        dal.dal.action_dispatch_log,
+    await dal.action_dispatch_log.async_insert(
         tenant_id=tenant_id,
         community_id=community_id,
         app_id=app_id,

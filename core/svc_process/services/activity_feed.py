@@ -25,11 +25,11 @@ broad `except Exception` so a feed outage never breaks the live bot.
 
 from __future__ import annotations
 
-from flask_core import AsyncDAL
+from penguin_dal import AsyncDB
 
 
 async def record_activity(
-    dal: AsyncDAL,
+    dal: AsyncDB,
     *,
     community_id: int,
     platform: str,
@@ -44,8 +44,7 @@ async def record_activity(
     one place (`runner.py::_emit_activity`), matching `services.
     dispatch_log.record_dispatch`'s own division of responsibility.
     """
-    await dal.insert_async(
-        dal.live_activity_events,
+    await dal.live_activity_events.async_insert(
         community_id=community_id,
         platform=platform,
         actor=actor,
