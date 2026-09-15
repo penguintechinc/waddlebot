@@ -17,7 +17,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from flask_core import AsyncDAL
 from penguin_dal import AsyncDB
 
 

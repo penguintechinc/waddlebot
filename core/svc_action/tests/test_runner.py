@@ -52,11 +52,16 @@ def _make_poller(http_client_factory: Any, bundles: list[dict[str, Any]]) -> Bun
 @pytest.fixture
 async def dal(tmp_path: Path) -> AsyncDB:
     """A real in-memory penguin_dal.AsyncDB with tenants/communities/action_dispatch_log tables."""
-    from sqlalchemy import Column, Integer, MetaData, String, Table, DateTime
+    from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table
 
     def _create_tables(conn):
         metadata = MetaData()
-        Table("tenants", metadata, Column("id", Integer, primary_key=True, autoincrement=True), Column("slug", String(255)))
+        Table(
+            "tenants",
+            metadata,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("slug", String(255)),
+        )
         Table(
             "communities",
             metadata,
@@ -532,11 +537,25 @@ class TestTenantSlugResolution:
     ) -> None:
         """A second dispatch for the same slug doesn't re-query `tenants`.
 
-        Wraps `dal.select_async` (the only call `_resolve_tenant_id` makes)
+        Wraps `AsyncQuerySet.select` (the only call `_resolve_tenant_id` makes)
         with a counter -- two dispatches for the same tenant slug must
         produce exactly one `tenants` lookup, not two.
         """
+        from typing import Any as AnyType
+
+        from penguin_dal.query import AsyncQuerySet
+
         monkeypatch.setenv("SVC_ACTION_TEST_DISCORD_TOKEN_CACHE", "s3cr3t-bot-token")
+
+        select_calls = 0
+        original_select = AsyncQuerySet.select
+
+        async def _counting_select(self: Any, *args: AnyType, **kwargs: AnyType) -> Any:
+            nonlocal select_calls
+            select_calls += 1
+            return await original_select(self, *args, **kwargs)
+
+        monkeypatch.setattr(AsyncQuerySet, "select", _counting_select)
 
         async def _fake_guarded_request(
             client, method, url, *, headers=None, content=None, json=None
@@ -546,9 +565,6 @@ class TestTenantSlugResolution:
         import bundles.discord_send_action as discord_bundle
 
         monkeypatch.setattr(discord_bundle, "guarded_request", _fake_guarded_request)
-
-        # Note: AsyncDB doesn't expose select_async for mocking like AsyncDAL did.
-        # The cache verification happens via the assertion below instead.
 
         poller = _make_poller(
             http_client_factory,
@@ -579,6 +595,8 @@ class TestTenantSlugResolution:
         # Cache is populated after the first _resolve_tenant_id call.
         # Both dispatches use the same tenant, so the cache should have one entry.
         assert runner._tenant_id_cache == {TENANT: 1}  # noqa: SLF001
+        # Verify the cache actually prevented a second query.
+        assert select_calls == 1  # tenant slug resolved once, reused for the second dispatch
 
     async def test_unknown_tenant_slug_audit_failure_never_masks_dispatch_outcome(
         self,

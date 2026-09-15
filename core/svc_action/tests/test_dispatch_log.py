@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 from flask_core import AsyncDAL
-from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table
 from penguin_dal import AsyncDB
+from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table
 
 from services.dispatch_log import init_action_dispatch_log_table, record_dispatch
 
