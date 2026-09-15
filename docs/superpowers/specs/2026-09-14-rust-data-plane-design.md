@@ -118,6 +118,8 @@ Every row was decided by the human product owner during the 2026-09-14 design se
 | D25 | **Action streams are strictly per bundle** — one stream, one consumer group, never read on another bundle's behalf — and the `_target_app_id` cross-bundle redirect becomes a **declared, approved capability** (`routes_to`, exact ids, no wildcards), enforced by the stage, which is also the only writer. | Ingest streams are shared read-only platform data; action envelopes are a bundle's own output and routinely carry its private state. The asymmetry is deliberate, and the one cross-bundle path is visible at install rather than implicit. | Human, 2026-09-14 |
 | D22 | **Naming: Waddles is the product and repo name; `waddlebot` survives only as the legacy identifiers listed here.** The repo becomes `penguintechinc/waddles` (local clone `~/code/waddles`), images become `ghcr.io/penguintechinc/waddles/<service>`, the Kubernetes namespace and in-cluster DNS become `waddles` (`hub-api.waddles.svc.cluster.local`), and chart Secrets become `waddles-*`. Flag keys (`waddles.*`) and Valkey keys (`waddles:*`) already used the name. **The complete list of surviving `waddlebot` literals:** (1) the Helm chart directory and release name `k8s/helm/waddlebot`, which this project does not rename (N4 keeps the chart's names and values stable); (2) the Postgres `DB_NAME` default `waddlebot`, which this project does not migrate; (3) the legacy `waddlebot:stream:*` / `waddlebot:dlq:*` key prefixes belonging to the unused `flask_core.stream_pipeline.StreamPipeline` class, which this spec does not use and does not rename; (4) Python package paths and the scratchpad path of the sandbox spike report. Every other occurrence is Waddles. | One product name, and a short, explicit list of the places a rename would mean a migration this project is not doing. | Human, 2026-09-14 |
 | D29 | **Webhook intake source restriction (user review 3).** Every generic webhook source (`POST /intake/webhook/{tenant}/{source}`) must configure at least one of a source-IP allowlist, a bearer token or HTTP basic credentials in addition to the mandatory per-source HMAC signature; hub-api refuses to activate a generic source configured with none of the three. Twitch EventSub and Kick webhooks additionally require the client address to forward-confirm (FCrDNS) to `twitch.tv` / `kick.com`, or match an operator-configured static CIDR allowlist, on top of each platform's own signature scheme (§4.1.1). | A per-source secret is a single point of failure once it leaks or is guessed; a signature alone cannot tell a forged request from a genuine one once the secret is compromised. An origin or auth factor that travels out-of-band from the secret closes exactly that gap: an attacker holding only the secret still cannot originate from `twitch.tv`, land inside an allowlisted CIDR, or present a bearer/basic credential they were never given. Alternatives rejected: **signature-only** (the prior design — a leaked or guessed per-source secret was sufficient on its own to forge any generic or platform webhook); **IP-only without signature** (drops per-message tamper-evidence and is brittle against a sending platform's own IP rotation, so it was rejected in favor of requiring both). | Human, 2026-09-14 (review 3) |
+| D30 | **Workstream identity, end-to-end trace, and the tenant wall (user review 3).** Every configured ingest source gets a hub-api-owned **workstream** (`workstreams`, 1:1 with `intake_sources`, owned by exactly one tenant and one community or the tenant-wide `_tenant` scope). svc-ingest mints `workstream_id`, a fresh `event_id`, a W3C `trace` (a new trace per inbound event) and an optional `session_id` (the platform's own connection/session, when it has one) onto every envelope from its source registry alone, never from payload, and signs the binding with `binding.mac = HMAC-SHA256(k_binding[kid], tenant‖community‖workstream_id‖event_id‖trace_id)` under a key held only by the Rust stage services. Every stage verifies the MAC and the tenant/community/grant/approval chain on every read, before any other processing; a failure is `error.kind = "tenant_boundary"`, DLQ'd, never retried, counted (`waddles_tenant_boundary_violations_total`) and audited. Bundle output can never carry or overwrite these fields — the stage copies them from the input envelope unconditionally — and `routes_to` (D25) is refused cross-tenant both at approval and independently at runtime. Host calls (`db`, `kv`) were already tenant-scoped by construction (`SET LOCAL waddles.tenant`/`waddles.community`, §7.4; scoped keys, §6.2); D30 makes the envelope driving them tamper-evident. Full spec: §5.11; envelope changes §6.1.2 (schema bumped to `2`, no dual-read — D3). | A session trace that can be followed end to end, and a tenant boundary that holds even against a malicious bundle, a compromised stage, or a forged Valkey entry — not just against a well-behaved one. Binding tenant/community/workstream cryptographically to the event, rather than trusting that every reader sources them correctly from the key (§5.10's prior invariant), closes the gap between "the design says never from payload" and "a bug or an escape can't make that false." | Human, 2026-09-14 (review 3) |
+| D31 | **Workstream usage metering (user review 3).** Every stage records usage per `(tenant_id, community_id, workstream_id, stage, app_id)` — events, bundle invocations, fuel/CPU-ms, host calls by kind, actions delivered, outbound bytes, and svc-streaming's media-minutes — batched onto `waddles:usage` (stages `XADD`-only) at most every `metering.flushIntervalSeconds` (default `10`). hub-api's aggregator writes `workstream_usage_hourly` (append-only) and exposes a per-community admin usage view. Usage is never an OTel metric label (cardinality); the usage table is the billing source of truth. No charging, quota or enforcement ships now — per-workstream pricing, if adopted, is a future commercial metering axis alongside nodes/seats, gated by the license server like any other entitlement. Full spec: §5.12, tables §6.11–§6.12. | Charging per workflow stream and tying that to a community is a data-modeling decision today, not a billing feature today — the data has to exist in the right shape before there is anything to charge against, and building the recording path now is far cheaper than reconstructing history later. | Human, 2026-09-14 (review 3) |
 
 ---
 
@@ -725,8 +727,8 @@ routes_to: ["waddles.community.forums.default"]
 | Rule | Behaviour |
 |---|---|
 | Declaration | Exact `app_id`s only. No wildcards, no prefixes. |
-| Install-time | hub-api validates that each target exists in `app_catalog` and renders "may send events to app X" on the consent screen (§9.7). |
-| Runtime | The stage compares the `_target_app_id` a bundle set against the **approved** `routes_to` set. A redirect to an undeclared or unapproved target is **dropped** — the event is not delivered anywhere — `waddles_route_denied_total{app_id,target}` is incremented, and the attempt is logged at WARN with both ids. |
+| Install-time | hub-api validates that each target exists in `app_catalog`, is installed in the **same tenant** as the declaring bundle — a cross-tenant target is refused outright at approval, not merely left unapproved (D30) — and renders "may send events to app X" on the consent screen (§9.7). |
+| Runtime | The stage compares the `_target_app_id` a bundle set against the **approved** `routes_to` set. A redirect to an undeclared or unapproved target, or one whose target resolves to a different tenant than the source envelope's, is **dropped** — the event is not delivered anywhere — `waddles_route_denied_total{app_id,target}` is incremented, and the attempt is logged at WARN with both ids. The tenant check is independent of the install-time one (D30): impossible by construction once approval refuses it, but the stage never trusts that alone. |
 | Write path | The **stage** writes to the target's action stream. The source bundle never names a stream, never holds a Valkey connection, and cannot write to another bundle's stream even if the redirect is approved. |
 | Invariants | A redirect changes only the destination key's `app_id` segment; tenant and community still come from the stream the entry was read from, and the reserved payload key is popped off before the write. |
 
@@ -736,13 +738,57 @@ routes_to: ["waddles.community.forums.default"]
 - **Tenant** is the deployment's `RUNNER_TENANT_SLUG`; **community** is `Option<String>` where `None` renders as the literal `_tenant` segment.
 - Tenant and community are sourced **exclusively** from the stream key the entry was read from, never from event payload. `PlatformEvent.source` identifies the connection, never the tenancy. The `_target_app_id` escape hatch changes only the destination key's `app_id` segment — the invariant documented at `libs/flask_core/flask_core/stream_pipeline.py:251-286` is preserved bit for bit.
 
+### 5.11 Workstream identity, end-to-end trace and the tenant wall (D30)
+
+**Workstream.** A hub-api entity, `workstreams(id uuid, tenant_id, community_id nullable = tenant-wide, source_id unique, created_at, disabled_at)` (§6.11), created 1:1 with each row in `intake_sources` (§10.3, §15.4) — one workstream per configured ingest source, so `workstream_id` and `source_id` are two names for the same relationship. Owned by exactly one tenant and one community, or the tenant-wide `_tenant` scope, mirroring §5.10's `Option<String>` rule. Shown on the source's config view (§10.3) and on the consent screen (§9.7.1) alongside the source it reads.
+
+**Minting.** svc-ingest builds the binding for every inbound event — never the bundle, never hub-api after the fact — from its own `intake_sources` cache, the same lookup that already resolves `source_id` and the stream key (§10.6): `tenant_id`, `community_id` and `workstream_id` come from that record, not from the payload, exactly as tenant/community already do (§5.10, §11.8). Alongside them, ingest mints a fresh `event_id` (UUID v4, distinct from the platform's own message id, which stays in `PlatformEvent`, and from the Valkey stream entry id `XADD` assigns afterward, §5.4) and a new W3C trace — one trace per inbound event, never a continuation of an inbound request's own trace — with the platform's own message id recorded as an `intake.request`/`ingest.normalize` span attribute, not folded into the trace id. `session_id` is populated when the platform surfaces a connection/broadcast session (a Twitch/Kick EventSub websocket session, a Discord gateway session, a live-broadcast id) and left absent otherwise; it groups traces, it does not replace them.
+
+**Binding MAC.** Ingest computes
+
+```
+binding.mac = hex(HMAC-SHA256(k_binding[binding.kid],
+                 tenant ‖ community ‖ workstream_id ‖ event_id ‖ trace_id))
+```
+
+where `trace_id` is the 32-hex trace-id segment of `trace.traceparent`, `community` renders as the literal `_tenant` exactly as the key segment does (§6.2), and `k_binding[kid]` is a symmetric key held only by the Rust stage services (`security.envelopeBinding.keySecretRef`, §12.3) — never by hub-api, never by a bundle, never by the compiler. Keys are named by `kid` and rotated with an overlap window (`security.envelopeBinding.rotationOverlapSeconds`, §12.3): a verifier accepts a MAC produced under any `kid` still inside the overlap window, and always mints new MACs under the current `kid`.
+
+**Verification at every hop.** svc-process and svc-action (and svc-streaming, where it reads an envelope-bearing control call) each verify, on every entry read, before any other processing — bundle invocation included:
+
+1. `binding.mac` recomputes to the value on the envelope, under the `kid` it names.
+2. `tenant`/`community` on the envelope equal the `t:`/`c:` segments of the stream key the entry was read from (§5.10 — D30 makes this cryptographically checked, not merely sourced correctly).
+3. The bundle's installation, its stream grant (§6.8) and its install approval (§6.9) belong to that same tenant, and to that community or a tenant-wide (`_tenant`) grant.
+4. For action and streaming, the outbound credential and target are resolved from the envelope's `(tenant, community)` — never from anything a bundle's output supplied.
+
+A failure of any of the four is `error.kind = "tenant_boundary"` (§6.3): the entry is `XACK`ed and DLQ'd, never retried, `waddles_tenant_boundary_violations_total{stage,reason}` +1, a sanitized ERROR log, and an audit event.
+
+**Bundles cannot move a workstream.** `tenant_id`, `community_id`, `workstream_id`, `event_id` and `trace` never travel *from* bundle output — a process bundle's `transform` return value is not read for them, the stage copies them from the input envelope onto the output envelope unconditionally, and a bundle-supplied field of the same name is dropped and counted (`waddles_tenant_boundary_violations_total{stage="process",reason="bundle_set_identity"}`). `routes_to` (§5.9, D25) gains the tenant check described there: refused at install-time approval and independently at runtime.
+
+**Host calls stay tenant-scoped by construction.** No new mechanism is introduced here: `db` already runs on a connection where `SET LOCAL waddles.tenant`/`waddles.community` drives RLS from the envelope the stage is currently servicing (§7.4), and `kv`/config/state keys already carry `{tenant, community}` in the `Scope` that builds them (§4.7, §6.2). D30's contribution is that both are now driven by an envelope whose tenant/community have passed binding-MAC verification, so a forged or replayed envelope cannot reach either. No bundle host call accepts a tenant or community argument at all — every one is scope-implicit, taken from the invocation in flight.
+
+**Trace propagation.** `trace.traceparent`/`trace.tracestate` (superseding the single-field `trace_context` of the pre-D30 schema, §6.1.2) travel on the envelope through every stream hop, into the executor frame for every host call and back (the executor still creates no spans of its own, §13.2 — it returns durations, the stage records them), and onto outbound platform calls. Every span (§13.2) additionally carries `waddles.tenant_id`, `waddles.community_id`, `waddles.workstream_id`, `waddles.app_id` — ids only, never PII or message bodies. Pipeline log lines already carry `trace_id` (§13.3); `workstream_id` is added alongside it.
+
+**Envelope schema.** `StageEnvelope` gains `workstream_id`, `event_id`, `session_id` (optional), `trace` (replacing `trace_context`) and `binding`, detailed in §6.1.2, and the schema version is bumped to `2`. No dual-read: this subsystem ships inside the v3.0 cut-over (D3), so a `schema_version` other than `2` — including its absence — is rejected rather than interpreted as the pre-D30 shape.
+
+### 5.12 Workstream usage metering (D31)
+
+**What is recorded.** Every stage that touches an envelope records usage keyed by `(tenant_id, community_id, workstream_id, stage, app_id)`: events ingested, bundle invocations, bundle fuel/CPU-ms (from the executor's per-call accounting, §7.2/§7.3), host calls by kind (`http`/`kv`/`db`/`relay`/`flags`/`log`), actions delivered, outbound bytes, and — svc-streaming only — stream-media minutes.
+
+**Transport.** Deltas are batched and `XADD`ed to `waddles:usage` (§6.2) at most every `METERING_FLUSH_INTERVAL_S` (default `10`, `metering.flushIntervalSeconds`) per stage replica — not per event, so a chatty channel does not multiply the write rate. Stages are **write-only** on this stream (§11.10.2): they `XADD` and never read it back.
+
+**Aggregation.** hub-api owns a consumer that reads `waddles:usage` and writes `workstream_usage_hourly` (§6.12, Postgres), one row per `(tenant_id, community_id, workstream_id, stage, app_id, hour)`, **append-only** for the aggregator's own writes — corrections are new rows for the same key, summed at query time, never an `UPDATE` of a settled hour — and exposes a per-community usage view/API for admins (read-only). §11.10.1's RBAC matrix and §11.10.2's ACL matrix both gain the corresponding rows.
+
+**Not metric labels.** `workstream_id` and `app_id` are high-cardinality by design (one per install, one per channel) and never become an OTel metric label (§13.1) — usage lives in `workstream_usage_hourly`; metrics stay tenant-safe and low-cardinality. The two systems answer different questions: metrics say "is this healthy," the usage table says "how much did this workstream cost."
+
+**Not billed yet.** `metering.enabled` (chart value, default `true`) turns the recording and aggregation on; there is no charging, quota or enforcement wired to it in this spec. Per-workstream pricing, if adopted, is a future commercial decision — a metering axis alongside the existing per-node/per-seat model (`critical-rules.md` Licensing Model), gated by the license server like any other entitlement, not by this recording pipeline. The data model is built so that "usage per workstream per community for a billing period" is one query against `workstream_usage_hourly` filtered by `tenant_id`, `community_id` and an `hour` range.
+
 ## 6. Data contracts
 
 Everything in this section is normative. Where a value is a default, the environment variable that overrides it is named.
 
 ### 6.1 Envelope JSON
 
-The queue-crossing shape is unchanged from `libs/flask_core/flask_core/stream_pipeline.py:204-328`, plus one new optional field (`trace_context`).
+The queue-crossing shape is unchanged from `libs/flask_core/flask_core/stream_pipeline.py:204-328`, plus the workstream-identity and trace fields of §5.11 (`workstream_id`, `event_id`, `session_id`, `trace` — replacing `trace_context` — and `binding`, D30) and the `schema_version` bump to `2`.
 
 #### 6.1.1 `PlatformEvent`
 
@@ -793,6 +839,7 @@ The queue-crossing shape is unchanged from `libs/flask_core/flask_core/stream_pi
 
 ```json
 {
+  "schema_version": 2,
   "tenant": "global",
   "community": null,
   "app_id": "waddles.bot.commands.default",
@@ -800,12 +847,23 @@ The queue-crossing shape is unchanged from `libs/flask_core/flask_core/stream_pi
   "event": { "...PlatformEvent..." },
   "ts": "2026-09-14T12:00:00.123Z",
   "target_app_id": null,
-  "trace_context": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+  "workstream_id": "8f14e45f-ceea-467e-adde-3fb5c9752730",
+  "event_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "session_id": null,
+  "trace": {
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    "tracestate": null
+  },
+  "binding": {
+    "kid": "2026-09",
+    "mac": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  }
 }
 ```
 
 | Field | JSON type | Required | Constraint |
 |---|---|---|---|
+| `schema_version` | integer | yes | must equal `2`; a `1` or absent value is the pre-D30 shape and is rejected — no dual-read (D3, D30) |
 | `tenant` | string | yes | non-empty; equals the `t:` segment of the key it was taken from |
 | `community` | string \| null | yes (may be null) | `null` ⇔ the key's `c:` segment is the literal `_tenant` |
 | `app_id` | string | yes | matches `^waddles\.[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9_-]*$` |
@@ -813,9 +871,13 @@ The queue-crossing shape is unchanged from `libs/flask_core/flask_core/stream_pi
 | `event` | object | yes | a `PlatformEvent` object; a message without an `event` key is refused, never coerced |
 | `ts` | string | yes | non-empty; RFC 3339 UTC, millisecond precision |
 | `target_app_id` | string \| null | no | absent or `null` ⇒ `None`; when set, changes only the destination key's `app_id` segment |
-| `trace_context` | string \| null | no | W3C `traceparent` (`00-<32 hex>-<16 hex>-<2 hex>`); absent or `null` ⇒ no parent span |
+| `workstream_id` | string | yes | UUID; minted by svc-ingest from `intake_sources`/`workstreams` (§5.11, §6.11), never from payload; copied verbatim by every later stage, never accepted from bundle output |
+| `event_id` | string | yes | UUID v4, minted once by svc-ingest per inbound event; distinct from the platform's own message id (kept in `PlatformEvent`) and from the Valkey stream entry id (§5.4); an input to `binding.mac` (§5.11) |
+| `session_id` | string \| null | no | The platform connection/broadcast session (EventSub websocket session, Discord gateway session, a live-broadcast id), when the platform has one; absent or `null` otherwise (§5.11) |
+| `trace` | object \| null | no | `{traceparent, tracestate}`; `traceparent` is the W3C string (`00-<32 hex>-<16 hex>-<2 hex>`) as `trace_context` carried alone before D30; `tracestate` is the W3C `tracestate` string or `null`; absent ⇒ no parent span. **Supersedes the pre-D30 `trace_context` field** (§5.11) |
+| `binding` | object | yes | `{kid, mac}` — `kid` names the active HMAC key version, `mac` is the lowercase-hex `HMAC-SHA256` of §5.11's formula; verified by every stage on every read before any other processing |
 
-**Strictness.** Both implementations use strict deserialization: a missing required field, a wrong-typed field, an unknown top-level field, or a `stage` outside the fixed set is an error. No coercion, ever. `flask_core.stream_pipeline`'s `from_dict` is tightened to reject unknown keys and to carry `trace_context` in M1, so the Python (hub-api, tests) and Rust (data plane) readers agree byte for byte.
+**Strictness.** Both implementations use strict deserialization: a missing required field, a wrong-typed field, an unknown top-level field, or a `stage` outside the fixed set is an error. No coercion, ever. `flask_core.stream_pipeline`'s `from_dict` is tightened to reject unknown keys, to require `schema_version == 2`, and to carry the D30 fields in M1, so the Python (hub-api, tests) and Rust (data plane) readers agree byte for byte.
 
 **Reserved payload key.** `_target_app_id` (`PROCESS_TARGET_APP_ID_KEY`) may be set by a process bundle inside `event.payload`; the stage pops it back out before enqueuing, so it never reaches an action bundle or a chat reply. Unchanged.
 
@@ -831,6 +893,7 @@ Scope prefix: `waddles:t:{tenant}:c:{community|_tenant}`. Per-bundle base: `{sco
 | Bundle state | `{scope}:app:{app_id}:state` | hash | host `kv` calls | host `kv` calls |
 | Dead letter | `waddles:dlq:{stage}` | stream, `MAXLEN ~ SPINE_DLQ_MAXLEN` | any stage | operators, replay tooling |
 | Twitch outbound relay | the provider-scoped key from `waddle_transports.transports.irc_relay.outbound_queue_key("twitch")` | list (unchanged — a single-consumer relay, not a fan-out) | svc-action's `relay` host call | svc-ingest's outbound drain |
+| Usage metering | `waddles:usage` | stream, `MAXLEN ~ SPINE_STREAM_MAXLEN` | every stage, batched (§5.12, D31) | hub-api's usage aggregator only — stages are `XADD`-only and never read it back (§11.10.2) |
 
 Entry payload for every stream above is a single field, `env` (or `rec` for the DLQ), holding the JSON of §6.1.2 (or §6.3). Consumer groups are named by `app_id`; consumers within a group are named by pod identity.
 
@@ -852,6 +915,7 @@ One JSON object per `XADD` onto the `waddles:dlq:{stage}` stream, carried in a s
   "tenant": "global",
   "community": null,
   "app_id": "waddles.bot.commands.default",
+  "workstream_id": "8f14e45f-ceea-467e-adde-3fb5c9752730",
   "artifact_digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
   "consumer_id": "svc-process-7d9c4f",
   "deliveries": 5,
@@ -862,7 +926,10 @@ One JSON object per `XADD` onto the `waddles:dlq:{stage}` stream, carried in a s
     "message": "bundle call exceeded 2000 ms",
     "detail": null
   },
-  "trace_context": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  "trace": {
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    "tracestate": null
+  },
   "raw": "{\"tenant\":\"global\",\"community\":null,...}"
 }
 ```
@@ -871,6 +938,7 @@ One JSON object per `XADD` onto the `waddles:dlq:{stage}` stream, carried in a s
 |---|---|
 | `schema_version` | Always `1` for this spec. |
 | `entry_id` | The Valkey stream entry id the record came from — the stable de-duplication key, the same value handed to the bundle as `message-id`. |
+| `workstream_id` | Copied from the envelope (§5.11, D30); present even on a `tenant_boundary` rejection, which is exactly the record an operator needs to trace a boundary violation back to its source. |
 | `group` | The consumer group (`app_id`) that was processing the entry. |
 | `raw` | The original envelope JSON **as a string, verbatim**, so a malformed envelope is still replayable/inspectable. |
 | `artifact_digest` | `null` when the failure happened before a bundle was selected (e.g. `envelope_invalid`). |
@@ -885,6 +953,7 @@ One JSON object per `XADD` onto the `waddles:dlq:{stage}` stream, carried in a s
 | `memory_limit` | The instance exceeded its memory cap. |
 | `host_call_denied` | A capability check refused the call (undeclared egress host, table outside `data.tables`, missing capability). |
 | `max_deliveries` | `deliveries` reached `SPINE_MAX_DELIVERIES`. |
+| `tenant_boundary` | The §5.11 hop verification failed — `binding.mac` mismatch, envelope tenant/community disagreeing with the stream key, a grant/approval scoped to a different tenant or community, or a bundle output that tried to set an identity field. **Never retried** (D30). |
 
 | `bundle_disabled` | The bundle is disabled after three sandbox trips (§7.5). |
 | `executor_unavailable` | The executor was down past `EXECUTOR_UNAVAILABLE_READY_S` and the event could not be attempted. |
@@ -1364,7 +1433,7 @@ TLS 1.3 preferred, 1.2 minimum. A connection whose peer certificate does not ver
 | `hello-ok` | `stage`, `protocol_version`, `limits` (`{call_timeout_ms, memory_mb, max_concurrent_calls}`) | none |
 | `load` | `app_id`, `version`, `digest` (`sha256:<64 hex>`), `component_key` and `sidecar_key` (bucket object keys), `capabilities` (list), `limits` (`{timeout_ms, memory_mb}`) | `loaded` or `error` |
 | `unload` | `app_id`, `digest` | `unloaded` or `error` |
-| `invoke` | `app_id`, `digest`, `export` (`transform` \| `dispatch`), `payload` (the export's arguments as JSON), `deadline_ms`, `trace_context` | `result` or `error` |
+| `invoke` | `app_id`, `digest`, `export` (`transform` \| `dispatch`), `payload` (the export's arguments as JSON), `deadline_ms`, `trace` (`{traceparent, tracestate}`, from the envelope, §5.11) | `result` or `error` |
 | `host-result` | `result` (capability-specific JSON) or `error` (`{code, message}`) — replies to a `host-call` | none |
 | `ping` | — | `pong` |
 | `shutdown` | `grace_ms` | connection closed after in-flight calls drain or `grace_ms` elapses |
@@ -1526,6 +1595,42 @@ Which version is live is a separate, hub-api-owned table, so activation and roll
 | `activated_at` | timestamptz | |
 
 `PRIMARY KEY (app_id, tenant_id, community_id)`. Only `hub_api` may write it. **Rollback is an `UPDATE` of `version_id` here** — pointing at a different, already-published, already-approved row — never an edit of a digest. The distribution API joins these two tables, which is why `artifactDigest` in §6.7 is always a value some publisher measured, written by one of exactly two roles, and recorded in the audit log if it ever changed.
+
+### 6.11 `workstreams` (D30)
+
+hub-api-owned, one row per configured ingest source (§10.3), created and disabled in lockstep with it (§5.11).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | Primary key; this is `workstream_id` everywhere else in this spec |
+| `tenant_id` | integer | FK `tenants(id)` |
+| `community_id` | integer, nullable | FK `communities(id)`; `NULL` = tenant-wide, mirroring the `_tenant` key segment |
+| `source_id` | text | FK `intake_sources(source_id)`, `UNIQUE` — one workstream per source, in either direction |
+| `created_at` | timestamptz | |
+| `disabled_at` | timestamptz, nullable | Set when the owning source is disabled or removed; a disabled workstream mints nothing further, since there is no source left to mint from |
+
+`UNIQUE (source_id)`. No PII: identified by UUID and by reference to `intake_sources`, never by a display name.
+
+### 6.12 `workstream_usage_hourly` (D31)
+
+Written by hub-api's usage aggregator only (§5.12), append-only.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigserial | Primary key |
+| `tenant_id` | integer | FK `tenants(id)` |
+| `community_id` | integer, nullable | `NULL` = tenant-wide |
+| `workstream_id` | uuid | FK `workstreams(id)` |
+| `stage` | text | `ingest` \| `process` \| `action` \| `streaming` |
+| `app_id` | text, nullable | FK `app_catalog(app_id)`; `NULL` for ingest-stage rows, which have no bundle |
+| `hour` | timestamptz | Truncated to the hour; the aggregation bucket |
+| `events` / `invocations` / `host_calls` / `actions_delivered` | bigint | Counters for the hour |
+| `fuel_ms` | bigint | Bundle CPU-ms, from the executor's per-call accounting (§7.2, §7.3) |
+| `outbound_bytes` | bigint | |
+| `media_minutes` | numeric, nullable | svc-streaming rows only |
+| `recorded_at` | timestamptz | When this row was written — not when the usage occurred, since corrections append rather than update |
+
+No `UNIQUE` constraint on the natural key: a correction is a new row for the same `(tenant_id, community_id, workstream_id, stage, app_id, hour)`, summed at query time — append-only means never rewritten, not "one row per hour." Read access is admin-reporting only (§11.10.1); no charging or quota logic reads this table today (§5.12).
 
 ---
 
@@ -2085,6 +2190,7 @@ for each normalized PlatformEvent E from source S at (tenant, community):
 | Forged inbound events | Per-platform signature verification, per-source HMAC with a replay window, JWT with a mandatory tenant claim, built-in platforms unreachable through the generic REST route — **and, per source, a required second factor** (IP allowlist, bearer token or HTTP basic for generic webhooks; FCrDNS or a pinned CIDR to the platform's own domain for Twitch/Kick) on top of the signature, never the signature alone (§4.1.1). | A leaked per-source secret **combined with** a satisfied second factor — e.g. an attacker who also holds the bearer token, reaches an allowlisted address, or originates from inside the platform's own IP/DNS space. Mitigated by rotation, by secrets never leaving hub-api's store, and by the second factor traveling out-of-band from the secret. |
 | A forged Twitch/Kick webhook, signed with a leaked or guessed platform secret but sent from a non-platform origin | Origin restriction — FCrDNS to `twitch.tv`/`kick.com`, or a pinned CIDR allowlist — required in addition to platform signature verification: **webhook authenticity is signature AND an origin/auth factor, never signature alone** (§4.1.1). | A host compromised inside the platform's own IP/DNS space, or an operator-configured CIDR allowlist set too broad. |
 | Prompt/config injection through event payload | Tenant and community are never read from payload; `_target_app_id` changes only the destination key's `app_id` segment. | None structural; enforced by test. |
+| A cross-tenant workstream hop — via a malicious bundle setting tenant/community/workstream fields on its output, a compromised stage, or a forged envelope written directly into Valkey | Every hop verifies `binding.mac` (HMAC over tenant‖community‖workstream_id‖event_id‖trace_id, keyed by `k_binding[kid]`, held only by the Rust stage services) plus the tenant/community/grant/approval chain, before any other processing; a bundle-supplied identity field is dropped and counted rather than trusted; `routes_to` cross-tenant targets are refused both at approval and independently at runtime (D30, §5.11). | Compromise of the binding key itself, or of two colluding stage replicas — mitigated by `kid` rotation with an overlap window and by the key never leaving the stage services (§12.3). |
 
 ### 11.2 Sandbox layers
 
@@ -2243,7 +2349,7 @@ Two artifacts are **normative**, versioned in the repository, and are the source
 
 | Role | Scope |
 |---|---|
-| `hub_api` | Control-plane tables: registries, approvals, grants, intake sources, `app_versions`, `app_active_versions` |
+| `hub_api` | Control-plane tables: registries, approvals, grants, intake sources, `app_versions`, `app_active_versions`, `workstreams`; `workstream_usage_hourly` limited to `INSERT`/`SELECT` (append-only, D31) — no `UPDATE`/`DELETE` for anyone, including `hub_api` |
 | `waddles_publisher` | `app_versions` only (§6.10) |
 | `svc_ingest` | No database — the row exists and is empty, so "svc-ingest has no DB" is asserted rather than assumed |
 | `svc_process` | Its built-ins' own tables; serves bundle `db` calls through the per-bundle roles, not its own |
@@ -2262,6 +2368,8 @@ Grants are generated from this file; nobody writes a `GRANT` by hand.
 
 `config/valkey/acl-matrix.yaml` — a user × commands/categories × key patterns × channels matrix, from which the mounted `users.acl` (§11.6.1) is rendered by the chart. One entry per service user, plus an explicit statement that **the executors have no Valkey user at all**.
 
+Every stage user's grant on `waddles:usage` (§5.12, §6.2, D31) is `+xadd` only — no `xrange`, `xreadgroup` or `xrevrange` — so a stage can write its own usage deltas but never read anyone's, including its own. Only hub-api's ACL user may read the stream.
+
 **CI test.** A test runs `ACL LIST` against the deployed Valkey and asserts it equals the rendered matrix, plus per-user negative tests that prove the scoping actually bites:
 
 | Negative test | Expected |
@@ -2271,6 +2379,7 @@ Grants are generated from this file; nobody writes a `GRANT` by hand.
 | `svc-process` attempts a key outside `waddles:t:*` | `NOPERM` |
 | Any service attempts `@admin` or `@dangerous` commands (`FLUSHALL`, `CONFIG`, `ACL`) | `NOPERM` |
 | An executor attempts to authenticate to Valkey | Fails — no user exists for it, and its NetworkPolicy denies the route anyway (§12.5) |
+| Any stage attempts `XRANGE`/`XREADGROUP`/`XREVRANGE` on `waddles:usage` | `NOPERM` — stages are `XADD`-only producers; only hub-api's ACL user may read it (D31) |
 
 Both matrices are referenced from Deployment (§12.3, where the chart renders them) and from Testing (§14.5, where the two equality tests run in every service's CI gate set).
 
@@ -2425,6 +2534,10 @@ Existing keys keep their names and defaults. New keys:
 | `security.transport.certManager` | auto-detected | Use cert-manager when present, chart-managed CA otherwise |
 | `security.rbac.postgresMatrix` | `config/postgres/rbac-matrix.yaml` | The normative role × table × privilege matrix the grants are generated from (§11.10.1) |
 | `security.rbac.valkeyMatrix` | `config/valkey/acl-matrix.yaml` | The normative ACL matrix the mounted `users.acl` is rendered from (§11.10.2) |
+| `security.envelopeBinding.keySecretRef` | `waddles-envelope-binding` | Secret holding the `kid`-keyed HMAC keys for `binding.mac` (§5.11, D30); mounted only in the four Rust stage services, never in hub-api, the compiler, or any bundle-facing workload |
+| `security.envelopeBinding.rotationOverlapSeconds` | `86400` | How long a retired `kid` is still accepted for verification after a new one becomes current (§5.11) |
+| `metering.enabled` | `true` | Turns on usage recording and the hub-api aggregator (§5.12, D31); no charging or enforcement is wired to it |
+| `metering.flushIntervalSeconds` | `10` | Per-stage-replica batching interval for `waddles:usage` writes (§5.12) |
 
 **Unchanged:** `pipeline.svcIngest.port` = 8200, `.svcProcess.port` = 8201, `.svcAction.port` = 8202, replicas 2/2/2, and the existing per-service `resources` blocks (requests `500m`/`512Mi`, limits `2000m`/`2Gi`). The `pipeline.pythonBaseImage` value is removed once no template references it.
 
@@ -2576,6 +2689,11 @@ Defaults are the values a service uses when the variable is unset. Every secret-
 | `SPINE_DLQ_MAXLEN` | `10000` |
 | `SPINE_MAX_DELIVERIES` | `5` |
 | `SOCKET_LEASE_TTL_MS` / `SOCKET_LEASE_RENEW_MS` | `30000` / `10000` |
+| `WADDLES_BINDING_KEY_FILE` | `/etc/waddles/envelope-binding/keys.json` — `kid → key` map, from `security.envelopeBinding.keySecretRef` (§5.11, D30) |
+| `WADDLES_BINDING_KID` | *(required)* — the active `kid` this replica mints new `binding.mac` values under |
+| `WADDLES_BINDING_ROTATION_OVERLAP_S` | `86400`, from `security.envelopeBinding.rotationOverlapSeconds` |
+| `METERING_ENABLED` | `true`, from `metering.enabled` (§5.12, D31) |
+| `METERING_FLUSH_INTERVAL_S` | `10`, from `metering.flushIntervalSeconds` |
 
 **Executor and bundles** (svc-process, svc-action)
 
@@ -2689,7 +2807,7 @@ Histograms first — load and latency are the signals most often missing.
 
 ### 13.2 Traces
 
-`trace_context` is added to `StageEnvelope` (§6.1.2) precisely so a chat message's journey is one trace across three services.
+`trace` (`traceparent`/`tracestate`) is added to `StageEnvelope` (§6.1.2, superseding the single-field `trace_context`, D30) precisely so a chat message's journey is one trace across three services. Every span in the table below additionally carries `waddles.tenant_id`, `waddles.community_id`, `waddles.workstream_id` and `waddles.app_id` (ids only, never PII or message bodies) — the trace-continuity test of §14.11 asserts one inbound event yields a single trace spanning ingest → process → the executor's host calls → action → the outbound call.
 
 | Span | Parent | Attributes |
 |---|---|---|
@@ -2739,8 +2857,8 @@ A single committed fixture set is the contract between the Python and Rust imple
 
 | Fixture family | Contents | Asserted by |
 |---|---|---|
-| `envelopes/valid/*.json` | ≥ 20 `StageEnvelope` documents covering: tenant-wide (`community: null`), community-scoped, `target_app_id` set, `trace_context` set and absent, empty `payload`, unicode payload, maximum-length `app_id` | Both: deserialize → re-serialize → byte-identical |
-| `envelopes/invalid/*.json` | ≥ 25 documents, one per rejection reason: missing field, wrong type, unknown top-level key, bad stage, legacy pre-`event` shape, non-object payload, empty `platform` | Both: deserialization **fails**, with the same reason classification |
+| `envelopes/valid/*.json` | ≥ 20 `StageEnvelope` documents covering: tenant-wide (`community: null`), community-scoped, `target_app_id` set, `trace` set and absent, `session_id` set and absent, empty `payload`, unicode payload, maximum-length `app_id` | Both: deserialize → re-serialize → byte-identical |
+| `envelopes/invalid/*.json` | ≥ 25 documents, one per rejection reason: missing field, wrong type, unknown top-level key, bad stage, legacy pre-`event` shape, non-object payload, empty `platform`, `schema_version` absent or `1`, missing `workstream_id`/`event_id`/`binding`, tampered `binding.mac` | Both: deserialization/verification **fails**, with the same reason classification |
 | `keys/*.json` | `{tenant, community, platform, source_id} → expected source-stream key` and `{tenant, community, app_id} → expected action-stream, cfg and state keys`, including the `_tenant` rendering | Both: key builders produce the exact string |
 | `entries/*.json` | Stream-entry fixtures: `{field: "env", value: <envelope JSON>}` for event streams and `{field: "rec", value: <DLQ record>}` for the DLQ | Both: the entry payload is the envelope JSON verbatim under a single field — no second encoding layer, no base64 |
 | `dlq/*.json` | One record per `error.kind` | Both: serialize/deserialize round-trip, field-for-field |
@@ -2894,6 +3012,20 @@ Mandatory negative tests for §4.1.1 — each asserts the attack is **rejected**
 
 Each test asserts the specific rejection reason and increments the specific counter — a generic "it returned non-200" assertion does not satisfy this table.
 
+### 14.11 Workstream identity and tenant-wall tests (D30/D31)
+
+Mandatory negative and continuity tests for §5.11/§5.12 — each is counted so a zero-match run cannot pass silently:
+
+| # | Test | Expected |
+|---|---|---|
+| 1 | An envelope carrying a **valid** `binding.mac` for its own tenant/workstream is read from a stream key belonging to a **different** tenant (constructed directly in Valkey, bypassing ingest) | Rejected: `error.kind = "tenant_boundary"`, DLQ'd, never retried, `waddles_tenant_boundary_violations_total{stage,reason="tenant_mismatch"}` +1 — a valid MAC for the wrong stream is not a valid envelope for that stream (§5.11) |
+| 2 | A process bundle's `transform` return value sets `tenant_id`, `community_id` or `workstream_id` in its output | The stage ignores the bundle-supplied fields entirely and copies the input envelope's identity onto the output unconditionally; the attempt is counted (`waddles_tenant_boundary_violations_total{stage="process",reason="bundle_set_identity"}`), never silently accepted |
+| 3 | A bundle declares `routes_to` naming an app installed in a **different** tenant | Refused at install-time approval (§5.9, §9.7.1) — the version cannot be approved with that entry; a second test constructs the redirect at runtime regardless and confirms the stage also drops it independently, incrementing `waddles_route_denied_total` |
+| 4 | `binding.mac` is tampered (one byte flipped) on an otherwise well-formed envelope | Rejected: `error.kind = "tenant_boundary"`, counted, never retried, regardless of which `kid` is claimed |
+| 5 | A bundle's `db` host call, invoked under tenant A's envelope, attempts to read a row belonging to tenant B in the same bundle-owned table | Zero rows returned — RLS scoped by `SET LOCAL waddles.tenant`/`waddles.community` (§7.4) refuses the row at the database layer, not just at the application layer |
+| 6 | Trace continuity: one inbound platform event is traced end to end | A single `trace_id` spans `intake.request`/`ingest.normalize` → `spine.enqueue`/`spine.take` (process) → `bundle.invoke` and its `host.*` calls → `action.dispatch` → the outbound platform call; every span in the chain carries the same `waddles.workstream_id` |
+| 7 | Usage totals: an e2e run (§14.8) pushes a known number of events through one workstream | `workstream_usage_hourly` rows for that `(tenant_id, community_id, workstream_id)` sum to the same event/invocation/action counts the run pushed, once the aggregator has drained `waddles:usage` |
+
 ---
 
 ## 15. Migration & cut-over
@@ -2924,7 +3056,7 @@ It merges only when every gate in §14 is green **and** the alpha end-to-end run
 | `flask_core.stage_runner.load_entrypoint` and the `importlib` loading path | the executor |
 | `KNOWN_SURFACES`' `ingest` as a *bundle-pluggable* surface | fixed normalizers in svc-ingest (the string stays in the manifest vocabulary only to reject it, rule V15) |
 
-`libs/flask_core` itself **stays** — hub-api and the tests use it. It gains: the envelope strictness tightening, the `trace_context` field, and the removal of the bundle-loading machinery.
+`libs/flask_core` itself **stays** — hub-api and the tests use it. It gains: the envelope strictness tightening, the `schema_version`/`workstream_id`/`event_id`/`session_id`/`trace`/`binding` fields of §5.11 (D30), and the removal of the bundle-loading machinery.
 
 ### 15.3 Behaviour changes to announce
 
@@ -2955,6 +3087,9 @@ Database migrations are additive:
 | `global_settings` seed | `bundles.allow_prebuilt = true` |
 | Per-bundle role bootstrap | the RLS policies on bundle-owned tables |
 | Ingest-stage cleanup | removes `stages.ingest` from the six affected `app_catalog` rows |
+| `workstreams` | §6.11 — one row per `intake_sources` row, backfilled 1:1 at migration time so every existing source has a `workstream_id` before D30 code ships (D30) |
+| `workstream_usage_hourly` | §6.12 — append-only usage table; empty at migration, populated from the first `metering.enabled` hour onward (D31) |
+| Envelope binding key | `security.envelopeBinding.keySecretRef` (§12.3) provisioned as a chart Secret, first `kid` generated at install time, mounted only in the four Rust stage services (D30) |
 
 ### 15.5 Rollback posture
 
@@ -2986,7 +3121,9 @@ M1.5 runs alongside M1 and must finish before M2's compiler work begins — the 
 | `penguin-logging` | Sanitization ported verbatim, OTel logs/metrics/traces wired, health/metrics surface, `transport:` reporting |
 | `penguin-connectors` (5 crates) | Receivers, senders and signature verification per platform, against recorded fixtures |
 | `penguin-licensing` | `build-rust-licensing` + `publish-rust-licensing` jobs, `0.1.0` on crates.io |
-| `flask_core` alignment | Strict envelope deserialization + `trace_context`, golden fixtures shared with Rust |
+| `flask_core` alignment | Strict envelope deserialization + `schema_version`/`workstream_id`/`event_id`/`session_id`/`trace`/`binding`, golden fixtures shared with Rust |
+| **(M1a)** `penguin-spine`: envelope binding | `workstream_id`/`event_id`/`session_id`/`trace`/`binding` types, `binding.mac` compute-and-verify helpers, `kid` lookup and rotation-overlap acceptance — unit-tested against golden fixtures, coverage ≥ 90 % (D30) |
+| **(M1c)** `penguin-bundle-host::host::db` / `::kv` | Tenant-scoped host calls wired to the binding-verified envelope: `SET LOCAL waddles.tenant`/`waddles.community` and KV/config/state key scoping proven to reject a mismatched-tenant invocation (§7.4, §6.2, D30) |
 
 ### M1.5 — Bundle DAL migration (Python only, parallel with M1)
 
@@ -3029,6 +3166,7 @@ Verify `runsc` availability on the alpha MicroK8s node and on the DigitalOcean n
 | Bucket flow | MinIO in alpha, Nest configurable; poller, verification, precompilation, hot-swap proven in a harness |
 | hub-api install hooks | `POST /api/v1/apps/{app_id}/versions`, the version state machine, `bundles.allow_prebuilt`, the distribution API's new fields, the permission-consent screen and approval API (§9.7), `app_install_approvals` and `app_stream_grants` |
 | Idempotency review | Every first-party bundle reviewed and, where needed, made idempotent under at-least-once (§15.3 item 3) |
+| **(M2b)** hub-api: workstreams + usage aggregator | `workstreams` table 1:1-backfilled from `intake_sources` (§6.11), created on every new source going forward; the `waddles:usage` consumer writing `workstream_usage_hourly` (§6.12); the per-community admin usage view/API; `routes_to` cross-tenant refusal wired into version approval (§5.9, D30/D31) |
 
 ### M3 — `svc_action` (parallel)
 
@@ -3038,6 +3176,7 @@ Verify `runsc` availability on the alpha MicroK8s node and on the DigitalOcean n
 | Executor integration | Load/invoke/hot-swap, all §14.6 negative tests green |
 | Built-in senders | Discord, Slack, YouTube, Kick REST; Twitch via the relay |
 | Retry + audit parity | `action_dispatch_log` rows and retry decisions match the Python suite's expectations for every replayed case |
+| Hop verification + usage | `binding.mac` and tenant/community/grant/approval verification (§5.11) run before every dispatch; outbound credential/target resolved only from the verified envelope; usage deltas `XADD`ed to `waddles:usage` (§5.12); §14.11 tests 1, 4, 5 (as applicable), 6 and 7 green for this stage (D30/D31) |
 
 ### M4 — `svc_process` (parallel)
 
@@ -3047,6 +3186,7 @@ Verify `runsc` availability on the alpha MicroK8s node and on the DigitalOcean n
 | Built-ins | Moderation gate, enforcement routing, cross-app `_target_app_id` routing |
 | Bundles | `bot_process`, shoutout, live status, activity feed, reputation accrual running as WASM bundles |
 | DB host capability | Parser allowlist + per-bundle role + RLS, with the negative tests green |
+| Hop verification + usage | `binding.mac` and tenant/community/grant/approval verification (§5.11) run before every bundle invocation; bundle output never overwrites identity fields; cross-tenant `routes_to` rejected at runtime; usage deltas `XADD`ed to `waddles:usage` (§5.12); §14.11 tests 1, 2, 3 (runtime half), 4, 5, 6 and 7 green (D30/D31) |
 
 ### M5 — `svc_ingest` + generic intake (parallel)
 
@@ -3057,6 +3197,7 @@ Verify `runsc` availability on the alpha MicroK8s node and on the DigitalOcean n
 | Outbound relay | Dedicated-connection blocking pop, both client rules tested |
 | Generic intake | `POST /intake/webhook/{tenant}/{source}` and `POST /intake/events` with auth, replay, dedupe, mapping, rate limits, every error code covered |
 | Activation fix | Distribution-API resolution on every path, affected `(community, feature)` pairs listed |
+| Workstream minting | Every envelope carries `workstream_id`, `event_id`, `session_id` (when the platform has one) and `trace`, minted from `intake_sources`/`workstreams` (§5.11) and never from payload; `binding.mac` computed under the active `kid`; usage deltas `XADD`ed to `waddles:usage` (§5.12); §14.11 tests 1 and 4 (mint-side fixtures) and 6 green (D30/D31) |
 
 ### M6 — Streaming retirement, charts, cut-over, docs
 
@@ -3066,6 +3207,7 @@ Verify `runsc` availability on the alpha MicroK8s node and on the DigitalOcean n
 | Charts | All values of §12.3, CA/cert provisioning, Valkey ACL file, required Secrets, `sandbox.*` values, the optional installer DaemonSet, and the gVisor startup assertion wired |
 | Docs | `docs/APP_BUNDLE_AUTHORING.md` v2 (WASM, `bundle.yaml` v2, the WIT world, capabilities, egress, limits, `ingest` removed from the pluggable surfaces), per-service READMEs, migration notes |
 | Cut-over | Python service directories deleted; every §14 gate green; alpha e2e green including latency, hot-swap and bucket-outage scenarios |
+| RBAC/e2e for workstreams | `config/postgres/rbac-matrix.yaml` and `config/valkey/acl-matrix.yaml` carry the D30/D31 rows (§11.10.1, §11.10.2) and their equality gates are green; the full §14.11 suite (all 7 tests) green against the alpha e2e run, including the usage-totals reconciliation (D30/D31) |
 
 ### Follow-on work (not in this spec's milestones)
 
@@ -3153,7 +3295,7 @@ Where the approved design left a detail open, the option most consistent with th
 | A8 | **Twitch EventSub webhook and websocket are mutually exclusive per tenant**, selected by `TWITCH_EVENTSUB_MODE`. | The approved text calls the websocket "a per-tenant alternative to the webhook"; running both would double-deliver every event. |
 | A9 | **Drain cadence is a 100 ms idle sleep with immediate re-run while messages flow.** | The approved text fixes only the 5 s bundle-set refresh and the 3 s/5 s SLA; a value was needed to make the SLA arithmetic checkable. 100 ms leaves ≥ 90 % of the text budget for real work. |
 | A10 | **Flag keys live in the always-on `core` module** (`waddles.core.rust-data-plane`, etc.) at `min_tier: free`. | `{product}.{feature}` plus the `FeatureContract` rule that a flag equals `waddles.{module}.{feature}`; `core` is the existing always-deployed namespace and these are core-product capabilities, not licensed ones. |
-| A11 | **`trace_context` is an optional envelope field**, absent or null deserializing to none, exactly like `target_app_id`. | The approved text adds the field for cross-stage spans; making it optional keeps every existing envelope valid. |
+| A11 | **`trace_context` is an optional envelope field**, absent or null deserializing to none, exactly like `target_app_id`. *(Superseded by D30, review 3: the single string field becomes the optional `trace` object, `{traceparent, tracestate}`, §5.11/§6.1.2 — the field is renamed and gains `tracestate`, but stays optional and absent-safe.)* | The approved text adds the field for cross-stage spans; making it optional keeps every existing envelope valid. |
 | A12 | **Artifact layout** `bundles/{app_id}/{version}/{sha256}.wasm` plus a `{sha256}.json` Ed25519-signed sidecar. | The approved text fixes content addressing, a signed bucket sidecar and a deploy key; the path shape is the smallest scheme that is both content-addressed and human-navigable. |
 | A13 | **Per-bundle Postgres role naming** `bundle_<app_id with dots and dashes replaced by underscores>`. | The approved text fixes "a per-bundle Postgres role limited to manifest `data.tables`" but not the name; a deterministic derivation avoids a lookup table. |
 | A14 | **`db` statements are parsed and table-checked before execution, in addition to the role and RLS.** | The approved text fixes "parameterized SQL executed by the stage under a per-bundle role limited to manifest `data.tables`"; a parser check is how the stage enforces the table list itself rather than relying solely on grants. |
