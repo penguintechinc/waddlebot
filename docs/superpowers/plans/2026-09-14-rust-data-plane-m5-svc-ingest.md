@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 1.97.x, Axum 0.8, Tokio, `penguin-spine`/`penguin-logging`/`penguin-connector-{twitch,discord,slack,youtube,kick}`/`penguin-licensing` (penguin-libs, assumed v0.1.0 — see External Crate Surfaces below), `hmac`+`sha2`+`subtle`, `governor`, `jsonwebtoken` (`aws_lc_rs`), `redis` (direct, for the outbound relay list only). Python: one additive hub-api endpoint (`Quart`, existing `flask_core`/`quart_schema` stack).
 
-**Spec:** `docs/superpowers/specs/2026-09-14-rust-data-plane-design.md` on `origin/docs/rust-data-plane-spec` (commit `680a0a9b`) — read alongside this plan. Section numbers below (`§N.N`) refer to that document. **Three requirements from the user's third spec review are being folded into that document in parallel and are not yet in commit `680a0a9b`:** per-source intake auth modes (PA-INTAKE-AUTH), platform-webhook origin restriction (PA-ORIGIN), and trusted-proxy client-address resolution (PA-PROXY). Until the amended spec lands, **this plan is the authoritative statement of all three** — Tasks 13, 15, 16, 17, 18, 19, 32 and 34 implement them.
+**Spec:** `docs/superpowers/specs/2026-09-14-rust-data-plane-design.md`, merged to `release/v3.0.X` (commit `4db23437`, via PR #325) — read alongside this plan. Section numbers below (`§N.N`) refer to that document. §4.1.1 (D29) now normatively states per-source intake auth modes (PA-INTAKE-AUTH), platform-webhook origin restriction (PA-ORIGIN), and trusted-proxy client-address resolution (PA-PROXY) — Tasks 13, 14, 15, 16, 17, 18, 19, 32 and 34 implement them. §5.11/§5.12 (D30/D31, workstream identity/binding and usage metering) are likewise normative and implemented per PA-WORKSTREAM below — Tasks 12, 17, 18, 19, 20, 23-29 and 30 implement them.
 
 **Sibling plans this one is typed against:** `penguin-spine` (M1a), `penguin-logging` (M1b), `penguin-connectors` + `penguin-licensing` (M1d), all in the `penguin-libs` repo — see External Crate Surfaces below for the exact branch of each and the exact signatures quoted from it. Every `penguin_*` name in this plan is copied from those plans, not invented here.
 
@@ -23,6 +23,8 @@ Copied verbatim (summarized where the spec itself summarizes) from the spec's De
 - **D19/D20** — TLS **and** auth required by default for Valkey; the opt-out (`security.transport.tls`/`.auth`, both default `true`) is a normal, never-rejected chart value, but every startup with either `false` logs a loud WARN, sets `waddles_insecure_transport{component,aspect}=1`, and reports `transport: "insecure"` on `/health`.
 - **D22** — Product/repo name is **Waddles**; images are `ghcr.io/penguintechinc/waddles/<service>`; namespace/in-cluster DNS is `waddles`; Secrets are `waddles-*`. The Helm chart directory/release name stays `k8s/helm/waddlebot` (not renamed — N4). Never write "restream" anywhere — the term is "relay" (matches `outbound_drain.py`'s own vocabulary).
 - **D23/D24** — The spine is Valkey **Streams**, not lists. Ingest `XADD`s each event **once** onto `{scope}:src:{platform}:{source_id}:events`; it never fans out per-bundle copies, never consults a manifest, and never resolves "which bundle wants this." Grant resolution is entirely hub-api's and the process stage's job.
+- **D30 (§5.11)** — Every envelope ingest writes carries `schema_version: 2`, a minted `workstream_id`/`event_id`, an optional `session_id`, a fresh W3C `trace` (never a continuation of an inbound request's own trace), and a `binding` (`{kid, mac}`) computed via `penguin_spine::compute_binding_mac` against a `BindingKeyring` loaded from `WADDLES_BINDING_KEY_FILE` at startup. Ingest **mints**, it never **verifies** — `verify_binding`/`ScopeCheck` are process's/action's job, out of this plan's scope.
+- **D31 (§5.12)** — Every stage batches usage deltas and `XADD`s them onto `waddles:usage` at most every `METERING_FLUSH_INTERVAL_S` (default `10`) via `penguin_spine::UsageBatcher`/`SpineClient::append_usage`. Ingest records `events` (one per successful `publish_event`) keyed by `(tenant_id, community_id, workstream_id, stage="ingest", app_id=None)`; ingest's Valkey ACL user may `XADD` `waddles:usage` and never read it back (§11.10.2).
 - **Rust stack (§17)** — Axum + tokio + `tracing`; `rustls` never native TLS; `jsonwebtoken` with the `aws_lc_rs` backend (never the `rust_crypto` feature — RUSTSEC-2023-0071).
 - **Rust lints (§17)** — `unsafe_code = "deny"`, `missing_docs = "deny"`, `clippy::unwrap_used = "deny"`, `cargo clippy --all-targets -- -D warnings` clean before every commit.
 - **Supply chain (§17)** — `cargo deny check` + `cargo audit` in CI; exact `=x.y.z` pins in `Cargo.toml`, `Cargo.lock` committed; no PRC-origin or sanctioned-entity crates.
@@ -40,6 +42,7 @@ Copied verbatim (summarized where the spec itself summarizes) from the spec's De
 - **SPIFFE (§17, §11.9)** — `svc-ingest` reserves `spiffe://penguintech.io/<env>/svc-ingest` and is SPIFFE-ready; where SPIRE isn't live, short-lived signed OIDC machine JWTs are the fallback (already the distribution-poll mechanism).
 - **Kubernetes (§17, §12.4-12.5)** — default-deny `CiliumNetworkPolicy`, no NodePort/HostPort/hostNetwork in beta/prod, Pod Security Admission `restricted`, Helm only.
 - **Dependency pinning (§17)** — exact versions in `Cargo.toml` (no bare `*`/`^`), `Cargo.lock` committed, SHA-256 digests for base images, full commit SHAs for GitHub Actions.
+- **Named executor inputs (coordinator ruling R53)** — `penguin-spine`/`penguin-logging`/`penguin-connector-*` are pinned `{ git = "https://github.com/penguintechinc/penguin-libs", rev = "<rev>", version = "=0.1.0" }` (Task 1), never registry-only, until crates.io publishing is a later, user-gated step. The revs are not known at plan-writing time: `SPINE_REV`, `LOGGING_REV`, `CONNECTORS_REV` are named executor inputs — full 40-char merge-commit SHAs on penguin-libs' `release/rust-{spine,logging,connectors}/v0.1.x` branches, supplied by the coordinator at dispatch — used verbatim as `${SPINE_REV}`/`${LOGGING_REV}`/`${CONNECTORS_REV}` everywhere a rev is needed (Task 1's `Cargo.toml`, this task's own build/verify steps). `penguin-licensing` (§4.11) is already released to crates.io independently and stays a plain `"=0.1.0"` registry pin.
 - **Branching (§17, §15.1)** — work off `release/v3.0.X` in feature branches inside worktrees; PR for every merge; release→main is user-gated.
 - **Docs (§17)** — every class/function gets a 2-3 line doc comment; no ASCII-art section dividers.
 - **XDP/AF_XDP note** — `backend-rust.md`'s XDP mandate applies to raw packet-processing services (e.g. `svc_streaming`'s media plane). `svc_ingest` makes ordinary outbound TCP/WebSocket/HTTPS connections and serves HTTP — it is not a packet-forwarding data-plane worker, carries no `aya` dependency, and none is added here (matches `core/svc_streaming`'s own precedent: no `aya` in its `Cargo.toml` either).
@@ -48,16 +51,18 @@ Copied verbatim (summarized where the spec itself summarizes) from the spec's De
 
 The spec is authoritative but incomplete in a few places this plan must act on. Each is resolved here, once, the way the spec's own §20 resolves its assumptions — flag it if you disagree, don't leave it open.
 
-- **PA-ENVELOPE** — `StageEnvelope.app_id` (§6.1.2) is a required string matching `^waddles\.[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9_-]*$` (exactly `waddles` plus three segments — plan M1a Task 4's `is_valid_app_id`), but an ingest-source-stream entry has no bundle yet (D23/§5.2/§10.6: "Ingest holds no subscriber list and consults no manifest"). This plan sets `app_id = format!("waddles.ingest.{platform_slug}.{source_slug}")` (a synthetic per-**source** id, never a bundle id) on every envelope ingest writes, `stage = "ingest"`, `target_app_id = None`. Both segments are passed through `crate::spine::app_id_slug` (lowercase, `[^a-z0-9_-]` → `-`, leading non-alphanumeric stripped) so a platform like `custom:github` or a source id with a dot can never produce an `app_id` the crate rejects. This satisfies the regex while preserving the "ingest resolves nothing" invariant — the synthetic id names the source, not a consumer.
+- **PA-ENVELOPE** — `StageEnvelope.app_id` (§6.1.2) is a required string matching `^waddles\.[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9_-]*$` (exactly `waddles` plus three segments — plan M1a Task 4's `is_valid_app_id`), but an ingest-source-stream entry has no bundle yet (D23/§5.2/§10.6: "Ingest holds no subscriber list and consults no manifest"). This plan sets `app_id = format!("waddles.ingest.{platform_slug}.{source_slug}")` (a synthetic per-**source** id, never a bundle id) on every envelope ingest writes, `stage = "ingest"`, `target_app_id = None`. Both segments are passed through `crate::publish::app_id_slug` (lowercase, `[^a-z0-9_-]` → `-`, leading non-alphanumeric stripped) so a platform like `custom:github` or a source id with a dot can never produce an `app_id` the crate rejects. This satisfies the regex while preserving the "ingest resolves nothing" invariant — the synthetic id names the source, not a consumer.
 - **PA-SOURCES** — The task brief's `GET /api/v1/distribution/sources` endpoint is not spelled out in the spec text (only the `intake_sources` DB table shape, §15.4, and the "secret fetched from hub-api and cached" behavior, §10.1, are). This plan adds it to hub-api (Task 13) modeled directly on the existing `/api/v1/distribution/bundles` blueprint (`hub_api/blueprints/v1/distribution.py`): tenant from JWT, `distribution:read` scope, ETag-cacheable, one row per `intake_sources` record. Each row carries **both** `secretRef` (the DB column, safe to log) **and** `secret` (hub-api's resolution of that reference to a plaintext value, sanitized by `penguin-logging`'s `SENSITIVE_KEYS` matching if it ever nears a log line) — satisfying the task brief's "secrets by reference" (the field exists) and the spec's "secret fetched from hub-api" (the value travels over the already-trusted, SSRF-exempt `HUB_API_URL` connection, §8.5). Each row **additionally** carries the `auth` object of PA-INTAKE-AUTH below.
-- **PA-INTAKE-AUTH (spec amendment in flight)** — The user's third spec review adds a second, independent admission gate to `POST /intake/webhook/{tenant}/{source}`: the per-source HMAC is **necessary but not sufficient**. Every generic source must additionally be configured with at least one of a source-IP CIDR allowlist, a bearer token, or HTTP basic credentials; configured modes combine with **AND**. `docs/superpowers/specs/2026-09-14-rust-data-plane-design.md` is being amended in parallel on `origin/docs/rust-data-plane-spec`; until that lands, this plan's Tasks 13/15/16/19 are the authoritative statement of the requirement. The DB/API shape — **must match plan M2b's `intake_sources` migration**:
+- **PA-INTAKE-AUTH (now folded into the spec's §4.1.1/D29)** — `POST /intake/webhook/{tenant}/{source}` carries a second, independent admission gate: the per-source HMAC is **necessary but not sufficient**. Every generic source must additionally be configured with at least one of a source-IP CIDR allowlist, a bearer token, or HTTP basic credentials; configured modes combine with **AND**. This plan's Tasks 13/14/16/19 implement the requirement (corrected from an earlier "13/15/16/19" — Task 15 is `origin.rs`, PA-ORIGIN/PA-PROXY only; it contributes nothing to this gate). The DB/API shape — **must match plan M2b's `intake_sources` migration**:
   ```json
-  "auth": {"modes": ["cidr", "bearer", "basic"], "cidrs": ["203.0.113.0/24"], "secret_ref": "ACME_GITHUB_INTAKE_BEARER"}
+  "auth": {"modes": ["cidr", "bearer", "basic"], "cidrs": ["203.0.113.0/24"], "secretRef": "ACME_GITHUB_INTAKE_BEARER", "secret": "<hub-api-resolved plaintext, bearer/basic modes only>"}
   ```
-  `modes` is a non-empty subset of `{"cidr", "bearer", "basic"}`; `cidrs` is required and non-empty when `"cidr"` ∈ `modes`; `secret_ref` names the env var holding the bearer token (mode `bearer`) or the `user:password` pair (mode `basic`). hub-api **refuses to persist** a source whose `auth.modes` is empty (Task 13); svc-ingest additionally fails closed at request time — a source that somehow reaches the registry with no mode is a `401 no_auth_mode`, never an implicit allow (Task 16).
-- **PA-ORIGIN (spec amendment in flight)** — The same review adds origin restriction to the two platform webhooks (`POST /eventsub/twitch/webhook`, `POST /webhook/kick`): signature verification **and** a forward-confirmed reverse-DNS (FCrDNS) check on the client address against per-platform domain suffixes, with an optional per-platform CIDR allowlist as a static alternative. Defaults: `twitch.tv` and `kick.com`. FCrDNS results are cached for 10 minutes. A failure is `403` + `ingest_webhook_rejected_total{platform,reason="origin"}` + a sanitized WARN. Implemented in Task 15, consumed by Tasks 17/18.
-- **PA-PROXY (spec amendment in flight)** — Both of the above need the *real* client address. `WADDLES_INGEST_TRUSTED_PROXIES` is a comma-separated CIDR list, **default empty**. Empty ⇒ the TCP peer address is the client address and `X-Forwarded-For` is ignored entirely. Non-empty ⇒ `X-Forwarded-For` is honoured **only** when the direct peer is inside a trusted CIDR, and the client address is then the **rightmost untrusted hop** in the header (walking right-to-left, skipping trusted entries). Implemented in Task 15.
-- **PA-LEASE** — `penguin-spine` **does not ship a `SocketLease`**: plan M1a's task list (crate scaffold, `Scope`/`Stage`, envelopes, DLQ, `SpineMetrics`, fixtures, `SpineConfig`, `probe_valkey`, TLS container, ACL matrix, `SpineClient`, group lifecycle, `GroupReader`, bench, CI) contains no lease task, and no lease type appears in its README usage block. §10.2's "ported... to `penguin-spine`" is therefore not satisfied by M1a as planned. Rather than block M5 on a crate change, this plan ports `core/svc_ingest/socket_lease.py` into `core/svc_ingest/src/lease.rs` (Task 22) — key `waddles:socket-owner:{provider}:{community}`, exactly the Python key, not the spec's `waddles:lease:*` sketch, so a mixed-version rollout cannot end up with two owners. Flag it if M1a adds a lease type after all: Task 22's local `Lease` trait is the only call site, so swapping the production impl is a one-file change.
+  `modes` is a non-empty subset of `{"cidr", "bearer", "basic"}`; `cidrs` is required and non-empty when `"cidr"` ∈ `modes`; `secretRef` names the reference hub-api resolves (mirroring the top-level `secretRef`/`secret` pair, PA-SOURCES) to the bearer token (mode `bearer`) or the `user:password` pair (mode `basic`); `secret` is `null` when neither mode is configured. hub-api **refuses to persist** a source whose `auth.modes` is empty (the spec's `422 auth_factor_required`, out of this plan's scope — M2b's create/update endpoint, not `GET /distribution/sources`); svc-ingest additionally fails closed at request time — a source that somehow reaches the registry with no mode is `401 auth_not_configured` (Task 14 defines `SourceAuth`, Task 16 defines the mode-check primitives, Task 19 wires them in). **Reason-string correction against the spec's own endpoint table (§10.1) and §14.10's negative-test table**, which this plan's earlier draft of Task 3 got wrong: a configured-but-unsatisfied mode is `401 second_factor_failed` (one reason, not three — `IpNotAllowed`/`BearerRejected`/`BasicRejected` are consolidated into `IntakeError::SecondFactorFailed`, Task 3), never `no_auth_mode`/`ip_not_allowed`/`bearer_rejected`/`basic_rejected`. The OTel metric label on `ingest_webhook_rejected_total`, per §4.1.1's literal text, uses the coarser bucket `reason="auth"` for both `SecondFactorFailed` and `AuthNotConfigured` — distinct from the HTTP JSON body's finer-grained `error` field.
+- **PA-ORIGIN (now folded into the spec's §4.1.1/D29)** — The two platform webhooks (`POST /eventsub/twitch/webhook`, `POST /webhook/kick`) require signature verification **and** a forward-confirmed reverse-DNS (FCrDNS) check on the client address against per-platform domain suffixes, with an optional per-platform CIDR allowlist as a static alternative. Defaults: `twitch.tv` and `kick.com`. FCrDNS results are cached for 10 minutes. A failure is `403 origin_not_trusted` (HTTP JSON `error`) + `ingest_webhook_rejected_total{platform,reason="origin"}` (metric bucket, §4.1.1's literal text) + a sanitized WARN. Implemented in Task 15, consumed by Tasks 17/18.
+- **PA-PROXY (now folded into the spec's §4.1.1/D29)** — Both of the above need the *real* client address. `WADDLES_INGEST_TRUSTED_PROXIES` is a comma-separated CIDR list, **default empty**. Empty ⇒ the TCP peer address is the client address and `X-Forwarded-For` is ignored entirely. Non-empty ⇒ `X-Forwarded-For` is honoured **only** when the direct peer is inside a trusted CIDR, and the client address is then the **rightmost untrusted hop** in the header (walking right-to-left, skipping trusted entries). Implemented in Task 15, additionally consumed by Task 19 for its `cidr` auth mode (the same spoofing hole applies to a source-IP allowlist as to origin verification).
+- **PA-WORKSTREAM (spec gap this plan resolves)** — §5.11/§6.11 says a `workstreams` row is "created 1:1 with each row in `intake_sources`" but does not say how the six *fixed*-platform receivers (Tasks 23-29, which are not `intake_sources` rows — they are config/env-driven, not a hub-api table) get one. For a **generic** source (Tasks 19/20), `workstream_id` comes straight off the polled registry row (Task 13/14 add a `workstreamId` field, mirroring my task brief's own citation of the M2b DTO shape). For a **fixed**-platform source, this plan mints a **stable, deterministic, config-derived** `workstream_id` locally, with no hub-api round trip: `workstream_id = Uuid::new_v5(&WORKSTREAM_NAMESPACE, source_id.as_bytes())` (UUID v5, SHA-1 name-based) under a fixed namespace constant (Task 12), where `source_id` is the same string already used to build the Valkey stream key (e.g. `tw-waddlebot`, `dg-guild123-general`). Same `source_id` in ⇒ same `workstream_id` out, always, satisfying "one workstream per configured ingest source" without inventing a second hub-api endpoint. **Flagged, not blocking:** if hub-api's `workstreams` table independently assigns a server-generated id for a fixed-platform source, a follow-up task must reconcile the two (either hub-api adopts ingest's deterministic id at first sight, or ingest starts polling fixed-source workstream ids the same way it polls generic ones) — out of M5's scope to resolve here.
+- **PA-FLAGS (crate gap, coordinator ruling R60)** — §4.11 says `penguin-licensing` is "already behaviourally complete" (`LicenseClient`, two-gate flag+entitlement, 5-minute cache, exponential backoff, 72 h offline grace, hardcoded domain bypass), but — unlike `penguin-spine`/`penguin-logging`/`penguin-connector-*` — no sibling plan quotes its exact Rust method names (M1a/M1b/M1d don't build it; §4.11's own work items are CI/publish jobs only). Per R60 this is a crate gap, stated once in the "Crate gaps" table above (marked "must match plan M1d") rather than re-derived here: `LicenseClient::from_env()` / `is_enabled(flag_key)`, consumed only in Task 30 to resolve `waddles.core.rust-data-plane` and `waddles.core.generic-intake` once at startup and on a periodic re-check tick (continuous re-evaluation, `critical-rules.md` Feature Flags) — never a locally re-implemented flag client.
+- **PA-LEASE** — `penguin-spine` **does not yet ship a `SocketLease`**: plan M1a's task list (crate scaffold, `Scope`/`Stage`, envelopes, DLQ, `SpineMetrics`, fixtures, `SpineConfig`, `probe_valkey`, TLS container, ACL matrix, `SpineClient`, group lifecycle, `GroupReader`, bench, CI, the D30 binding module, D31 usage) contains no lease task, and no lease type appears in its README usage block. §10.2's "ported... to `penguin-spine`" is therefore not yet satisfied by M1a as planned. Per **coordinator ruling R60**, this is a crate gap, not something to substitute locally: the "Crate gaps" table above states the exact required `SocketLease` signature (key `waddles:lease:{provider}:{community}`, matching §10.2's own stated scheme), marked "must match plan M1a," and Task 22 codes directly against `penguin_spine::SocketLease` through its local `Lease` trait (a thin object-safety/testability wrapper, not a re-implementation) — no local lease mechanic lives inside `core/svc_ingest`.
 - **PA-RECEIVER** — `penguin-connector-core` defines `IngestSource` (`async fn run(self: Box<Self>, tx: mpsc::Sender<Self::RawEvent>, shutdown: CancellationToken)`), so each platform crate pushes typed raw events onto a channel rather than exposing a pull-style receiver. This plan keeps a thin local trait, `RawReceiver` (Task 22), and each supervisor task (23-28) spawns the connector's `IngestSource::run` and adapts the `mpsc::Receiver<T>` to it — so every supervisor's lease/normalize/publish logic is exercised against a scripted fake, not a live socket, and the supervisors are unaffected if a connector's internals change.
 - **PA-4.1-CONTROL** — Spec §4.1's Interfaces table lists a "Control" row polling `GET /api/v1/distribution/bundles?stage=process`. This directly contradicts §10.6 ("Ingest holds no subscriber list and consults no manifest") and D23/D24's stream model, and reads as leftover text from the pre-Streams design the spec's own Activation-resolution-fix paragraph describes. This plan follows §10.6 (the newer, more specific, and internally consistent section): **`svc_ingest` never polls `/distribution/bundles`.** It only polls the new `/distribution/sources` endpoint (Task 14). The §15.3 "Activation fix" bullet is satisfied structurally (ingest does no routing at all now, eliminating the whole bug class) and documented in Task 35's migration note, not implemented as ingest code.
 
@@ -71,8 +76,10 @@ The spec is authoritative but incomplete in a few places this plan must act on. 
 | `penguin-logging` | M1b — `docs/superpowers/plans/2026-09-14-penguin-logging.md` | `origin/docs/plan-penguin-logging` |
 | `penguin-connector-*` | M1d — `docs/superpowers/plans/2026-09-14-penguin-connectors.md` | `origin/docs/plan-penguin-connectors` |
 
+**This block is a verbatim distillation of `docs/superpowers/plans/2026-09-14-penguin-spine.md` at `origin/docs/plan-penguin-spine` (commit `5f6db08`)** — re-read in full while fixing this plan's earlier draft, which had quoted a stale, pre-D30 shape (no `workstream_id`/`event_id`/`trace`/`binding` on `StageEnvelope`, an `append` that took a `maxlen_approx` parameter the real crate doesn't have, and a `SpineMetrics` missing `insecure_transport`/`tenant_boundary_violation`). Every call site in Tasks 12/17/18/19/20/22/23-29/30 is written against *this* corrected block.
+
 ```rust
-// penguin-spine = "=0.1.0"  (M1a Tasks 2-6, 9-10, 13)
+// penguin-spine = git+rev "${SPINE_REV}", version "=0.1.0"  (M1a Tasks 2-6, 9-10, 13, 19, 20)
 pub const TENANT_WIDE_SEGMENT: &str = "_tenant";
 pub struct Scope { pub tenant: String, pub community: Option<String> }
 impl Scope {
@@ -82,6 +89,7 @@ impl Scope {
     pub fn config_key(&self, app_id: &str) -> String;
     pub fn state_key(&self, app_id: &str) -> String;
 }
+pub fn parse_scope_from_key(key: &str) -> Option<(String, Option<String>)>;
 pub enum Stage { Process, Action }                       // ingest is not a Stage variant; StageEnvelope.stage is a String
 pub struct Source { pub platform: String, pub account_id: String, pub channel_id: Option<String> }
 pub struct PlatformEvent {
@@ -92,7 +100,14 @@ pub struct PlatformEvent {
     pub occurred_at: String,                                    // RFC 3339 UTC, millisecond precision, "Z"
     pub source: Option<Source>,
 }
+/// D30 (spec Sec5.11/6.1.2) -- supersedes the pre-D30 single-field `trace_context`.
+pub struct Trace { pub traceparent: String, pub tracestate: Option<String> }
+/// D30 -- `{kid, mac}`, required on every envelope; no unsigned shape.
+pub struct Binding { pub kid: String, pub mac: String }
+pub const ENVELOPE_SCHEMA_VERSION: u32 = 2;
+pub fn trace_id_from_traceparent(s: &str) -> Option<&str>;      // the 32-hex segment binding.mac is computed over
 pub struct StageEnvelope {
+    pub schema_version: u32,                                    // must equal ENVELOPE_SCHEMA_VERSION (2) -- no dual-read (D3, D30)
     pub tenant: String,
     pub community: Option<String>,
     pub app_id: String,                                         // ^waddles\.<seg>\.<seg>\.<seg>$ — see PA-ENVELOPE
@@ -100,17 +115,24 @@ pub struct StageEnvelope {
     pub event: PlatformEvent,
     pub ts: String,
     pub target_app_id: Option<String>,
-    pub trace_context: Option<String>,                          // W3C traceparent
+    pub workstream_id: String,                                  // UUID; minted by ingest, never from payload (D30) — see PA-WORKSTREAM
+    pub event_id: String,                                       // UUID v4; minted once per inbound event by ingest (D30)
+    pub session_id: Option<String>,                              // EventSub/gateway/broadcast session, when the platform has one (D30)
+    pub trace: Option<Trace>,                                    // a FRESH trace minted by ingest, never a continuation (D30)
+    pub binding: Binding,                                        // required; computed via compute_binding_mac (D30)
 }
 pub struct EnvelopeError(String);                               // thiserror, Display = the message
 pub enum SpineError { /* opaque to ingest; Display/source() only */ }
-pub trait SpineMetrics: Send + Sync {                           // object-safe, all methods defaulted no-op
+pub trait SpineMetrics: Send + Sync {                           // object-safe, every method defaulted no-op
     fn stream_event_written(&self, platform: &str, source_id: &str) {}
     fn stream_trimmed(&self, stream: &str) {}
     fn stream_claimed(&self, app_id: &str) {}
     fn consumer_skipped(&self, app_id: &str, reason: &str) {}
     fn dlq_written(&self, stage: &str, reason: &str) {}
-    // ...group lag/pending + insecure-transport reporting: not called by ingest
+    fn group_lag(&self, app_id: &str, stream: &str, lag: Option<u64>) {}
+    fn group_pending(&self, app_id: &str, stream: &str, pending: u64) {}
+    fn insecure_transport(&self, component: &str, aspect: &str, insecure: bool) {}   // SpineClient::connect calls this directly
+    fn tenant_boundary_violation(&self, stage: &str, reason: &str) {}
 }
 pub struct NoopMetrics;
 pub struct SpineConfig {                                        // SpineConfig::from_env() / .validate()
@@ -130,12 +152,47 @@ pub struct Delivered { pub stream: String, pub entry_id: String, pub env: StageE
 pub struct SpineClient { /* Clone */ }
 impl SpineClient {
     pub async fn connect(cfg: SpineConfig, metrics: std::sync::Arc<dyn SpineMetrics>) -> Result<Self, SpineError>;
-    pub async fn append(&self, stream: &str, env: &StageEnvelope) -> Result<String, SpineError>; // MAXLEN ~ from cfg.stream_maxlen
+    // NOTE: no `maxlen_approx` parameter -- MAXLEN comes from `cfg.stream_maxlen`, set once at connect().
+    pub async fn append(&self, stream: &str, env: &StageEnvelope) -> Result<String, SpineError>;
+    pub async fn append_usage(&self, delta: &UsageDelta) -> Result<String, SpineError>; // XADD onto "waddles:usage" (D31)
     // ensure_group / destroy_group / ack / dead_letter / claim_stale / group_stats: process+action only, never ingest
+}
+
+// The D30 binding module (M1a Task 19) -- ingest MINTS, never verifies.
+pub struct BindingKeyEntry { pub key: Vec<u8>, pub retired_at: Option<chrono::DateTime<chrono::Utc>> }
+pub struct BindingKeyring { /* opaque */ }
+impl BindingKeyring {
+    pub fn from_entries(active_kid: impl Into<String>, entries: std::collections::HashMap<String, BindingKeyEntry>, rotation_overlap: chrono::Duration) -> Result<Self, BoundaryError>;
+    pub fn load(path: &std::path::Path, active_kid: impl Into<String>, rotation_overlap: chrono::Duration) -> Result<Self, BoundaryError>; // reads WADDLES_BINDING_KEY_FILE's {"<kid>": {"key_hex", "retired_at"}} JSON
+    pub fn signing_kid_and_key(&self) -> (&str, &[u8]);         // the (kid, key) every new binding.mac is minted under
+    pub fn verify_key_for(&self, kid: &str, now: chrono::DateTime<chrono::Utc>) -> Option<&[u8]>; // not used by ingest (minting only)
+}
+pub struct BindingInput<'a> { pub tenant: &'a str, pub community: Option<&'a str>, pub workstream_id: &'a str, pub event_id: &'a str, pub trace_id: &'a str }
+pub fn compute_binding_mac(keyring: &BindingKeyring, input: &BindingInput<'_>) -> Binding;
+pub enum BoundaryError { MacMismatch, UnknownOrExpiredKid { kid: String }, TenantMismatch, CommunityMismatch, MissingTrace } // ingest only sees this from BindingKeyring::load/from_entries at startup
+
+// D31 workstream usage metering (M1a Task 20).
+pub const USAGE_STREAM_KEY: &str = "waddles:usage";
+pub enum HostCallKind { Http, Kv, Db, Relay, Flags, Log }        // ingest never issues host calls; included for completeness
+pub struct HostCallCounts { pub http: u64, pub kv: u64, pub db: u64, pub relay: u64, pub flags: u64, pub log: u64 }
+pub struct UsageDelta {
+    pub tenant_id: String, pub community_id: Option<String>, pub workstream_id: String, pub stage: String, pub app_id: Option<String>,
+    pub events: u64, pub invocations: u64, pub host_calls: HostCallCounts, pub fuel_ms: u64,
+    pub actions_delivered: u64, pub outbound_bytes: u64, pub media_minutes: Option<f64>,
+}
+impl UsageDelta {
+    pub fn zero(tenant_id: impl Into<String>, community_id: Option<String>, workstream_id: impl Into<String>, stage: impl Into<String>, app_id: Option<String>) -> Self;
+}
+pub struct UsageBatcher { /* opaque, Mutex-guarded */ }
+impl UsageBatcher {
+    pub fn new() -> Self;
+    pub fn record(&self, delta: UsageDelta);                    // merges into the in-process accumulator, keyed by (tenant,community,workstream,stage,app)
+    pub fn flush(&self) -> Vec<UsageDelta>;                      // drains everything accumulated since the last flush
+    pub fn is_empty(&self) -> bool;
 }
 ```
 
-**What ingest uses and what it must not.** Ingest calls `Scope`, `PlatformEvent`/`Source`/`StageEnvelope`, `SpineConfig`, `probe_valkey`, `SpineClient::{connect, append}`, and implements `SpineMetrics`. It never calls `ensure_group`, `ack`, `dead_letter`, `claim_stale`, or constructs a `GroupReader`/`Grant`/`Delivered` — reading a stage stream is outside its Valkey ACL (§11.10.2) and Task 34 proves it with a `NOPERM` test.
+**What ingest uses and what it must not.** Ingest calls `Scope`, `PlatformEvent`/`Source`/`StageEnvelope`/`Trace`/`Binding`, `SpineConfig`, `probe_valkey`, `SpineClient::{connect, append, append_usage}`, `BindingKeyring::load`, `compute_binding_mac`, `UsageDelta`/`UsageBatcher`, and implements `SpineMetrics`. It never calls `ensure_group`, `ack`, `dead_letter`, `claim_stale`, `verify_binding`, `ScopeCheck`, or constructs a `GroupReader`/`Grant`/`Delivered` — reading a stage stream is outside its Valkey ACL (§11.10.2), verifying a binding is process's/action's job (D30, ingest mints only), and Task 34 proves the ACL boundary with a `NOPERM` test.
 
 ```rust
 // penguin-logging = "=0.1.0"  (M1b Tasks 2-4, 11-17)
@@ -275,6 +332,17 @@ pub fn handle_kick_webhook(body: &[u8], signature: &str, secret: &Secret) -> Res
 
 **Two `Secret` types, deliberately.** `crate::config::Secret` (Task 2) wraps a value this service read from its own environment; `penguin_connector_core::Secret` (`Secret::resolve("ENV_NAME")`) is what every connector API takes. Where a handler holds the former and a connector wants the latter, resolve at the edge — never pass a raw `&str` token across the boundary and never store a connector `Secret` in `AppState` (its `resolve` reads the environment at call time by design).
 
+### Crate gaps (must be added to plan M1a/M1d)
+
+**Coordinator ruling R60**: this service depends on `penguin-spine`/`penguin-logging`/`penguin-connectors` directly (R53 git-rev pins) and never re-implements any of their mechanics locally — no local `spine`-named module tree duplicating envelope/keys/client/binding/usage mechanics, no interim placeholder copy meant to be swapped later. Where the spec requires something one of these crates does not yet expose, this plan states the exact required signature here, marks the owning sibling plan, and every task below codes directly against that signature — never against a substitute type defined inside `core/svc_ingest`. This plan's own publisher module is named `publish.rs`, never `spine.rs`, for exactly this reason (Task 12). Self-review re-verifies this with the exact search terms the coordinator specified.
+
+| Gap | Required by | Exact signature this plan codes against | Owning plan |
+|---|---|---|---|
+| `penguin_spine::SocketLease` — the single-owner socket/poll lease (§10.2) | Task 22 (`LeasedSupervisor`), Tasks 23-29 (every receiver supervisor) | `pub struct SocketLease { .. }`  `impl SocketLease { pub fn new(client: SpineClient, provider: impl Into<String>, community: impl Into<String>, ttl_ms: u64, renew_ms: u64) -> Self; pub async fn try_claim(&self) -> Result<bool, SpineError>; pub async fn renew(&self) -> Result<bool, SpineError>; pub async fn release(&self) -> Result<(), SpineError>; }` — key `waddles:lease:{provider}:{community}` (§10.2's own stated scheme, **not** the legacy Python `socket_lease.py`'s `waddles:socket-owner:*` — D3's cut-over is all-at-once with the Python service deleted at the same commit, §15.2, so there is no mixed-version window a differing key would need to protect against) | **must match plan M1a** |
+| `penguin_licensing::LicenseClient` — two-gate flag/entitlement resolution (§4.11 describes it as "already behaviourally complete" but no sibling plan quotes its Rust method names; M1a/M1b/M1d don't build it, §4.11's own M1 work items are CI/publish jobs only) | Task 30 (resolves `waddles.core.rust-data-plane`/`waddles.core.generic-intake` at startup) | `pub struct LicenseClient { .. }`  `impl LicenseClient { pub fn from_env() -> Result<Self, LicenseError>; pub async fn is_enabled(&self, flag_key: &str) -> bool; }` — never fails (5-minute cache + 72h offline grace + domain bypass are internal to the crate per §4.11's description) | **must match plan M1d** |
+
+Both rows are flagged, not blocking: Task 22 and Task 30 write real, complete code against the signatures above today; if `penguin-spine`/`penguin-licensing` ship a different shape, the fix is confined to each gap's own call sites (already isolated behind the local `Lease`/flag-check wrapper, PA-LEASE), never a reason to keep a local substitute implementation around "to be safe."
+
 ## File Structure
 
 ```
@@ -286,7 +354,7 @@ core/svc_ingest/
     config.rs                  CliConfig + Secret + Config::load (Task 2)
     error.rs                   IngestError / NormalizeError / IntakeError (Task 3)
     telemetry.rs               penguin_logging wrapper + IngestMetrics facade + IngestSpineMetrics (Task 4)
-    spine.rs                   EventAppender + publish_event() + app_id_slug() (Task 12)
+    publish.rs                 EventAppender + publish_event() + app_id_slug() (Task 12)
     sources.rs                 source registry poller + SourceRecord/SourceAuth (Task 14)
     lease.rs                   SocketLease port of socket_lease.py (Task 22)
     supervisor.rs              LeasedSupervisor + RawReceiver + restart_with_backoff (Task 22)
@@ -333,7 +401,7 @@ Makefile                                         add test-hub-api (Task 13)
 - Create: `core/svc_ingest/src/lib.rs`
 
 **Interfaces:**
-- Produces: crate `svc-ingest` (bin) / `svc_ingest` (lib) builds with `cargo build --all-targets`; `svc_ingest::SERVICE_NAME: &str = "svc-ingest"`; empty module stubs `pub mod config; pub mod error; pub mod telemetry; pub mod spine; pub mod sources; pub mod supervisor; pub mod relay; pub mod startup_check; pub mod normalize; pub mod receivers; pub mod http;` that later tasks fill in.
+- Produces: crate `svc-ingest` (bin) / `svc_ingest` (lib) builds with `cargo build --all-targets`; `svc_ingest::SERVICE_NAME: &str = "svc-ingest"`; empty module stubs `pub mod config; pub mod error; pub mod telemetry; pub mod publish; pub mod sources; pub mod supervisor; pub mod relay; pub mod startup_check; pub mod normalize; pub mod receivers; pub mod http;` that later tasks fill in.
 
 - [ ] **Step 1: Write `Cargo.toml`**
 
@@ -401,16 +469,22 @@ hickory-resolver = { version = "=0.25.2", default-features = false, features = [
 # dedupe key is a plain string, both out of that surface on purpose.
 redis = { version = "=0.32.7", default-features = false, features = ["tokio-comp", "connection-manager"] }
 
-# penguin-libs crates (M1) -- pinned exact per Dependency Pinning; bump these
-# lines only if M1a/M1b/M1d ship a different version (see Plan Assumptions).
-penguin-spine = "=0.1.0"
-penguin-logging = "=0.1.0"
-penguin-connector-core = "=0.1.0"
-penguin-connector-twitch = "=0.1.0"
-penguin-connector-discord = "=0.1.0"
-penguin-connector-slack = "=0.1.0"
-penguin-connector-youtube = "=0.1.0"
-penguin-connector-kick = "=0.1.0"
+# penguin-libs crates (M1) -- git+rev per coordinator ruling R53: crates.io
+# publishing is a later, user-gated step, so these are NEVER registry-only
+# pins. SPINE_REV/LOGGING_REV/CONNECTORS_REV are named executor inputs (see
+# Global Constraints) -- full 40-char merge-commit SHAs on penguin-libs'
+# release/rust-{spine,logging,connectors}/v0.1.x branches, supplied by the
+# coordinator at dispatch. `penguin-licensing` (Sec4.11) is already released
+# to crates.io independently of M1a/M1b/M1d -- it is the one crate in this
+# block that IS a plain registry pin.
+penguin-spine = { git = "https://github.com/penguintechinc/penguin-libs", rev = "${SPINE_REV}", version = "=0.1.0" }
+penguin-logging = { git = "https://github.com/penguintechinc/penguin-libs", rev = "${LOGGING_REV}", version = "=0.1.0" }
+penguin-connector-core = { git = "https://github.com/penguintechinc/penguin-libs", rev = "${CONNECTORS_REV}", version = "=0.1.0" }
+penguin-connector-twitch = { git = "https://github.com/penguintechinc/penguin-libs", rev = "${CONNECTORS_REV}", version = "=0.1.0" }
+penguin-connector-discord = { git = "https://github.com/penguintechinc/penguin-libs", rev = "${CONNECTORS_REV}", version = "=0.1.0" }
+penguin-connector-slack = { git = "https://github.com/penguintechinc/penguin-libs", rev = "${CONNECTORS_REV}", version = "=0.1.0" }
+penguin-connector-youtube = { git = "https://github.com/penguintechinc/penguin-libs", rev = "${CONNECTORS_REV}", version = "=0.1.0" }
+penguin-connector-kick = { git = "https://github.com/penguintechinc/penguin-libs", rev = "${CONNECTORS_REV}", version = "=0.1.0" }
 penguin-licensing = "=0.1.0"
 
 [dev-dependencies]
@@ -420,8 +494,11 @@ wiremock = "=0.6.5"
 tokio = { version = "=1.53.1", features = ["test-util"] }
 # The in-memory OTel sink every unit test uses instead of the real
 # `penguin_logging::init` (which may be called at most once per process --
-# M1b Task 11). Also drives the Task 34 telemetry gate.
-penguin-logging = { version = "=0.1.0", features = ["testing"] }
+# M1b Task 11). Also drives the Task 34 telemetry gate. Same git+rev pin
+# as the main-dependency entry above (Cargo merges the two into one
+# resolved crate; a mismatched rev between the two entries is a
+# `cargo build` error, which is the intended guardrail against drift).
+penguin-logging = { git = "https://github.com/penguintechinc/penguin-libs", rev = "${LOGGING_REV}", version = "=0.1.0", features = ["testing"] }
 
 [profile.release]
 opt-level = 3
@@ -492,7 +569,10 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# penguin-spine/penguin-logging/penguin-connector-* are git+rev pins
+# (coordinator ruling R53) until crates.io publishing is a later, user-
+# gated step -- this is the one sanctioned non-registry source.
+allow-git = ["https://github.com/penguintechinc/penguin-libs"]
 
 [sources.allow-org]
 github = []
@@ -591,13 +671,14 @@ clean:
 
 pub mod config;
 pub mod error;
+pub mod flags;
 pub mod http;
 pub mod lease;
 pub mod normalize;
 pub mod receivers;
 pub mod relay;
 pub mod sources;
-pub mod spine;
+pub mod publish;
 pub mod startup_check;
 pub mod supervisor;
 pub mod telemetry;
@@ -629,7 +710,7 @@ async fn main() -> anyhow::Result<()> {
 - [ ] **Step 7: Verify the crate builds**
 
 Run: `make -C core/svc_ingest build`
-Expected: `Compiling svc-ingest v0.1.0 (/work)` then `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in ...` with no errors, and a `Cargo.lock` now present in `core/svc_ingest/`. (The `penguin-*` crates fail to resolve until M1a/M1b/M1d publish them — if that happens, note it and stop; do not vendor a local copy or point at a git rev to work around it.)
+Expected: `Compiling svc-ingest v0.1.0 (/work)` then `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in ...` with no errors, and a `Cargo.lock` now present in `core/svc_ingest/`. Before running, substitute the coordinator-supplied `SPINE_REV`/`LOGGING_REV`/`CONNECTORS_REV` values (Global Constraints) for the `${SPINE_REV}`/`${LOGGING_REV}`/`${CONNECTORS_REV}` placeholders in `Cargo.toml` — these are executor inputs, not something this task resolves itself. If a rev is not yet supplied, or the referenced commit does not build `penguin-spine`/`penguin-logging`/`penguin-connector-*` at version `0.1.0`, note it and stop; do not vendor a local copy, point at a different rev without confirming with the coordinator, or fall back to a registry-only pin.
 
 - [ ] **Step 8: Commit**
 
@@ -638,7 +719,7 @@ git add core/svc_ingest/Cargo.toml core/svc_ingest/Cargo.lock core/svc_ingest/ru
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): scaffold Rust crate (Cargo.toml, toolchain pin, deny.toml, containerized Makefile, lib/main skeleton)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -1024,7 +1105,7 @@ git add core/svc_ingest/src/config.rs core/svc_ingest/Cargo.toml core/svc_ingest
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): env-driven config module -- Secret redaction, §5.7 blocking-client rule, trusted-proxy/origin CIDR+suffix parsing
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -1043,7 +1124,7 @@ EOF
 - Consumes: nothing beyond `thiserror`/`axum`.
 - Produces:
   - `pub enum NormalizeError { MissingField(&'static str), EmptyField(&'static str), UnsupportedEventType { got: String, expected: &'static [&'static str] }, MappingFailed { field: String, reason: String } }` (`thiserror::Error`, `Display` messages containing the field name so `assert!(err.to_string().contains("content"))`-style tests read naturally, mirroring the Python `ValueError` messages ported in Tasks 5-11).
-  - `pub enum IntakeError { MalformedBody, BadSignature, ReplayWindow, UnknownSource, SourceDisabled, DuplicateMessage, DuplicateDelivery, BodyTooLarge, MappingFailed(String), RateLimited, SecretUnset, EnvelopeInvalid(String), InvalidToken, MissingScope, TenantMismatch, PlatformNotRegistered, IpNotAllowed, BearerRejected, BasicRejected, NoAuthMode, OriginRejected }` implementing `axum::response::IntoResponse` — maps 1:1 to §10.1's status/reason table, plus the five spec-amendment rows (PA-INTAKE-AUTH / PA-ORIGIN):
+  - `pub enum IntakeError { MalformedBody, BadSignature, ReplayWindow, UnknownSource, SourceDisabled, DuplicateMessage, DuplicateDelivery, BodyTooLarge, MappingFailed(String), RateLimited, SecretUnset, EnvelopeInvalid(String), InvalidToken, MissingScope, TenantMismatch, PlatformNotRegistered, SecondFactorFailed, AuthNotConfigured, OriginRejected }` implementing `axum::response::IntoResponse` — maps 1:1 to §10.1's status/reason table, plus the three §4.1.1/D29 rows (PA-INTAKE-AUTH / PA-ORIGIN). **`SecondFactorFailed` is one reason covering all three configured-but-unsatisfied modes** (IP allowlist miss, bad/missing bearer, bad/missing basic) — §10.1's endpoint table and §14.10's negative-test table both name exactly one reason (`second_factor_failed`) for this condition, never a per-mode reason:
 
     | Variant | Status | JSON `reason` | Source |
     |---|---|---|---|
@@ -1063,13 +1144,11 @@ EOF
     | `MissingScope` | 403 | `missing_scope` | §10.1 |
     | `TenantMismatch` | 403 | `tenant_mismatch` | §10.1 |
     | `PlatformNotRegistered` | 403 | `platform_not_registered` | §10.1 |
-    | `IpNotAllowed` | 401 | `ip_not_allowed` | PA-INTAKE-AUTH |
-    | `BearerRejected` | 401 | `bearer_rejected` | PA-INTAKE-AUTH |
-    | `BasicRejected` | 401 | `basic_rejected` | PA-INTAKE-AUTH |
-    | `NoAuthMode` | 401 | `no_auth_mode` | PA-INTAKE-AUTH (fail closed — a source with no configured mode is never an implicit allow) |
-    | `OriginRejected` | 403 | `origin` | PA-ORIGIN |
+    | `SecondFactorFailed` | 401 | `second_factor_failed` | PA-INTAKE-AUTH — a configured IP allowlist, bearer token, or basic credential did not admit the request |
+    | `AuthNotConfigured` | 401 | `auth_not_configured` | PA-INTAKE-AUTH (fail closed — a source with no configured mode is never an implicit allow) |
+    | `OriginRejected` | 403 | `origin_not_trusted` | PA-ORIGIN |
 
-    Response body shape: `{"error": <reason>, "detail": <Display string or null>}`. **`detail` is `None` for every authentication/origin variant** — telling a caller *which* gate it failed is a probing oracle; the reason code is for our dashboards (it is the `reason` metric label), the body just says the request was rejected.
+    Response body shape: `{"error": <reason>, "detail": <Display string or null>}`. **`detail` is `None` for every authentication/origin variant** — telling a caller *which* gate it failed is a probing oracle; the reason code is for our dashboards, the body just says the request was rejected. **The OTel metric label is not always the same string as the HTTP `error` field**: §4.1.1's `ingest_webhook_rejected_total{...,reason}` uses a coarser four-bucket vocabulary (`"origin"|"signature"|"auth"|"replay"`) than the HTTP body's fine-grained reasons — `IntakeError::metric_reason(&self) -> &'static str` (defined alongside `status_and_reason` in Step 3) maps `BadSignature→"signature"`, `OriginRejected→"origin"`, `SecondFactorFailed`/`AuthNotConfigured→"auth"`, `ReplayWindow→"replay"`, and every other variant to its own `status_and_reason()` reason (the spec's bucket list is illustrative, not exhaustive, for the many other §10.1 reasons this counter also covers).
   - `pub enum IngestError { Config(crate::config::ConfigError), Spine(String), Connector(String), Io(std::io::Error) }` — the top-level error every supervisor/relay task returns; `From` impls for the three inner types (spine/connector stored as `String` via `.to_string()` since their concrete crate error types are external and only need `Display`, not structural matching, anywhere in this service).
 
 - [ ] **Step 1: Write the failing test**
@@ -1110,27 +1189,34 @@ mod tests {
             (IntakeError::TenantMismatch, 403, "tenant_mismatch"),
             (IntakeError::PlatformNotRegistered, 403, "platform_not_registered"),
             (IntakeError::SourceDisabled, 503, "source_disabled"),
-            (IntakeError::IpNotAllowed, 401, "ip_not_allowed"),
-            (IntakeError::BearerRejected, 401, "bearer_rejected"),
-            (IntakeError::BasicRejected, 401, "basic_rejected"),
-            (IntakeError::NoAuthMode, 401, "no_auth_mode"),
-            (IntakeError::OriginRejected, 403, "origin"),
+            (IntakeError::SecondFactorFailed, 401, "second_factor_failed"),
+            (IntakeError::AuthNotConfigured, 401, "auth_not_configured"),
+            (IntakeError::OriginRejected, 403, "origin_not_trusted"),
         ];
         for (err, status, reason) in cases {
             let (s, r) = err.status_and_reason();
             assert_eq!(s.as_u16(), *status, "case: {reason}");
             assert_eq!(r, *reason);
         }
-        assert_eq!(cases.len(), 21, "every IntakeError variant must be covered by this table");
+        assert_eq!(cases.len(), 19, "every IntakeError variant must be covered by this table");
+    }
+
+    #[test]
+    fn metric_reason_uses_the_spec_coarse_bucket_for_the_four_named_variants() {
+        assert_eq!(IntakeError::BadSignature.metric_reason(), "signature");
+        assert_eq!(IntakeError::OriginRejected.metric_reason(), "origin");
+        assert_eq!(IntakeError::SecondFactorFailed.metric_reason(), "auth");
+        assert_eq!(IntakeError::AuthNotConfigured.metric_reason(), "auth");
+        assert_eq!(IntakeError::ReplayWindow.metric_reason(), "replay");
+        // Everything else falls back to its own HTTP reason string.
+        assert_eq!(IntakeError::UnknownSource.metric_reason(), "unknown_source");
     }
 
     #[tokio::test]
     async fn auth_and_origin_rejections_never_leak_a_detail_oracle() {
         for err in [
-            IntakeError::IpNotAllowed,
-            IntakeError::BearerRejected,
-            IntakeError::BasicRejected,
-            IntakeError::NoAuthMode,
+            IntakeError::SecondFactorFailed,
+            IntakeError::AuthNotConfigured,
             IntakeError::OriginRejected,
             IntakeError::BadSignature,
         ] {
@@ -1223,14 +1309,10 @@ pub enum IntakeError {
     PlatformNotRegistered,
     #[error("source disabled")]
     SourceDisabled,
-    #[error("client address not in the source's allowlist")]
-    IpNotAllowed,
-    #[error("bearer credential rejected")]
-    BearerRejected,
-    #[error("basic credential rejected")]
-    BasicRejected,
+    #[error("configured second factor rejected the request")]
+    SecondFactorFailed,
     #[error("source has no configured authentication mode")]
-    NoAuthMode,
+    AuthNotConfigured,
     #[error("request origin could not be confirmed")]
     OriginRejected,
 }
@@ -1261,11 +1343,24 @@ impl IntakeError {
             Self::TenantMismatch => (StatusCode::FORBIDDEN, "tenant_mismatch"),
             Self::PlatformNotRegistered => (StatusCode::FORBIDDEN, "platform_not_registered"),
             Self::SourceDisabled => (StatusCode::SERVICE_UNAVAILABLE, "source_disabled"),
-            Self::IpNotAllowed => (StatusCode::UNAUTHORIZED, "ip_not_allowed"),
-            Self::BearerRejected => (StatusCode::UNAUTHORIZED, "bearer_rejected"),
-            Self::BasicRejected => (StatusCode::UNAUTHORIZED, "basic_rejected"),
-            Self::NoAuthMode => (StatusCode::UNAUTHORIZED, "no_auth_mode"),
-            Self::OriginRejected => (StatusCode::FORBIDDEN, "origin"),
+            Self::SecondFactorFailed => (StatusCode::UNAUTHORIZED, "second_factor_failed"),
+            Self::AuthNotConfigured => (StatusCode::UNAUTHORIZED, "auth_not_configured"),
+            Self::OriginRejected => (StatusCode::FORBIDDEN, "origin_not_trusted"),
+        }
+    }
+
+    /// The `reason` label on `ingest_webhook_rejected_total`/
+    /// `waddles_intake_rejected_total` -- §4.1.1's literal text gives this
+    /// counter a coarser four-bucket vocabulary (`"origin"|"signature"|
+    /// "auth"|"replay"`) than the HTTP body's `error` field; every other
+    /// variant falls back to its own `status_and_reason()` reason.
+    pub fn metric_reason(&self) -> &'static str {
+        match self {
+            Self::BadSignature => "signature",
+            Self::OriginRejected => "origin",
+            Self::SecondFactorFailed | Self::AuthNotConfigured => "auth",
+            Self::ReplayWindow => "replay",
+            other => other.status_and_reason().1,
         }
     }
 
@@ -1276,10 +1371,8 @@ impl IntakeError {
         matches!(
             self,
             Self::BadSignature
-                | Self::IpNotAllowed
-                | Self::BearerRejected
-                | Self::BasicRejected
-                | Self::NoAuthMode
+                | Self::SecondFactorFailed
+                | Self::AuthNotConfigured
                 | Self::OriginRejected
                 | Self::InvalidToken
                 | Self::MissingScope
@@ -1323,7 +1416,7 @@ pub enum IngestError {
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `make -C core/svc_ingest test-unit MOD='error::'`
-Expected: `test result: ok. 4 passed; 0 failed`
+Expected: `test result: ok. 5 passed; 0 failed`
 
 - [ ] **Step 5: Commit**
 
@@ -1332,7 +1425,7 @@ git add core/svc_ingest/src/error.rs
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): error types -- §10.1 status/reason mapping plus the auth-mode/origin admission variants, no detail oracle
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -1470,6 +1563,15 @@ pub(crate) fn metrics_test_lock() -> &'static std::sync::Mutex<()> {
 pub struct IngestMetrics;
 
 impl IngestMetrics {
+    /// Back-compat constructor: `IngestMetrics` is zero-sized and
+    /// stateless (every method forwards to `penguin_logging`'s
+    /// process-global instruments), so a caller that already holds a
+    /// `prometheus::Registry` (e.g. a test's `AppState` builder) does not
+    /// need a special case -- `registry` is accepted and ignored.
+    pub fn register(_registry: &prometheus::Registry) -> Self {
+        Self
+    }
+
     /// One intake rejection, by source and §10.1 reason.
     pub fn intake_rejected(&self, source: &str, reason: &str) {
         counter_add(
@@ -1808,7 +1910,7 @@ git add core/svc_ingest/src/telemetry.rs core/svc_ingest/src/http/mod.rs core/sv
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): telemetry facade over penguin-logging, SpineMetrics adapter, AppState, health/metrics routers
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -2145,7 +2247,7 @@ git add core/svc_ingest/src/normalize/twitch.rs core/svc_ingest/src/normalize/mo
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): port Twitch IRC chat normalizer with source population (§6.1.1)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -2342,7 +2444,7 @@ git add core/svc_ingest/src/normalize/twitch_eventsub.rs core/svc_ingest/src/nor
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): port Twitch EventSub notification normalizer incl. gh#287 S10 stream.online/offline
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -2492,7 +2594,7 @@ git add core/svc_ingest/src/normalize/discord.rs core/svc_ingest/src/normalize/m
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): port Discord gateway message normalizer with source population (§6.1.1)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -2675,7 +2777,7 @@ git add core/svc_ingest/src/normalize/slack.rs core/svc_ingest/src/normalize/mod
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): port Slack Socket Mode event normalizer with source population (§6.1.1)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -2896,7 +2998,7 @@ git add core/svc_ingest/src/normalize/youtube.rs core/svc_ingest/src/normalize/m
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): port YouTube Live chat normalizer with source population (§6.1.1)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -3258,7 +3360,7 @@ git add core/svc_ingest/src/normalize/kick.rs core/svc_ingest/src/normalize/mod.
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): port Kick Pusher chat normalizer + webhook signature verify + event-type map (§6.1.1, gh#287 S10)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -3560,7 +3662,7 @@ git add core/svc_ingest/src/normalize/generic.rs core/svc_ingest/src/normalize/m
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): generic webhook intake's RFC 6901 JSON-pointer mapping engine (§10.3, A6)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -3568,19 +3670,25 @@ EOF
 
 ---
 
-### Task 12: Spine publisher
+### Task 12: Event publisher (D30 minting, D31 usage)
 
-**Depends on:** Task 3
+**Depends on:** Task 3, Task 4
+
+Named `publish.rs`, not `spine.rs`: **coordinator ruling R60** — `svc_ingest` depends on `penguin-spine` directly (R53 git-rev pin) and never re-implements it; this module is ingest's own thin orchestration over the crate's real types (`StageEnvelope`, `PlatformEvent`, `Trace`, `Binding`, `BindingKeyring`, `UsageDelta`/`UsageBatcher`, `SpineClient::{append,append_usage}`), not a local copy of any spine mechanic.
 
 **Files:**
-- Create: `core/svc_ingest/src/spine.rs`
+- Create: `core/svc_ingest/src/publish.rs`
+
+This task's earlier draft quoted a stale, pre-D30 `penguin-spine` surface (`SpineClient::append` taking a `maxlen_approx` parameter, no `workstream_id`/`event_id`/`trace`/`binding` on `StageEnvelope`). It is rewritten here against the corrected External Crate Surfaces block.
 
 **Interfaces:**
-- Consumes: `penguin_spine::{PlatformEvent, StageEnvelope, Scope, SpineClient, SpineError}` (External Crate Surfaces); `crate::telemetry::IngestMetrics` (Task 4).
+- Consumes: `penguin_spine::{PlatformEvent, StageEnvelope, Trace, Binding, Scope, SpineClient, SpineError, BindingKeyring, BindingInput, compute_binding_mac, trace_id_from_traceparent, ENVELOPE_SCHEMA_VERSION, UsageDelta, UsageBatcher}` (External Crate Surfaces); `crate::telemetry::IngestMetrics` (Task 4).
 - Produces:
-  - `#[async_trait::async_trait] pub trait EventAppender: Send + Sync { async fn append(&self, stream: &str, env: &StageEnvelope, maxlen_approx: u64) -> Result<String, String>; }` — a local trait wrapping `penguin_spine::SpineClient::append` so this task (and everything downstream of it) is testable without a real Valkey. `impl EventAppender for SpineClient` is the production adapter (calls through, mapping `SpineError` to its `Display` string per this crate's "external errors are strings" convention, Task 3).
-  - `pub const SPINE_STREAM_MAXLEN: u64 = 100_000;` (`§4.1`/`§6.2` default; overridable later via config if a task needs it — not wired to an env var in this milestone since ingest has no reason to override the shared default).
-  - `pub async fn publish_event(appender: &dyn EventAppender, metrics: &IngestMetrics, scope: &Scope, source_id: &str, event: PlatformEvent) -> Result<String, String>` — builds the `StageEnvelope` per **PA-ENVELOPE** (`app_id = format!("waddles.ingest.{platform}.{source_id}", platform = event.platform)`, `stage = "ingest"`, `target_app_id = None`, `trace_context = None`, `ts` = current RFC3339-ms), computes the stream key via `scope.source_stream(&event.platform, source_id)`, calls `appender.append(...)`, and on success increments `metrics.stream_events_total{platform, source_id}` before returning the entry id.
+  - `#[async_trait::async_trait] pub trait EventAppender: Send + Sync { async fn append(&self, stream: &str, env: &StageEnvelope) -> Result<String, String>; }` — a local trait wrapping `penguin_spine::SpineClient::append` (no `maxlen` parameter -- the real crate reads `MAXLEN` from the `SpineConfig` given to `SpineClient::connect`, Task 30) so this task and everything downstream of it is testable without a real Valkey. `impl EventAppender for SpineClient` is the production adapter.
+  - `pub const WORKSTREAM_NAMESPACE: uuid::Uuid` — a fixed, hardcoded UUID namespace constant (any stable literal; generate once with `uuidgen`, never regenerate) for **PA-WORKSTREAM**'s deterministic fixed-platform workstream ids.
+  - `pub fn deterministic_workstream_id(source_id: &str) -> String` — `Uuid::new_v5(&WORKSTREAM_NAMESPACE, source_id.as_bytes()).to_string()`. Used by the fixed-platform receiver supervisors (Tasks 23-29); generic sources (Tasks 19/20) instead pass the `workstreamId` already on their polled registry row (PA-WORKSTREAM).
+  - `pub async fn publish_event(appender: &dyn EventAppender, metrics: &IngestMetrics, keyring: &BindingKeyring, usage: &UsageBatcher, scope: &Scope, source_id: &str, workstream_id: &str, session_id: Option<&str>, event: PlatformEvent) -> Result<String, String>` — the **sole** `StageEnvelope`-construction site in this crate. Builds the envelope per **PA-ENVELOPE** (`app_id`, `stage = "ingest"`, `target_app_id = None`) plus **D30** (`schema_version = ENVELOPE_SCHEMA_VERSION`, a freshly minted `event_id` (UUID v4), a freshly minted `trace` — **never** a continuation of any inbound request's own trace — `session_id` passed through verbatim, and `binding` computed via `compute_binding_mac` against `keyring` using the trace's own 32-hex trace-id segment), computes the stream key via `scope.source_stream(&event.platform, source_id)`, calls `appender.append(...)`, and on success: increments `metrics.stream_event_written(platform, source_id)` and records one `UsageDelta` (`events: 1`, everything else zero) onto `usage` (**D31** — accumulated in-process; a separate periodic task, Task 30, flushes `usage` onto `waddles:usage` via `SpineClient::append_usage`, never per-event).
+  - A private `fn mint_trace() -> Trace` helper: a fresh 32-hex trace-id and 16-hex parent-span-id (both derived from `Uuid::new_v4().simple()`, no new dependency), `traceparent = format!("00-{trace_id}-{span_id}-01")`, `tracestate: None`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -3589,21 +3697,22 @@ EOF
 mod tests {
     use super::*;
     use crate::telemetry::IngestMetrics;
-    use penguin_spine::Source;
+    use penguin_spine::{BindingKeyEntry, BindingKeyring, Source};
+    use std::collections::HashMap;
     use std::sync::Mutex;
 
     struct FakeAppender {
-        calls: Mutex<Vec<(String, StageEnvelope, u64)>>,
+        calls: Mutex<Vec<(String, StageEnvelope)>>,
         fail: bool,
     }
 
     #[async_trait::async_trait]
     impl EventAppender for FakeAppender {
-        async fn append(&self, stream: &str, env: &StageEnvelope, maxlen_approx: u64) -> Result<String, String> {
+        async fn append(&self, stream: &str, env: &StageEnvelope) -> Result<String, String> {
             if self.fail {
                 return Err("connection refused".to_string());
             }
-            self.calls.lock().unwrap().push((stream.to_string(), env.clone(), maxlen_approx));
+            self.calls.lock().unwrap().push((stream.to_string(), env.clone()));
             Ok("1757851200000-0".to_string())
         }
     }
@@ -3619,64 +3728,145 @@ mod tests {
         }
     }
 
-    fn test_metrics() -> IngestMetrics {
-        IngestMetrics::register(&prometheus::Registry::new())
+    fn test_keyring() -> BindingKeyring {
+        let mut entries = HashMap::new();
+        entries.insert("test-kid".to_string(), BindingKeyEntry { key: vec![7u8; 32], retired_at: None });
+        BindingKeyring::from_entries("test-kid", entries, chrono::Duration::seconds(86_400)).unwrap()
     }
 
     #[tokio::test]
-    async fn writes_onto_the_correct_source_stream_with_synthetic_app_id() {
+    async fn writes_onto_the_correct_source_stream_with_d30_fields_populated() {
         let appender = FakeAppender { calls: Mutex::new(vec![]), fail: false };
-        let metrics = test_metrics();
+        let metrics = IngestMetrics;
+        let keyring = test_keyring();
+        let usage = UsageBatcher::new();
         let scope = Scope { tenant: "acme".to_string(), community: Some("main".to_string()) };
-        let entry_id = publish_event(&appender, &metrics, &scope, "tw-channelA", test_event()).await.unwrap();
+        let entry_id =
+            publish_event(&appender, &metrics, &keyring, &usage, &scope, "tw-channelA", "ws-1", None, test_event())
+                .await
+                .unwrap();
         assert_eq!(entry_id, "1757851200000-0");
 
         let calls = appender.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
-        let (stream, env, maxlen) = &calls[0];
+        let (stream, env) = &calls[0];
         assert_eq!(stream, "waddles:t:acme:c:main:src:twitch:tw-channelA:events");
-        assert_eq!(maxlen, &SPINE_STREAM_MAXLEN);
+        assert_eq!(env.schema_version, penguin_spine::ENVELOPE_SCHEMA_VERSION);
         assert_eq!(env.stage, "ingest");
         assert_eq!(env.app_id, "waddles.ingest.twitch.tw-channelA");
         assert_eq!(env.target_app_id, None);
         assert_eq!(env.tenant, "acme");
         assert_eq!(env.community.as_deref(), Some("main"));
+        assert_eq!(env.workstream_id, "ws-1");
+        assert!(uuid::Uuid::parse_str(&env.event_id).is_ok(), "event_id must be a UUID");
+        assert_eq!(env.session_id, None);
+        let trace = env.trace.as_ref().expect("publish_event always mints a trace");
+        assert!(trace.traceparent.starts_with("00-"));
+        assert_eq!(env.binding.kid, "test-kid");
+        assert_eq!(env.binding.mac.len(), 64);
     }
 
     #[tokio::test]
-    async fn increments_stream_events_total_on_success() {
+    async fn session_id_is_carried_through_when_supplied() {
         let appender = FakeAppender { calls: Mutex::new(vec![]), fail: false };
-        let metrics = test_metrics();
+        let (metrics, keyring, usage) = (IngestMetrics, test_keyring(), UsageBatcher::new());
         let scope = Scope { tenant: "acme".to_string(), community: None };
-        publish_event(&appender, &metrics, &scope, "tw-channelA", test_event()).await.unwrap();
-        assert_eq!(metrics.stream_events_total.with_label_values(&["twitch", "tw-channelA"]).get(), 1.0);
+        publish_event(&appender, &metrics, &keyring, &usage, &scope, "tw-eventsub-999", "ws-2", Some("session-abc"), test_event())
+            .await
+            .unwrap();
+        assert_eq!(appender.calls.lock().unwrap()[0].1.session_id.as_deref(), Some("session-abc"));
     }
 
     #[tokio::test]
-    async fn does_not_increment_the_counter_on_failure() {
-        let appender = FakeAppender { calls: Mutex::new(vec![]), fail: true };
-        let metrics = test_metrics();
+    async fn every_call_mints_a_distinct_event_id_and_trace() {
+        let appender = FakeAppender { calls: Mutex::new(vec![]), fail: false };
+        let (metrics, keyring, usage) = (IngestMetrics, test_keyring(), UsageBatcher::new());
         let scope = Scope { tenant: "acme".to_string(), community: None };
-        let err = publish_event(&appender, &metrics, &scope, "tw-channelA", test_event()).await.unwrap_err();
+        publish_event(&appender, &metrics, &keyring, &usage, &scope, "tw-channelA", "ws-1", None, test_event()).await.unwrap();
+        publish_event(&appender, &metrics, &keyring, &usage, &scope, "tw-channelA", "ws-1", None, test_event()).await.unwrap();
+        let calls = appender.calls.lock().unwrap();
+        assert_ne!(calls[0].1.event_id, calls[1].1.event_id);
+        assert_ne!(
+            calls[0].1.trace.as_ref().unwrap().traceparent,
+            calls[1].1.trace.as_ref().unwrap().traceparent
+        );
+    }
+
+    #[tokio::test]
+    async fn records_exactly_one_usage_delta_event_per_publish() {
+        let appender = FakeAppender { calls: Mutex::new(vec![]), fail: false };
+        let (metrics, keyring, usage) = (IngestMetrics, test_keyring(), UsageBatcher::new());
+        let scope = Scope { tenant: "acme".to_string(), community: None };
+        publish_event(&appender, &metrics, &keyring, &usage, &scope, "tw-channelA", "ws-1", None, test_event()).await.unwrap();
+        let deltas = usage.flush();
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].workstream_id, "ws-1");
+        assert_eq!(deltas[0].stage, "ingest");
+        assert_eq!(deltas[0].events, 1);
+    }
+
+    #[tokio::test]
+    async fn append_failure_records_no_usage_and_propagates_the_error() {
+        let appender = FakeAppender { calls: Mutex::new(vec![]), fail: true };
+        let (metrics, keyring, usage) = (IngestMetrics, test_keyring(), UsageBatcher::new());
+        let scope = Scope { tenant: "acme".to_string(), community: None };
+        let err = publish_event(&appender, &metrics, &keyring, &usage, &scope, "tw-channelA", "ws-1", None, test_event())
+            .await
+            .unwrap_err();
         assert!(err.contains("connection refused"));
-        assert_eq!(metrics.stream_events_total.with_label_values(&["twitch", "tw-channelA"]).get(), 0.0);
+        assert!(usage.is_empty(), "a failed append must never record usage");
     }
 
     #[tokio::test]
     async fn tenant_wide_community_renders_as_the_literal_tenant_segment() {
         let appender = FakeAppender { calls: Mutex::new(vec![]), fail: false };
-        let metrics = test_metrics();
+        let (metrics, keyring, usage) = (IngestMetrics, test_keyring(), UsageBatcher::new());
         let scope = Scope { tenant: "acme".to_string(), community: None };
-        publish_event(&appender, &metrics, &scope, "tw-channelA", test_event()).await.unwrap();
-        let calls = appender.calls.lock().unwrap();
-        assert_eq!(calls[0].0, "waddles:t:acme:c:_tenant:src:twitch:tw-channelA:events");
+        publish_event(&appender, &metrics, &keyring, &usage, &scope, "tw-channelA", "ws-1", None, test_event()).await.unwrap();
+        assert_eq!(
+            appender.calls.lock().unwrap()[0].0,
+            "waddles:t:acme:c:_tenant:src:twitch:tw-channelA:events"
+        );
+    }
+
+    #[test]
+    fn deterministic_workstream_id_is_stable_per_source_id() {
+        let a = deterministic_workstream_id("tw-waddlebot");
+        let b = deterministic_workstream_id("tw-waddlebot");
+        let c = deterministic_workstream_id("dg-guild123");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert!(uuid::Uuid::parse_str(&a).is_ok());
+    }
+
+    #[test]
+    fn app_id_slug_sanitizes_a_custom_platform_string() {
+        assert_eq!(app_id_slug("custom:github"), "custom-github");
+        assert_eq!(app_id_slug("Twitch"), "twitch");
+        assert_eq!(app_id_slug("---leading-punct"), "leading-punct");
+        assert_eq!(app_id_slug(""), "x");
+    }
+
+    #[tokio::test]
+    async fn a_custom_platform_produces_a_regex_valid_app_id() {
+        // Without app_id_slug, "custom:github" would produce an app_id no
+        // stage's strict StageEnvelope deserializer could read back.
+        let appender = FakeAppender { calls: Mutex::new(vec![]), fail: false };
+        let (metrics, keyring, usage) = (IngestMetrics, test_keyring(), UsageBatcher::new());
+        let scope = Scope { tenant: "acme".to_string(), community: None };
+        let mut event = test_event();
+        event.platform = "custom:github".to_string();
+        publish_event(&appender, &metrics, &keyring, &usage, &scope, "acme-github", "ws-1", None, event).await.unwrap();
+        let app_id = &appender.calls.lock().unwrap()[0].1.app_id;
+        assert_eq!(app_id, "waddles.ingest.custom-github.acme-github");
+        assert!(app_id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-'));
     }
 }
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `make -C core/svc_ingest test-unit MOD='spine::'`
+Run: `make -C core/svc_ingest test-unit MOD='publish::'`
 Expected: compile failure, module empty.
 
 - [ ] **Step 3: Write the implementation**
@@ -3685,71 +3875,160 @@ Expected: compile failure, module empty.
 //! One write per event (§10.6): wraps a normalized `PlatformEvent` in a
 //! `StageEnvelope` and `XADD`s it once onto its ingest source's stream.
 //! `app_id` is a synthetic per-**source** id (PA-ENVELOPE) -- ingest
-//! resolves no consumer, D23/D24/§10.6.
+//! resolves no consumer, D23/D24/§10.6. Also mints every D30 workstream-
+//! identity/trace/binding field (ingest MINTS, never verifies -- §5.11)
+//! and records one D31 usage delta per successful publish.
 
-use penguin_spine::{PlatformEvent, Scope, SpineClient, StageEnvelope};
+use penguin_spine::{
+    compute_binding_mac, trace_id_from_traceparent, BindingInput, BindingKeyring, PlatformEvent,
+    Scope, SpineClient, StageEnvelope, Trace, UsageBatcher, UsageDelta, ENVELOPE_SCHEMA_VERSION,
+};
+use uuid::Uuid;
 
 use crate::telemetry::IngestMetrics;
 
-/// Default approximate `MAXLEN` bound on every ingest-source stream
-/// (§4.1/§6.2).
-pub const SPINE_STREAM_MAXLEN: u64 = 100_000;
+/// Fixed namespace for **PA-WORKSTREAM**'s deterministic fixed-platform
+/// workstream ids. Generated once (`uuidgen`) and never regenerated --
+/// changing it would change every fixed-platform `workstream_id` on next
+/// deploy, breaking usage-metering continuity (§5.12).
+pub const WORKSTREAM_NAMESPACE: Uuid = Uuid::from_bytes([
+    0x2c, 0x9e, 0x1a, 0x40, 0x6f, 0x8b, 0x4c, 0x1d, 0x9a, 0x3e, 0x7d, 0x2f, 0x51, 0x0a, 0x8b, 0x6c,
+]);
+
+/// Derives a stable `workstream_id` for a fixed-platform ingest source
+/// from its `source_id` (the same string already used to build the
+/// Valkey stream key) -- **PA-WORKSTREAM**. Generic sources instead use
+/// the `workstreamId` already on their polled registry row (Task 14).
+pub fn deterministic_workstream_id(source_id: &str) -> String {
+    Uuid::new_v5(&WORKSTREAM_NAMESPACE, source_id.as_bytes()).to_string()
+}
+
+/// Sanitizes one `app_id` path segment (PA-ENVELOPE): lowercase, every
+/// character outside `[a-z0-9_-]` becomes `-`, and any leading run of
+/// characters outside `[a-z0-9]` is stripped, so the segment can never
+/// violate `penguin_spine`'s `^waddles\.<seg>\.<seg>\.<seg>$` regex.
+/// **Load-bearing for `custom:*` platforms**: without this, a generic
+/// source's `platform` (e.g. `custom:github`, containing `:`) would
+/// produce an `app_id` no stage's strict `StageEnvelope` deserializer
+/// (§6.1.2) can read back -- every event from that source would be
+/// unreadable the moment any process bundle's `GroupReader` tried to
+/// deserialize it, discovered only downstream of ingest.
+pub fn app_id_slug(raw: &str) -> String {
+    let mut out: String = raw
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-' { c } else { '-' })
+        .collect();
+    while out.starts_with(|c: char| !c.is_ascii_lowercase() && !c.is_ascii_digit()) {
+        out.remove(0);
+    }
+    if out.is_empty() {
+        out.push('x');
+    }
+    out
+}
 
 /// Wraps `penguin_spine::SpineClient::append` behind a trait so callers
 /// (and this module's own tests) never need a real Valkey connection.
 #[async_trait::async_trait]
 pub trait EventAppender: Send + Sync {
-    async fn append(&self, stream: &str, env: &StageEnvelope, maxlen_approx: u64) -> Result<String, String>;
+    async fn append(&self, stream: &str, env: &StageEnvelope) -> Result<String, String>;
 }
 
 #[async_trait::async_trait]
 impl EventAppender for SpineClient {
-    async fn append(&self, stream: &str, env: &StageEnvelope, maxlen_approx: u64) -> Result<String, String> {
-        SpineClient::append(self, stream, env, maxlen_approx).await.map_err(|e| e.to_string())
+    async fn append(&self, stream: &str, env: &StageEnvelope) -> Result<String, String> {
+        SpineClient::append(self, stream, env).await.map_err(|e| e.to_string())
     }
 }
 
+/// A fresh W3C trace -- one per inbound event, never a continuation of
+/// any inbound request's own trace (§5.11).
+fn mint_trace() -> Trace {
+    let trace_id = Uuid::new_v4().simple().to_string();
+    let span_id = Uuid::new_v4().simple().to_string()[..16].to_string();
+    Trace { traceparent: format!("00-{trace_id}-{span_id}-01"), tracestate: None }
+}
+
 /// Publishes one normalized event onto its ingest source's stream,
-/// exactly once, then counts it. `source_id` is hub-api's stable
-/// identifier for the ingest configuration this event came from.
+/// exactly once, minting every D30 identity field and recording one D31
+/// usage delta -- the sole `StageEnvelope`-construction site in this
+/// crate. `source_id` is hub-api's (or, for a fixed platform, ingest's
+/// own) stable identifier for the ingest configuration this event came
+/// from; `workstream_id` and `session_id` are supplied by the caller
+/// (PA-WORKSTREAM) since only the caller knows which of the two
+/// workstream-resolution strategies applies.
 pub async fn publish_event(
     appender: &dyn EventAppender,
     metrics: &IngestMetrics,
+    keyring: &BindingKeyring,
+    usage: &UsageBatcher,
     scope: &Scope,
     source_id: &str,
+    workstream_id: &str,
+    session_id: Option<&str>,
     event: PlatformEvent,
 ) -> Result<String, String> {
     let stream = scope.source_stream(&event.platform, source_id);
     let platform = event.platform.clone();
+
+    let trace = mint_trace();
+    let trace_id = trace_id_from_traceparent(&trace.traceparent)
+        .expect("mint_trace always produces a valid W3C traceparent")
+        .to_string();
+    let event_id = Uuid::new_v4().to_string();
+    let binding = compute_binding_mac(
+        keyring,
+        &BindingInput {
+            tenant: &scope.tenant,
+            community: scope.community.as_deref(),
+            workstream_id,
+            event_id: &event_id,
+            trace_id: &trace_id,
+        },
+    );
+
     let env = StageEnvelope {
+        schema_version: ENVELOPE_SCHEMA_VERSION,
         tenant: scope.tenant.clone(),
         community: scope.community.clone(),
-        app_id: format!("waddles.ingest.{platform}.{source_id}"),
+        app_id: format!("waddles.ingest.{}.{}", app_id_slug(&platform), app_id_slug(source_id)),
         stage: "ingest".to_string(),
         event,
         ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         target_app_id: None,
-        trace_context: None,
+        workstream_id: workstream_id.to_string(),
+        event_id,
+        session_id: session_id.map(str::to_string),
+        trace: Some(trace),
+        binding,
     };
-    let entry_id = appender.append(&stream, &env, SPINE_STREAM_MAXLEN).await?;
-    metrics.stream_events_total.with_label_values(&[&platform, source_id]).inc();
+
+    let entry_id = appender.append(&stream, &env).await?;
+    metrics.stream_event_written(&platform, source_id);
+
+    let mut delta =
+        UsageDelta::zero(scope.tenant.clone(), scope.community.clone(), workstream_id.to_string(), "ingest", None);
+    delta.events = 1;
+    usage.record(delta);
+
     Ok(entry_id)
 }
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `make -C core/svc_ingest test-unit MOD='spine::'`
-Expected: `test result: ok. 4 passed; 0 failed`
+Run: `make -C core/svc_ingest test-unit MOD='publish::'`
+Expected: `test result: ok. 9 passed; 0 failed`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/svc_ingest/src/spine.rs core/svc_ingest/src/lib.rs
+git add core/svc_ingest/src/publish.rs core/svc_ingest/src/lib.rs
 git commit -m "$(cat <<'EOF'
-feat(svc-ingest): spine publisher -- one XADD per event onto its source stream (§10.6, PA-ENVELOPE)
+feat(svc-ingest): event publisher -- one XADD per event, D30 workstream/trace/binding minting, D31 usage batching, app_id slug sanitization (§10.6, §5.11, §5.12, PA-ENVELOPE)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -3766,11 +4045,11 @@ EOF
 - Modify: `hub_api/services/distribution_service.py`
 - Modify: `hub_api/tests/test_v1_distribution_blueprint.py`
 
-Additive endpoint (PA-SOURCES). Modeled directly on the existing `GET /api/v1/distribution/bundles` route in the same file: `@tenant_middleware` + `@require_scope("distribution:read")`, tenant strictly from the caller's JWT, `@validate_response` DTO, same `_dal()`/`_ensure_tables` read-replica pattern. Serves rows from the `intake_sources` table (§15.4: `{tenant, source_id, source, platform, secret_ref, community, mapping, enabled}` — this task assumes that table already exists per M1.5/M2's migration; if it does not yet exist when this task runs, add the migration inline here rather than blocking, following the existing migration-numbering convention in `config/postgres/migrations/`).
+Additive endpoint (PA-SOURCES). Modeled directly on the existing `GET /api/v1/distribution/bundles` route in the same file: `@tenant_middleware` + `@require_scope("distribution:read")`, tenant strictly from the caller's JWT, `@validate_response` DTO, same `_dal()`/`_ensure_tables` read-replica pattern. Serves rows from the `intake_sources` table (§15.4: `{tenant, source_id, source, platform, secret_ref, community, mapping, enabled, auth, workstream_id}` — **must match plan M2b's `intake_sources` migration**, `origin/docs/plan-m2b-hub-api` commit `205def34`, which my task brief flags as being revised in parallel; re-check the column names against that branch's tip before implementing, and note any drift in this task's commit message rather than silently matching an older shape). `auth` is the §4.1.1/D29 JSON object (PA-INTAKE-AUTH); `workstream_id` is the `workstreams` row created 1:1 with this source (§5.11/§6.11, D30) — this task assumes both columns already exist per M1.5/M2b's migration; if either does not exist when this task runs, add the migration inline here rather than blocking, following the existing migration-numbering convention in `config/postgres/migrations/`.
 
 **Interfaces:**
 - Consumes: `flask_core.tenancy.{get_tenant_context, tenant_middleware}`, `flask_core.authz.require_scope`, `flask_core.api_utils.error_response`, `quart_schema.validate_response` (all already imported in `distribution.py`).
-- Produces: `GET /api/v1/distribution/sources` returning `{"success": true, "sources": [SourceDTO, ...], "meta": {"version": int, "timestamp": str}}` with `ETag` response header (SHA-256 hex of the serialized `sources` array) and `304 Not Modified` when the caller's `If-None-Match` matches. `SourceDTO = {sourceId: str, tenant: str, platform: str, secretRef: str, secret: str, community: str | None, mapping: dict, enabled: bool}`.
+- Produces: `GET /api/v1/distribution/sources` returning `{"success": true, "sources": [SourceDTO, ...], "meta": {"version": int, "timestamp": str}}` with `ETag` response header (SHA-256 hex of the serialized `sources` array) and `304 Not Modified` when the caller's `If-None-Match` matches. `SourceDTO = {sourceId: str, tenant: str, platform: str, secretRef: str, secret: str, community: str | None, mapping: dict, enabled: bool, workstreamId: str, auth: AuthDTO}`, `AuthDTO = {modes: list[str], cidrs: list[str], secretRef: str | None, secret: str | None}` (`secret` is hub-api's resolution of `auth.secretRef` for the `bearer`/`basic` modes, `null` when neither is configured — mirrors the top-level `secretRef`/`secret` pair, PA-SOURCES).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -3782,7 +4061,8 @@ class TestListDistributionSources:
         await seed_intake_source(
             tenant="acme-corp", source_id="acme-github", source="github", platform="custom:github",
             secret_ref="acme-github-webhook-secret", community="main",
-            mapping={"event_type": {"pointer": "/type"}}, enabled=True,
+            mapping={"event_type": {"pointer": "/type"}}, enabled=True, workstream_id="8f14e45f-ceea-467e-adde-3fb5c9752730",
+            auth={"modes": ["bearer"], "cidrs": [], "secret_ref": "acme-github-bearer"},
         )
         resp = await client.get("/api/v1/distribution/sources", headers=auth_headers(tenant="acme-corp"))
         assert resp.status_code == 200
@@ -3796,16 +4076,35 @@ class TestListDistributionSources:
         assert "secret" in row and row["secret"]
         assert row["community"] == "main"
         assert row["enabled"] is True
+        assert row["workstreamId"] == "8f14e45f-ceea-467e-adde-3fb5c9752730"
+        assert row["auth"]["modes"] == ["bearer"]
+        assert row["auth"]["secretRef"] == "acme-github-bearer"
+        assert row["auth"]["secret"]
+
+    async def test_source_with_no_second_factor_still_lists_empty_auth_modes(self, client, auth_headers, seed_intake_source):
+        # hub-api's *create/update* endpoint refuses to persist this (422
+        # auth_factor_required, M2b, out of this task's scope) -- but a
+        # row that somehow exists with empty modes must still round-trip
+        # honestly here, since svc-ingest's own fail-closed 401 depends on
+        # seeing the true (empty) list, never a synthesized default.
+        await seed_intake_source(
+            tenant="acme-corp", source_id="acme-bare", source="x", platform="custom:x", secret_ref="ref",
+            community=None, mapping={}, enabled=True, workstream_id="ws-bare", auth={"modes": [], "cidrs": [], "secret_ref": None},
+        )
+        resp = await client.get("/api/v1/distribution/sources", headers=auth_headers(tenant="acme-corp"))
+        body = await resp.get_json()
+        assert body["sources"][0]["auth"]["modes"] == []
+        assert body["sources"][0]["auth"]["secret"] is None
 
     async def test_never_returns_another_tenants_sources(self, client, auth_headers, seed_intake_source):
-        await seed_intake_source(tenant="other-corp", source_id="other-src", source="x", platform="custom:x", secret_ref="ref", community=None, mapping={}, enabled=True)
+        await seed_intake_source(tenant="other-corp", source_id="other-src", source="x", platform="custom:x", secret_ref="ref", community=None, mapping={}, enabled=True, workstream_id="ws-other", auth={"modes": ["bearer"], "cidrs": [], "secret_ref": "r"})
         resp = await client.get("/api/v1/distribution/sources", headers=auth_headers(tenant="acme-corp"))
         assert resp.status_code == 200
         body = await resp.get_json()
         assert body["sources"] == []
 
     async def test_disabled_source_is_still_listed_with_enabled_false(self, client, auth_headers, seed_intake_source):
-        await seed_intake_source(tenant="acme-corp", source_id="acme-off", source="x", platform="custom:x", secret_ref="ref", community=None, mapping={}, enabled=False)
+        await seed_intake_source(tenant="acme-corp", source_id="acme-off", source="x", platform="custom:x", secret_ref="ref", community=None, mapping={}, enabled=False, workstream_id="ws-off", auth={"modes": ["bearer"], "cidrs": [], "secret_ref": "r"})
         resp = await client.get("/api/v1/distribution/sources", headers=auth_headers(tenant="acme-corp"))
         body = await resp.get_json()
         assert body["sources"][0]["enabled"] is False
@@ -3815,7 +4114,7 @@ class TestListDistributionSources:
         assert resp.status_code == 403
 
     async def test_etag_returned_and_if_none_match_yields_304(self, client, auth_headers, seed_intake_source):
-        await seed_intake_source(tenant="acme-corp", source_id="s1", source="x", platform="custom:x", secret_ref="ref", community=None, mapping={}, enabled=True)
+        await seed_intake_source(tenant="acme-corp", source_id="s1", source="x", platform="custom:x", secret_ref="ref", community=None, mapping={}, enabled=True, workstream_id="ws-1", auth={"modes": ["bearer"], "cidrs": [], "secret_ref": "r"})
         first = await client.get("/api/v1/distribution/sources", headers=auth_headers(tenant="acme-corp"))
         etag = first.headers["ETag"]
         assert etag
@@ -3826,9 +4125,9 @@ class TestListDistributionSources:
         assert second.status_code == 304
 
     async def test_etag_changes_when_sources_change(self, client, auth_headers, seed_intake_source):
-        await seed_intake_source(tenant="acme-corp", source_id="s1", source="x", platform="custom:x", secret_ref="ref", community=None, mapping={}, enabled=True)
+        await seed_intake_source(tenant="acme-corp", source_id="s1", source="x", platform="custom:x", secret_ref="ref", community=None, mapping={}, enabled=True, workstream_id="ws-1", auth={"modes": ["bearer"], "cidrs": [], "secret_ref": "r"})
         first = await client.get("/api/v1/distribution/sources", headers=auth_headers(tenant="acme-corp"))
-        await seed_intake_source(tenant="acme-corp", source_id="s2", source="y", platform="custom:y", secret_ref="ref2", community=None, mapping={}, enabled=True)
+        await seed_intake_source(tenant="acme-corp", source_id="s2", source="y", platform="custom:y", secret_ref="ref2", community=None, mapping={}, enabled=True, workstream_id="ws-2", auth={"modes": ["cidr"], "cidrs": ["203.0.113.0/24"], "secret_ref": None})
         second = await client.get("/api/v1/distribution/sources", headers=auth_headers(tenant="acme-corp"))
         assert first.headers["ETag"] != second.headers["ETag"]
 ```
@@ -3836,7 +4135,7 @@ class TestListDistributionSources:
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `docker compose run --rm hub-api pytest hub_api/tests/test_v1_distribution_blueprint.py -k TestListDistributionSources -v`
-Expected: `404 Not Found` on every case (route doesn't exist yet), or a fixture error if `seed_intake_source` isn't yet defined in `hub_api/tests/conftest.py` — add that fixture (an `INSERT` into `intake_sources` via the test DAL, matching the file's existing seed-fixture pattern for other tables) as part of this step, before writing the route.
+Expected: `404 Not Found` on every case (route doesn't exist yet), or a fixture error if `seed_intake_source` isn't yet defined in `hub_api/tests/conftest.py` — add that fixture (an `INSERT` into `intake_sources` via the test DAL, accepting `workstream_id` and `auth` (a dict, JSON-serialized into the `auth` JSONB column) alongside the existing columns, matching the file's existing seed-fixture pattern for other tables) as part of this step, before writing the route.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -3849,22 +4148,38 @@ async def list_intake_sources(dal: Any, *, tenant: str) -> list[dict[str, Any]]:
     `secret_ref` names the credential (safe to log/display); `secret` is
     the resolved plaintext value hub-api fetches on the caller's behalf --
     svc-ingest has no independent way to resolve a bare reference the way
-    a bundle's activation-config env var does (PA-SOURCES).
+    a bundle's activation-config env var does (PA-SOURCES). `auth`
+    (Sec4.1.1/D29, PA-INTAKE-AUTH) gets the same treatment: its
+    `secret_ref` (bearer token or `user:password`, when the source
+    configures either mode) is resolved to `auth.secret` alongside it.
+    `workstream_id` (Sec5.11, D30) passes through unchanged -- it is not a
+    secret, just an id.
     """
     rows = await dal(dal.intake_sources.tenant == tenant).select()
-    return [
-        {
-            "source_id": row.source_id,
-            "tenant": row.tenant,
-            "platform": row.platform,
-            "secret_ref": row.secret_ref,
-            "secret": await resolve_secret_ref(row.secret_ref),
-            "community": row.community,
-            "mapping": row.mapping,
-            "enabled": row.enabled,
-        }
-        for row in rows
-    ]
+    out = []
+    for row in rows:
+        auth = dict(row.auth or {"modes": [], "cidrs": [], "secret_ref": None})
+        auth_secret_ref = auth.get("secret_ref")
+        out.append(
+            {
+                "source_id": row.source_id,
+                "tenant": row.tenant,
+                "platform": row.platform,
+                "secret_ref": row.secret_ref,
+                "secret": await resolve_secret_ref(row.secret_ref),
+                "community": row.community,
+                "mapping": row.mapping,
+                "enabled": row.enabled,
+                "workstream_id": row.workstream_id,
+                "auth": {
+                    "modes": auth.get("modes", []),
+                    "cidrs": auth.get("cidrs", []),
+                    "secret_ref": auth_secret_ref,
+                    "secret": await resolve_secret_ref(auth_secret_ref) if auth_secret_ref else None,
+                },
+            }
+        )
+    return out
 ```
 
 (`resolve_secret_ref` is assumed to already exist somewhere in hub-api's secret-resolution path per §8.3's precedent — if it does not, add a minimal version reading `os.environ[secret_ref]` with a clear `TODO(M6)` pointing at the eventual KMS-backed resolver; never invent a plaintext-in-DB fallback.)
@@ -3874,6 +4189,17 @@ Add to `hub_api/blueprints/v1/distribution.py`:
 ```python
 import hashlib
 import json
+
+
+@dataclass(slots=True, frozen=True)
+class SourceAuthDTO:
+    """The Sec4.1.1/D29 second-factor configuration (PA-INTAKE-AUTH) --
+    must match plan M2b's `intake_sources.auth` column shape exactly."""
+
+    modes: list[str]
+    cidrs: list[str]
+    secretRef: str | None
+    secret: str | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -3888,6 +4214,8 @@ class DistributionSourceDTO:
     community: str | None
     mapping: dict[str, Any]
     enabled: bool
+    workstreamId: str
+    auth: SourceAuthDTO
 
 
 @dataclass(slots=True, frozen=True)
@@ -3912,12 +4240,19 @@ async def list_distribution_sources() -> DistributionSourcesResponse | tuple[dic
         DistributionSourceDTO(
             sourceId=r["source_id"], tenant=r["tenant"], platform=r["platform"],
             secretRef=r["secret_ref"], secret=r["secret"], community=r["community"],
-            mapping=r["mapping"], enabled=r["enabled"],
+            mapping=r["mapping"], enabled=r["enabled"], workstreamId=r["workstream_id"],
+            auth=SourceAuthDTO(
+                modes=r["auth"]["modes"], cidrs=r["auth"]["cidrs"],
+                secretRef=r["auth"]["secret_ref"], secret=r["auth"]["secret"],
+            ),
         )
         for r in rows
     ]
     etag = hashlib.sha256(
-        json.dumps([r["source_id"] for r in rows] + [r["enabled"] for r in rows], sort_keys=True, default=str).encode()
+        json.dumps(
+            [r["source_id"] for r in rows] + [r["enabled"] for r in rows] + [r["workstream_id"] for r in rows],
+            sort_keys=True, default=str,
+        ).encode()
     ).hexdigest()
     if request.headers.get("If-None-Match") == etag:
         return Response(status=304, headers={"ETag": etag})
@@ -3932,7 +4267,7 @@ async def list_distribution_sources() -> DistributionSourcesResponse | tuple[dic
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `docker compose run --rm hub-api pytest hub_api/tests/test_v1_distribution_blueprint.py -k TestListDistributionSources -v`
-Expected: `6 passed`
+Expected: `7 passed`
 
 - [ ] **Step 5: Run the full hub-api suite to confirm no regression**
 
@@ -3944,9 +4279,9 @@ Expected: same pass count as before this task plus 6, zero new failures.
 ```bash
 git add hub_api/blueprints/v1/distribution.py hub_api/services/distribution_service.py hub_api/tests/test_v1_distribution_blueprint.py hub_api/tests/conftest.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): GET /api/v1/distribution/sources for svc-ingest's generic-intake source registry (PA-SOURCES)
+feat(hub-api): GET /api/v1/distribution/sources for svc-ingest's generic-intake source registry, incl. auth (D29) and workstreamId (D30) (PA-SOURCES)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -3964,7 +4299,8 @@ EOF
 **Interfaces:**
 - Consumes: `crate::config::Config` (Task 2); `crate::error::IngestError` (Task 3); `crate::normalize::generic::SourceMapping` (Task 11, `Deserialize`d from each row's `mapping` field).
 - Produces:
-  - `#[derive(Debug, Clone, serde::Deserialize)] pub struct SourceRecord { #[serde(rename = "sourceId")] pub source_id: String, pub tenant: String, pub platform: String, #[serde(rename = "secretRef")] pub secret_ref: String, pub secret: String, pub community: Option<String>, pub mapping: crate::normalize::generic::SourceMapping, pub enabled: bool }`.
+  - `#[derive(Debug, Clone, Default, serde::Deserialize)] pub struct SourceAuth { #[serde(default)] pub modes: Vec<String>, #[serde(default)] pub cidrs: Vec<String>, #[serde(default, rename = "secretRef")] pub secret_ref: Option<String>, #[serde(default)] pub secret: Option<String> }` — the §4.1.1/D29 second-factor configuration (PA-INTAKE-AUTH), deserialized straight off Task 13's `AuthDTO` shape; `cidrs` stays `Vec<String>` here (parsed to `ipnet::IpNet` at the point of use, Task 19) so this module never needs `ipnet`'s optional `serde` feature.
+  - `#[derive(Debug, Clone, serde::Deserialize)] pub struct SourceRecord { #[serde(rename = "sourceId")] pub source_id: String, pub tenant: String, pub platform: String, #[serde(rename = "secretRef")] pub secret_ref: String, pub secret: String, pub community: Option<String>, pub mapping: crate::normalize::generic::SourceMapping, pub enabled: bool, #[serde(rename = "workstreamId")] pub workstream_id: String, #[serde(default)] pub auth: SourceAuth }` — `workstream_id` is §5.11/D30's PA-WORKSTREAM value for this source, polled from hub-api like every other field (fixed-platform sources instead call `crate::publish::deterministic_workstream_id`, Task 12 — they never populate this struct).
   - `#[derive(Debug, Clone, Default)] pub struct SourceRegistry { by_key: std::collections::HashMap<(String, String), SourceRecord> }` keyed by `(tenant, source_id)`, with `pub fn get(&self, tenant: &str, source_id: &str) -> Option<&SourceRecord>` and `pub fn is_empty(&self) -> bool`.
   - `pub type SharedSourceRegistry = std::sync::Arc<arc_swap::ArcSwap<SourceRegistry>>;` — add `arc-swap = "=1.7.1"` to `Cargo.toml`'s `[dependencies]`.
   - `#[async_trait::async_trait] pub trait SourcesFetcher: Send + Sync { async fn fetch(&self, etag: Option<&str>) -> Result<FetchOutcome, IngestError>; }` where `pub enum FetchOutcome { Fresh { sources: Vec<SourceRecord>, etag: String }, NotModified }` — production impl `HttpSourcesFetcher` wraps `reqwest::Client`, calls `GET {hub_api_url}/api/v1/distribution/sources` with `Authorization: Bearer {service_jwt}` and `If-None-Match: {etag}` when present, `304` → `NotModified`, `200` → parses the DTO shape Task 13 produces into `Vec<SourceRecord>` plus the response `ETag` header.
@@ -3997,6 +4333,13 @@ mod tests {
                 payload: Default::default(),
             },
             enabled: true,
+            workstream_id: format!("ws-{id}"),
+            auth: crate::sources::SourceAuth {
+                modes: vec!["bearer".to_string()],
+                cidrs: vec![],
+                secret_ref: Some("bearer-ref".to_string()),
+                secret: Some("bearer-secret".to_string()),
+            },
         }
     }
 
@@ -4090,6 +4433,22 @@ use serde::Deserialize;
 use crate::error::IngestError;
 use crate::normalize::generic::SourceMapping;
 
+/// The §4.1.1/D29 second-factor configuration (PA-INTAKE-AUTH) --
+/// deserialized straight off Task 13's `AuthDTO` shape. `cidrs` stays
+/// `Vec<String>` here (parsed to `ipnet::IpNet` at the point of use, Task
+/// 19) so this module never needs `ipnet`'s optional `serde` feature.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SourceAuth {
+    #[serde(default)]
+    pub modes: Vec<String>,
+    #[serde(default)]
+    pub cidrs: Vec<String>,
+    #[serde(default, rename = "secretRef")]
+    pub secret_ref: Option<String>,
+    #[serde(default)]
+    pub secret: Option<String>,
+}
+
 /// One `intake_sources` row, resolved by hub-api (PA-SOURCES).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SourceRecord {
@@ -4103,6 +4462,13 @@ pub struct SourceRecord {
     pub community: Option<String>,
     pub mapping: SourceMapping,
     pub enabled: bool,
+    /// §5.11/§6.11 (D30, PA-WORKSTREAM) -- minted by hub-api 1:1 with this
+    /// `intake_sources` row. Fixed-platform sources never populate this
+    /// struct at all; they call `crate::publish::deterministic_workstream_id`.
+    #[serde(rename = "workstreamId")]
+    pub workstream_id: String,
+    #[serde(default)]
+    pub auth: SourceAuth,
 }
 
 /// The current, last-known-good set of generic-intake sources, keyed by
@@ -4122,6 +4488,19 @@ impl SourceRegistry {
     /// True when no source has ever been successfully fetched.
     pub fn is_empty(&self) -> bool {
         self.by_key.is_empty()
+    }
+
+    /// The `workstream_id` of the first `(tenant, platform)`-matching row
+    /// -- used by Task 20's REST intake, which authorizes by `platform`
+    /// rather than a specific `source_id` (PA-WORKSTREAM). `None` when no
+    /// row matches; Task 20 falls back to
+    /// `crate::publish::deterministic_workstream_id` defensively rather
+    /// than failing the request outright.
+    pub fn workstream_for_platform(&self, tenant: &str, platform: &str) -> Option<String> {
+        self.by_key
+            .values()
+            .find(|r| r.tenant == tenant && r.platform == platform)
+            .map(|r| r.workstream_id.clone())
     }
 
     fn from_rows(rows: Vec<SourceRecord>) -> Self {
@@ -4235,9 +4614,388 @@ Expected: `test result: ok. 3 passed; 0 failed`
 ```bash
 git add core/svc_ingest/src/sources.rs core/svc_ingest/src/lib.rs core/svc_ingest/Cargo.toml core/svc_ingest/Cargo.lock
 git commit -m "$(cat <<'EOF'
-feat(svc-ingest): generic-intake source registry poller with ETag caching and last-known-good (PA-SOURCES)
+feat(svc-ingest): generic-intake source registry poller with ETag caching and last-known-good, incl. auth (D29) and workstream_id (D30) (PA-SOURCES)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
+EOF
+)"
+```
+
+---
+
+### Task 15: Client-address resolution + FCrDNS origin verification (PA-PROXY, PA-ORIGIN)
+
+**Depends on:** Task 2, Task 4
+
+**Files:**
+- Create: `core/svc_ingest/src/http/origin.rs`
+- Modify: `core/svc_ingest/src/http/mod.rs` (add `pub mod origin;`)
+
+Ported from §4.1.1/D29 (new in this rewrite — no Python precedent). Two independent primitives the two platform webhooks (Tasks 17/18) and the generic webhook's `cidr` auth mode (Task 19) all share: **PA-PROXY** resolves who the client actually is behind a possibly-untrusted proxy; **PA-ORIGIN** decides whether that client is trusted, either by a static CIDR allowlist or by a cached forward-confirmed reverse-DNS (FCrDNS) check.
+
+**Interfaces:**
+- Consumes: `crate::telemetry::IngestMetrics` (Task 4, for `origin_lookup_ms`); `ipnet::IpNet` (Task 1); `hickory-resolver` (Task 1).
+- Produces:
+  - `pub fn resolve_client_addr(direct_peer: std::net::IpAddr, forwarded_for: Option<&str>, trusted_proxies: &[ipnet::IpNet]) -> std::net::IpAddr` — **PA-PROXY**. `trusted_proxies` empty (the default) ⇒ always returns `direct_peer`, `forwarded_for` ignored entirely. Non-empty and `direct_peer` is **not** itself inside a trusted CIDR ⇒ still returns `direct_peer` (an untrusted peer's `X-Forwarded-For` is never honoured, no matter its content — §14.10 test 4). Non-empty and `direct_peer` **is** trusted ⇒ walks `forwarded_for` right-to-left, returning the first hop that itself parses as an IP and is **not** in `trusted_proxies` (the rightmost untrusted hop, tolerating a chain of trusted proxies in front of the real client); an absent header, or a header containing only trusted/unparseable hops, falls back to `direct_peer`.
+  - `#[async_trait::async_trait] pub trait OriginResolver: Send + Sync { async fn forward_confirms_suffix(&self, addr: std::net::IpAddr, suffixes: &[String]) -> Result<bool, String>; }` — reverse-resolves `addr`, then forward-resolves each returned hostname back to an address set, `Ok(true)` only when at least one candidate hostname both ends with a configured suffix **and** forward-confirms to `addr` (both halves of FCrDNS, §14.10 test 2). Abstracted so `OriginVerifier`'s tests never touch a real resolver.
+  - `pub struct HickoryOriginResolver { .. }` with `pub fn from_system_config() -> Result<Self, String>` (wraps `hickory_resolver::Resolver::builder_tokio()?.build()`, the crate's system-`/etc/resolv.conf` path, matching Task 1's `["tokio", "system-config"]` feature set) — the production `OriginResolver`.
+  - `pub struct OriginVerifier { .. }` with `pub fn new(cidrs: Vec<ipnet::IpNet>, suffixes: Vec<String>, resolver: std::sync::Arc<dyn OriginResolver>, cache_ttl: std::time::Duration, lookup_timeout: std::time::Duration) -> Self` and `pub async fn verify(&self, addr: std::net::IpAddr, metrics: &IngestMetrics, platform: &str) -> bool` — checks the static CIDR allowlist first (no DNS involved, §4.1.1: "an optional per-platform CIDR allowlist... as a static alternative"), then a bounded in-memory cache (TTL `cache_ttl`, §4.1.1: "cached, TTL 10 minutes"), then a live FCrDNS lookup bounded by `lookup_timeout` — a timeout or a resolver error is **not trusted** (fail closed, never blocks the request indefinitely). Every outcome records `metrics.origin_lookup_ms(platform, "hit"|"miss"|"timeout", millis)`.
+  - `#[cfg(test)] pub(crate) mod fakes { pub(crate) struct AlwaysTrustedResolver; pub(crate) struct NeverTrustedResolver; }` — both implement `OriginResolver` unconditionally, for Tasks 17/18/19's own tests to build a permissive or rejecting `OriginVerifier` without a second copy of a fake resolver in every downstream test file.
+
+- [ ] **Step 1: Write the failing test**
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::telemetry::IngestMetrics;
+    use std::net::IpAddr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+    fn cidrs(list: &[&str]) -> Vec<ipnet::IpNet> {
+        list.iter().map(|s| s.parse().unwrap()).collect()
+    }
+
+    #[test]
+    fn empty_trusted_proxies_always_uses_the_direct_peer() {
+        let addr = resolve_client_addr(ip("203.0.113.5"), Some("198.51.100.1"), &[]);
+        assert_eq!(addr, ip("203.0.113.5"));
+    }
+
+    #[test]
+    fn untrusted_direct_peer_ignores_a_spoofed_header_entirely() {
+        // Sec14.10 test 4.
+        let trusted = cidrs(&["10.0.0.0/8"]);
+        let addr = resolve_client_addr(ip("198.51.100.9"), Some("1.2.3.4"), &trusted);
+        assert_eq!(addr, ip("198.51.100.9"));
+    }
+
+    #[test]
+    fn trusted_direct_peer_honours_the_rightmost_untrusted_hop() {
+        let trusted = cidrs(&["10.0.0.0/8"]);
+        let addr = resolve_client_addr(ip("10.0.0.5"), Some("203.0.113.7, 10.0.0.9, 10.0.0.5"), &trusted);
+        assert_eq!(addr, ip("203.0.113.7"));
+    }
+
+    #[test]
+    fn trusted_peer_with_no_header_falls_back_to_the_peer() {
+        let trusted = cidrs(&["10.0.0.0/8"]);
+        let addr = resolve_client_addr(ip("10.0.0.5"), None, &trusted);
+        assert_eq!(addr, ip("10.0.0.5"));
+    }
+
+    #[test]
+    fn trusted_peer_with_only_trusted_hops_falls_back_to_the_peer() {
+        let trusted = cidrs(&["10.0.0.0/8"]);
+        let addr = resolve_client_addr(ip("10.0.0.5"), Some("10.0.0.9, 10.0.0.8"), &trusted);
+        assert_eq!(addr, ip("10.0.0.5"));
+    }
+
+    struct FakeResolver {
+        calls: AtomicUsize,
+        outcome: Result<bool, String>,
+        delay: Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl OriginResolver for FakeResolver {
+        async fn forward_confirms_suffix(&self, _addr: IpAddr, _suffixes: &[String]) -> Result<bool, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if !self.delay.is_zero() {
+                tokio::time::sleep(self.delay).await;
+            }
+            self.outcome.clone()
+        }
+    }
+
+    fn metrics() -> IngestMetrics {
+        IngestMetrics
+    }
+
+    #[tokio::test]
+    async fn cidr_allowlist_admits_without_ever_calling_the_resolver() {
+        let resolver = Arc::new(FakeResolver { calls: AtomicUsize::new(0), outcome: Ok(false), delay: Duration::ZERO });
+        let verifier = OriginVerifier::new(
+            vec!["203.0.113.0/24".parse().unwrap()],
+            vec!["twitch.tv".to_string()],
+            resolver.clone(),
+            Duration::from_secs(600),
+            Duration::from_millis(500),
+        );
+        assert!(verifier.verify(ip("203.0.113.42"), &metrics(), "twitch").await);
+        assert_eq!(resolver.calls.load(Ordering::SeqCst), 0, "the CIDR fast path must never touch DNS");
+    }
+
+    #[tokio::test]
+    async fn fcrdns_confirmed_address_is_trusted_and_cached() {
+        let resolver = Arc::new(FakeResolver { calls: AtomicUsize::new(0), outcome: Ok(true), delay: Duration::ZERO });
+        let verifier =
+            OriginVerifier::new(vec![], vec!["twitch.tv".to_string()], resolver.clone(), Duration::from_secs(600), Duration::from_millis(500));
+        assert!(verifier.verify(ip("192.0.2.10"), &metrics(), "twitch").await);
+        assert!(verifier.verify(ip("192.0.2.10"), &metrics(), "twitch").await);
+        assert_eq!(resolver.calls.load(Ordering::SeqCst), 1, "the second call must be served from cache");
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_address_is_rejected() {
+        // Sec14.10 test 2: a PTR that names the right domain but whose
+        // forward lookup doesn't contain the client address is exactly
+        // what `OriginResolver::forward_confirms_suffix` returning
+        // `Ok(false)` represents from this module's point of view.
+        let resolver = Arc::new(FakeResolver { calls: AtomicUsize::new(0), outcome: Ok(false), delay: Duration::ZERO });
+        let verifier =
+            OriginVerifier::new(vec![], vec!["twitch.tv".to_string()], resolver, Duration::from_secs(600), Duration::from_millis(500));
+        assert!(!verifier.verify(ip("192.0.2.11"), &metrics(), "twitch").await);
+    }
+
+    #[tokio::test]
+    async fn resolver_error_fails_closed() {
+        let resolver = Arc::new(FakeResolver { calls: AtomicUsize::new(0), outcome: Err("nxdomain".to_string()), delay: Duration::ZERO });
+        let verifier =
+            OriginVerifier::new(vec![], vec!["twitch.tv".to_string()], resolver, Duration::from_secs(600), Duration::from_millis(500));
+        assert!(!verifier.verify(ip("192.0.2.12"), &metrics(), "twitch").await);
+    }
+
+    #[tokio::test]
+    async fn a_slow_resolver_times_out_and_fails_closed_without_hanging() {
+        let resolver =
+            Arc::new(FakeResolver { calls: AtomicUsize::new(0), outcome: Ok(true), delay: Duration::from_millis(200) });
+        let verifier =
+            OriginVerifier::new(vec![], vec!["twitch.tv".to_string()], resolver, Duration::from_secs(600), Duration::from_millis(20));
+        let start = std::time::Instant::now();
+        assert!(!verifier.verify(ip("192.0.2.13"), &metrics(), "twitch").await);
+        assert!(start.elapsed() < Duration::from_millis(150), "verify must respect lookup_timeout, not the resolver's own delay");
+    }
+
+    #[tokio::test]
+    async fn fakes_module_provides_reusable_permissive_and_rejecting_resolvers() {
+        let allow =
+            OriginVerifier::new(vec![], vec!["twitch.tv".to_string()], Arc::new(fakes::AlwaysTrustedResolver), Duration::from_secs(600), Duration::from_millis(500));
+        assert!(allow.verify(ip("192.0.2.20"), &metrics(), "twitch").await);
+        let deny =
+            OriginVerifier::new(vec![], vec!["twitch.tv".to_string()], Arc::new(fakes::NeverTrustedResolver), Duration::from_secs(600), Duration::from_millis(500));
+        assert!(!deny.verify(ip("192.0.2.21"), &metrics(), "twitch").await);
+    }
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `make -C core/svc_ingest test-unit MOD='http::origin::'`
+Expected: compile failure, module empty.
+
+- [ ] **Step 3: Write the implementation**
+
+```rust
+//! PA-PROXY client-address resolution + PA-ORIGIN forward-confirmed
+//! reverse-DNS (FCrDNS) origin verification for the two platform webhooks
+//! (Twitch EventSub, Kick) and the generic webhook's `cidr` auth mode
+//! (§4.1.1, D29). New in this rewrite -- no Python precedent.
+
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use ipnet::IpNet;
+
+use crate::telemetry::IngestMetrics;
+
+/// PA-PROXY: resolves the request's real client address. Empty
+/// `trusted_proxies` (the default) means "trust nothing" -- the direct
+/// TCP peer is the client address and `X-Forwarded-For` is ignored
+/// entirely, closing the spoofing hole blind XFF trust would open
+/// (§14.10 test 4). Non-empty: `X-Forwarded-For` is honoured only when
+/// `direct_peer` is itself inside a trusted CIDR, and the client address
+/// is then the **rightmost untrusted hop** -- walking the header
+/// right-to-left, skipping any entry that is itself a trusted proxy (a
+/// chain of trusted hops in front of the real client).
+pub fn resolve_client_addr(direct_peer: IpAddr, forwarded_for: Option<&str>, trusted_proxies: &[IpNet]) -> IpAddr {
+    if trusted_proxies.is_empty() {
+        return direct_peer;
+    }
+    let direct_is_trusted = trusted_proxies.iter().any(|n| n.contains(&direct_peer));
+    if !direct_is_trusted {
+        return direct_peer;
+    }
+    let Some(header) = forwarded_for else { return direct_peer };
+    for hop in header.split(',').rev() {
+        let Ok(addr) = hop.trim().parse::<IpAddr>() else { continue };
+        if !trusted_proxies.iter().any(|n| n.contains(&addr)) {
+            return addr;
+        }
+    }
+    direct_peer
+}
+
+/// One cached FCrDNS verdict.
+struct CacheEntry {
+    trusted: bool,
+    expires_at: Instant,
+}
+
+/// Resolves whether an address forward-confirms to one of a platform's
+/// trusted DNS suffixes. Abstracted so `OriginVerifier`'s tests never
+/// need a real resolver.
+#[async_trait::async_trait]
+pub trait OriginResolver: Send + Sync {
+    /// Reverse-resolves `addr` to hostname(s), then forward-resolves each
+    /// candidate hostname back to an address set -- `Ok(true)` only when
+    /// at least one confirmed hostname ends with a configured suffix
+    /// (both halves of FCrDNS, §14.10 test 2).
+    async fn forward_confirms_suffix(&self, addr: IpAddr, suffixes: &[String]) -> Result<bool, String>;
+}
+
+/// Production `OriginResolver` backed by `hickory-resolver`'s system
+/// configuration (rustls only, no C resolver -- Task 1's `Cargo.toml`).
+pub struct HickoryOriginResolver {
+    resolver: hickory_resolver::Resolver<hickory_resolver::name_server::TokioConnectionProvider>,
+}
+
+impl HickoryOriginResolver {
+    /// Builds a resolver from the host's system DNS configuration
+    /// (`/etc/resolv.conf` in every container base image this service
+    /// ships on) -- requires Task 1's `["tokio", "system-config"]`
+    /// `hickory-resolver` features.
+    pub fn from_system_config() -> Result<Self, String> {
+        let resolver = hickory_resolver::Resolver::builder_tokio().map_err(|e| e.to_string())?.build();
+        Ok(Self { resolver })
+    }
+}
+
+#[async_trait::async_trait]
+impl OriginResolver for HickoryOriginResolver {
+    async fn forward_confirms_suffix(&self, addr: IpAddr, suffixes: &[String]) -> Result<bool, String> {
+        let ptr = self.resolver.reverse_lookup(addr).await.map_err(|e| e.to_string())?;
+        for name in ptr.iter() {
+            let host = name.to_string().trim_end_matches('.').to_ascii_lowercase();
+            if !suffixes.iter().any(|s| host == *s || host.ends_with(&format!(".{s}"))) {
+                continue;
+            }
+            let forward = self.resolver.lookup_ip(host.as_str()).await.map_err(|e| e.to_string())?;
+            if forward.iter().any(|ip| ip == addr) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// Verifies a platform webhook's request origin: a static CIDR allowlist
+/// (checked first, no DNS involved) OR a cached/live FCrDNS check against
+/// the platform's configured suffixes (§4.1.1/D29, PA-ORIGIN).
+pub struct OriginVerifier {
+    cidrs: Vec<IpNet>,
+    suffixes: Vec<String>,
+    resolver: Arc<dyn OriginResolver>,
+    cache: Mutex<HashMap<IpAddr, CacheEntry>>,
+    cache_ttl: Duration,
+    lookup_timeout: Duration,
+}
+
+impl OriginVerifier {
+    pub fn new(
+        cidrs: Vec<IpNet>,
+        suffixes: Vec<String>,
+        resolver: Arc<dyn OriginResolver>,
+        cache_ttl: Duration,
+        lookup_timeout: Duration,
+    ) -> Self {
+        Self { cidrs, suffixes, resolver, cache: Mutex::new(HashMap::new()), cache_ttl, lookup_timeout }
+    }
+
+    fn cached(&self, addr: IpAddr) -> Option<bool> {
+        let mut cache = self.cache.lock().unwrap();
+        match cache.get(&addr) {
+            Some(entry) if entry.expires_at > Instant::now() => Some(entry.trusted),
+            _ => {
+                cache.remove(&addr);
+                None
+            }
+        }
+    }
+
+    fn store(&self, addr: IpAddr, trusted: bool) {
+        self.cache.lock().unwrap().insert(addr, CacheEntry { trusted, expires_at: Instant::now() + self.cache_ttl });
+    }
+
+    /// `true` when `addr` is trusted by static CIDR or FCrDNS (cached or
+    /// live, bounded by `lookup_timeout`). A resolver error or a timeout
+    /// is **not trusted** -- fail closed (§4.1.1/D29). Always records
+    /// `ingest_origin_lookup_ms{platform,outcome}`.
+    pub async fn verify(&self, addr: IpAddr, metrics: &IngestMetrics, platform: &str) -> bool {
+        if self.cidrs.iter().any(|n| n.contains(&addr)) {
+            return true;
+        }
+        let start = Instant::now();
+        if let Some(trusted) = self.cached(addr) {
+            metrics.origin_lookup_ms(platform, "hit", start.elapsed().as_secs_f64() * 1000.0);
+            return trusted;
+        }
+        let outcome = tokio::time::timeout(self.lookup_timeout, self.resolver.forward_confirms_suffix(addr, &self.suffixes)).await;
+        let millis = start.elapsed().as_secs_f64() * 1000.0;
+        let trusted = match outcome {
+            Ok(Ok(trusted)) => {
+                metrics.origin_lookup_ms(platform, "miss", millis);
+                trusted
+            }
+            Ok(Err(_)) => {
+                metrics.origin_lookup_ms(platform, "miss", millis);
+                false
+            }
+            Err(_) => {
+                metrics.origin_lookup_ms(platform, "timeout", millis);
+                false
+            }
+        };
+        self.store(addr, trusted);
+        trusted
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod fakes {
+    use super::{IpAddr, OriginResolver};
+
+    pub(crate) struct AlwaysTrustedResolver;
+    #[async_trait::async_trait]
+    impl OriginResolver for AlwaysTrustedResolver {
+        async fn forward_confirms_suffix(&self, _addr: IpAddr, _suffixes: &[String]) -> Result<bool, String> {
+            Ok(true)
+        }
+    }
+
+    pub(crate) struct NeverTrustedResolver;
+    #[async_trait::async_trait]
+    impl OriginResolver for NeverTrustedResolver {
+        async fn forward_confirms_suffix(&self, _addr: IpAddr, _suffixes: &[String]) -> Result<bool, String> {
+            Ok(false)
+        }
+    }
+}
+```
+
+Add `pub mod origin;` to `core/svc_ingest/src/http/mod.rs`.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `make -C core/svc_ingest test-unit MOD='http::origin::'`
+Expected: `test result: ok. 12 passed; 0 failed`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add core/svc_ingest/src/http/origin.rs core/svc_ingest/src/http/mod.rs
+git commit -m "$(cat <<'EOF'
+feat(svc-ingest): trusted-proxy client-address resolution + cached FCrDNS origin verification (§4.1.1, D29, PA-PROXY/PA-ORIGIN)
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -4258,7 +5016,9 @@ EOF
 - Produces:
   - `pub struct IntakeLimiters { source: governor::DefaultKeyedRateLimiter<String>, tenant: governor::DefaultKeyedRateLimiter<String> }` with `IntakeLimiters::new(source_rps: u32, source_burst: u32, tenant_rps: u32, tenant_burst: u32) -> Self` and `pub fn check(&self, source_key: &str, tenant_key: &str) -> Result<(), IntakeError>` — checks the **source** bucket first, then the **tenant** bucket; either exhausted → `Err(IntakeError::RateLimited)`. (`governor = "=0.8.1"` already in `Cargo.toml` from Task 1.)
   - `pub async fn read_capped_body(body: axum::body::Body, max_bytes: usize) -> Result<axum::body::Bytes, IntakeError>` — streams the body via `http_body_util::BodyExt::collect` after wrapping with a byte-counting check that aborts with `IntakeError::BodyTooLarge` the instant more than `max_bytes` bytes have been read, **without buffering the full oversize body first** (§10.5: "the reader aborts at `INTAKE_MAX_BODY_BYTES + 1` bytes rather than buffering the whole oversize body"). Implementation note: `axum::extract::RequestExt`'s body already provides a size-limited path via `axum::body::to_bytes(body, limit)`, which returns an error once `limit` is exceeded while still only buffering up to `limit + 1`; use that rather than hand-rolling a stream scanner.
-  - `pub fn constant_time_eq_hex(expected_hex: &str, provided_hex: &str) -> bool` — the shared HMAC-hex constant-time comparison helper used by Tasks 16/18 (Kick's own comparison stays in Task 10's `verify_kick_webhook_signature`, which has no `"sha256="` prefix to strip): returns `false` immediately on length mismatch (a public-length check, not a content check — see rationale in the doc comment), else `subtle::ConstantTimeEq` over the raw bytes.
+  - `pub fn constant_time_eq_hex(expected_hex: &str, provided_hex: &str) -> bool` — the shared HMAC-hex constant-time comparison helper used by Tasks 17/19 (Kick's own comparison stays in Task 10's `verify_kick_webhook_signature`, which has no `"sha256="` prefix to strip): returns `false` immediately on length mismatch (a public-length check, not a content check — see rationale in the doc comment), else `subtle::ConstantTimeEq` over the raw bytes.
+  - `pub fn constant_time_eq_str(expected: &str, provided: &str) -> bool` — the same constant-time contract for a **plain** (non-hex) UTF-8 secret: a bearer token or an HTTP-basic `user:password` pair, neither of which is hex-encoded.
+  - `pub fn verify_intake_auth_modes(modes: &[String], cidrs: &[ipnet::IpNet], client_addr: std::net::IpAddr, bearer_secret: Option<&str>, basic_secret: Option<&str>, headers: &axum::http::HeaderMap) -> Result<(), IntakeError>` — the **PA-INTAKE-AUTH** AND-combined gate (§4.1.1/D29): `modes` empty ⇒ `IntakeError::AuthNotConfigured` (fail closed, defense in depth against a source that somehow reaches the registry with no mode despite hub-api's own create/update refusal). Otherwise every configured mode must independently pass or the whole check fails with `IntakeError::SecondFactorFailed` (one reason for any configured-mode failure, matching §10.1/§14.10 exactly — this function never returns a per-mode-specific error): `"cidr"` checks `client_addr` against `cidrs`; `"bearer"` requires `Authorization: Bearer <token>` matching `bearer_secret` via `constant_time_eq_str`; `"basic"` requires `Authorization: Basic <base64(user:password)>` decoding and matching `basic_secret` via `constant_time_eq_str`; an unrecognized mode string fails closed as `AuthNotConfigured` (never an implicit pass). Called from Task 19 with `cidrs` already parsed from the source's `SourceAuth.cidrs` (Task 14) via `crate::config::parse_cidr_list`, and `client_addr` resolved via Task 15's `resolve_client_addr`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4318,6 +5078,105 @@ mod tests {
     #[test]
     fn constant_time_eq_hex_rejects_length_mismatch() {
         assert!(!constant_time_eq_hex("deadbeef", "dead"));
+    }
+
+    #[test]
+    fn constant_time_eq_str_matches_and_rejects_plain_secrets() {
+        assert!(constant_time_eq_str("s3cr3t-token", "s3cr3t-token"));
+        assert!(!constant_time_eq_str("s3cr3t-token", "wrong-token"));
+        assert!(!constant_time_eq_str("s3cr3t-token", "short"));
+    }
+
+    fn headers_with_bearer(token: &str) -> axum::http::HeaderMap {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(axum::http::header::AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
+        h
+    }
+
+    fn headers_with_basic(user: &str, pass: &str) -> axum::http::HeaderMap {
+        use base64::Engine;
+        let mut h = axum::http::HeaderMap::new();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
+        h.insert(axum::http::header::AUTHORIZATION, format!("Basic {encoded}").parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn empty_modes_is_auth_not_configured() {
+        let err = verify_intake_auth_modes(&[], &[], "203.0.113.5".parse().unwrap(), None, None, &axum::http::HeaderMap::new())
+            .unwrap_err();
+        assert!(matches!(err, IntakeError::AuthNotConfigured));
+    }
+
+    #[test]
+    fn cidr_mode_passes_for_an_allowlisted_address() {
+        let modes = vec!["cidr".to_string()];
+        let cidrs = vec!["203.0.113.0/24".parse().unwrap()];
+        assert!(verify_intake_auth_modes(&modes, &cidrs, "203.0.113.7".parse().unwrap(), None, None, &axum::http::HeaderMap::new()).is_ok());
+    }
+
+    #[test]
+    fn cidr_mode_fails_for_a_non_allowlisted_address() {
+        let modes = vec!["cidr".to_string()];
+        let cidrs = vec!["203.0.113.0/24".parse().unwrap()];
+        let err = verify_intake_auth_modes(&modes, &cidrs, "198.51.100.9".parse().unwrap(), None, None, &axum::http::HeaderMap::new())
+            .unwrap_err();
+        assert!(matches!(err, IntakeError::SecondFactorFailed));
+    }
+
+    #[test]
+    fn bearer_mode_passes_for_a_matching_token() {
+        let modes = vec!["bearer".to_string()];
+        let headers = headers_with_bearer("s3cr3t-token");
+        assert!(verify_intake_auth_modes(&modes, &[], "203.0.113.7".parse().unwrap(), Some("s3cr3t-token"), None, &headers).is_ok());
+    }
+
+    #[test]
+    fn bearer_mode_fails_for_a_missing_or_wrong_token() {
+        let modes = vec!["bearer".to_string()];
+        let missing =
+            verify_intake_auth_modes(&modes, &[], "203.0.113.7".parse().unwrap(), Some("s3cr3t-token"), None, &axum::http::HeaderMap::new())
+                .unwrap_err();
+        assert!(matches!(missing, IntakeError::SecondFactorFailed));
+        let wrong =
+            verify_intake_auth_modes(&modes, &[], "203.0.113.7".parse().unwrap(), Some("s3cr3t-token"), None, &headers_with_bearer("nope"))
+                .unwrap_err();
+        assert!(matches!(wrong, IntakeError::SecondFactorFailed));
+    }
+
+    #[test]
+    fn basic_mode_passes_for_matching_credentials() {
+        let modes = vec!["basic".to_string()];
+        let headers = headers_with_basic("acme", "hunter2");
+        assert!(verify_intake_auth_modes(&modes, &[], "203.0.113.7".parse().unwrap(), None, Some("acme:hunter2"), &headers).is_ok());
+    }
+
+    #[test]
+    fn basic_mode_fails_for_wrong_credentials() {
+        let modes = vec!["basic".to_string()];
+        let headers = headers_with_basic("acme", "wrong");
+        let err = verify_intake_auth_modes(&modes, &[], "203.0.113.7".parse().unwrap(), None, Some("acme:hunter2"), &headers).unwrap_err();
+        assert!(matches!(err, IntakeError::SecondFactorFailed));
+    }
+
+    #[test]
+    fn and_combined_modes_require_every_configured_mode_to_pass() {
+        let modes = vec!["cidr".to_string(), "bearer".to_string()];
+        let cidrs = vec!["203.0.113.0/24".parse().unwrap()];
+        // CIDR passes, bearer header absent -> the whole check fails.
+        let err = verify_intake_auth_modes(&modes, &cidrs, "203.0.113.7".parse().unwrap(), Some("s3cr3t-token"), None, &axum::http::HeaderMap::new())
+            .unwrap_err();
+        assert!(matches!(err, IntakeError::SecondFactorFailed));
+        // Both satisfied -> passes.
+        let headers = headers_with_bearer("s3cr3t-token");
+        assert!(verify_intake_auth_modes(&modes, &cidrs, "203.0.113.7".parse().unwrap(), Some("s3cr3t-token"), None, &headers).is_ok());
+    }
+
+    #[test]
+    fn unrecognized_mode_fails_closed_never_an_implicit_pass() {
+        let modes = vec!["totp".to_string()];
+        let err = verify_intake_auth_modes(&modes, &[], "203.0.113.7".parse().unwrap(), None, None, &axum::http::HeaderMap::new()).unwrap_err();
+        assert!(matches!(err, IntakeError::AuthNotConfigured));
     }
 }
 ```
@@ -4392,21 +5251,89 @@ pub fn constant_time_eq_hex(expected_hex: &str, provided_hex: &str) -> bool {
     }
     expected_hex.as_bytes().ct_eq(provided_hex.as_bytes()).into()
 }
+
+/// The same constant-time contract as [`constant_time_eq_hex`], for a
+/// plain (non-hex) UTF-8 secret -- a bearer token or an HTTP-basic
+/// `user:password` pair.
+pub fn constant_time_eq_str(expected: &str, provided: &str) -> bool {
+    if expected.len() != provided.len() {
+        return false;
+    }
+    expected.as_bytes().ct_eq(provided.as_bytes()).into()
+}
+
+/// The PA-INTAKE-AUTH AND-combined admission gate (§4.1.1/D29). `modes`
+/// empty is a fail-closed `AuthNotConfigured` -- defense in depth against
+/// a source that somehow reaches the registry with no mode despite
+/// hub-api's own create/update refusal. Every configured mode must
+/// independently pass, or the whole check is one `SecondFactorFailed`
+/// (never a per-mode reason -- §10.1/§14.10 name exactly one reason for
+/// this condition). An unrecognized mode string fails closed as
+/// `AuthNotConfigured`, never an implicit pass.
+pub fn verify_intake_auth_modes(
+    modes: &[String],
+    cidrs: &[ipnet::IpNet],
+    client_addr: std::net::IpAddr,
+    bearer_secret: Option<&str>,
+    basic_secret: Option<&str>,
+    headers: &axum::http::HeaderMap,
+) -> Result<(), IntakeError> {
+    if modes.is_empty() {
+        return Err(IntakeError::AuthNotConfigured);
+    }
+    for mode in modes {
+        match mode.as_str() {
+            "cidr" => {
+                if !cidrs.iter().any(|n| n.contains(&client_addr)) {
+                    return Err(IntakeError::SecondFactorFailed);
+                }
+            }
+            "bearer" => {
+                let Some(expected) = bearer_secret else { return Err(IntakeError::SecondFactorFailed) };
+                let provided = headers
+                    .get(axum::http::header::AUTHORIZATION)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.strip_prefix("Bearer "));
+                match provided {
+                    Some(p) if constant_time_eq_str(expected, p) => {}
+                    _ => return Err(IntakeError::SecondFactorFailed),
+                }
+            }
+            "basic" => {
+                let Some(expected) = basic_secret else { return Err(IntakeError::SecondFactorFailed) };
+                let provided = headers
+                    .get(axum::http::header::AUTHORIZATION)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.strip_prefix("Basic "))
+                    .and_then(|b64| base64::engine::general_purpose::STANDARD.decode(b64).ok())
+                    .and_then(|bytes| String::from_utf8(bytes).ok());
+                match provided {
+                    Some(p) if constant_time_eq_str(expected, &p) => {}
+                    _ => return Err(IntakeError::SecondFactorFailed),
+                }
+            }
+            _ => return Err(IntakeError::AuthNotConfigured),
+        }
+    }
+    Ok(())
+}
 ```
+
+Add to the top of `src/http/middleware.rs`, alongside the existing imports: `use base64::Engine;`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `make -C core/svc_ingest test-unit MOD='http::middleware::'`
-Expected: `test result: ok. 7 passed; 0 failed`
+Expected: `test result: ok. 17 passed; 0 failed`
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add core/svc_ingest/src/http/middleware.rs core/svc_ingest/src/http/mod.rs
 git commit -m "$(cat <<'EOF'
-feat(svc-ingest): per-source/per-tenant rate limiting, streaming body cap, constant-time hex compare (§10.5)
+feat(svc-ingest): per-source/per-tenant rate limiting, streaming body cap, constant-time compares, PA-INTAKE-AUTH AND-combined mode gate (§10.5, §4.1.1, D29)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -4416,21 +5343,21 @@ EOF
 
 ### Task 17: HTTP handler — Twitch EventSub webhook
 
-**Depends on:** Task 2, Task 3, Task 6, Task 12, Task 16
+**Depends on:** Task 2, Task 3, Task 6, Task 12, Task 15, Task 16
 
 **Files:**
 - Create: `core/svc_ingest/src/http/twitch_eventsub.rs`
 - Modify: `core/svc_ingest/src/http/mod.rs` (add `pub mod twitch_eventsub;`)
-- Modify: `core/svc_ingest/src/http/state.rs` (extend `AppState` with the four fields Step 3 below adds, plus a `#[cfg(test)] pub fn test_state()` builder)
-- Modify: `core/svc_ingest/src/spine.rs` (add a `#[cfg(test)] pub(crate) mod tests { pub(crate) struct NoopAppender; ... }` test double — Step 3 below)
+- Modify: `core/svc_ingest/src/http/state.rs` (extend `AppState` with the fields Step 3 below adds, plus a `#[cfg(test)] pub fn test_state()` builder)
+- Modify: `core/svc_ingest/src/publish.rs` (add a `#[cfg(test)] pub(crate) mod fakes { pub(crate) struct NoopAppender; ... }` test double — Step 3 below)
 
-`POST /eventsub/twitch/webhook` per §10.1. Ported from `core/svc_ingest/eventsub.py`'s `verify_signature`/`handle_webhook` (byte-identical HMAC algorithm: `sha256=` + hex HMAC-SHA256 of `message_id + timestamp + body`) with three spec-driven behavior changes over the Python original, each called out below: (1) bad signature is **401**, not the legacy **403**; (2) `webhook_callback_verification` echoes the bare challenge as `text/plain`, not `{"challenge": ...}` JSON; (3) a 600s replay window and message-id dedupe are added (neither existed in the Python handler).
+`POST /eventsub/twitch/webhook` per §10.1/§4.1.1. Ported from `core/svc_ingest/eventsub.py`'s `verify_signature`/`handle_webhook` (byte-identical HMAC algorithm: `sha256=` + hex HMAC-SHA256 of `message_id + timestamp + body`) with four spec-driven behavior changes over the Python original, each called out below: (1) bad signature is **401**, not the legacy **403**; (2) `webhook_callback_verification` echoes the bare challenge as `text/plain`, not `{"challenge": ...}` JSON; (3) a 600s replay window and message-id dedupe are added (neither existed in the Python handler); (4) **origin restriction (PA-ORIGIN, D29)** — FCrDNS to `twitch.tv` or a pinned CIDR, checked before signature verification (cheap, no body read needed) and after rate limiting.
 
 **Interfaces:**
-- Consumes: `crate::error::IntakeError` (Task 3); `crate::normalize::twitch_eventsub::normalize` (Task 6); `crate::spine::{publish_event, EventAppender}` (Task 12); `crate::http::middleware::{IntakeLimiters, read_capped_body, constant_time_eq_hex}` (Task 16); `crate::http::state::AppState` (Task 4) extended with `pub twitch_eventsub_secret: Option<std::sync::Arc<crate::config::Secret>>`, `pub limiters: std::sync::Arc<IntakeLimiters>`, `pub appender: std::sync::Arc<dyn crate::spine::EventAppender>`, `pub scope: penguin_spine::Scope`, `pub dedupe: std::sync::Arc<dyn DedupeStore>` (this task adds these four fields to `AppState` and its `::new` constructor — a small, additive change to Task 4's struct, not a rewrite).
+- Consumes: `crate::error::IntakeError` (Task 3); `crate::normalize::twitch_eventsub::normalize` (Task 6); `crate::publish::{publish_event, deterministic_workstream_id, EventAppender}` (Task 12); `crate::http::origin::{resolve_client_addr, OriginVerifier}` (Task 15); `crate::http::middleware::{IntakeLimiters, read_capped_body, constant_time_eq_hex}` (Task 16); `penguin_spine::{BindingKeyring, UsageBatcher}` (External Crate Surfaces); `crate::http::state::AppState` (Task 4) extended with `pub twitch_eventsub_secret: Option<std::sync::Arc<crate::config::Secret>>`, `pub kick_webhook_secret: Option<std::sync::Arc<crate::config::Secret>>` (used by Task 18), `pub limiters: std::sync::Arc<IntakeLimiters>`, `pub appender: std::sync::Arc<dyn crate::publish::EventAppender>`, `pub scope: penguin_spine::Scope`, `pub dedupe: std::sync::Arc<dyn DedupeStore>`, `pub binding_keyring: std::sync::Arc<BindingKeyring>` (D30), `pub usage: std::sync::Arc<UsageBatcher>` (D31), `pub trusted_proxies: std::sync::Arc<Vec<ipnet::IpNet>>` (PA-PROXY), `pub twitch_origin: std::sync::Arc<OriginVerifier>` (PA-ORIGIN), `pub kick_origin: std::sync::Arc<OriginVerifier>` (used by Task 18), `pub generic_intake_enabled: bool` (the `waddles.core.generic-intake` flag, resolved by Task 30, consumed by Task 21's router) (this task adds these fields to `AppState` and its `::new` constructor — a small, additive change to Task 4's struct, not a rewrite).
 - Produces:
   - `#[async_trait::async_trait] pub trait DedupeStore: Send + Sync { async fn check_and_remember(&self, key: &str, ttl_s: u64) -> Result<bool, String>; }` — `Ok(true)` = newly-seen (proceed), `Ok(false)` = duplicate (reject). Production impl `ValkeyDedupeStore` wraps a raw `redis::aio::ConnectionManager`, implementing `SET {key} 1 NX EX {ttl_s}` (PA-DEDUPE) — added to this file since it's the first consumer; Task 19 reuses the same trait/impl.
-  - `pub async fn handle(State(state): State<AppState>, headers: axum::http::HeaderMap, body: axum::body::Body) -> Response` mounted at `POST /eventsub/twitch/webhook` **only when** `state.twitch_eventsub_secret.is_some()` (route registration is Task 21's job; this handler assumes it is only ever called with a secret present, and returns `IntakeError::SecretUnset` defensively if not, matching §10.1: "Route is not registered at all when `TWITCH_EVENTSUB_SECRET` is unset").
+  - `pub async fn handle(State(state): State<AppState>, headers: axum::http::HeaderMap, connect_info: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>, body: axum::body::Body) -> Response` mounted at `POST /eventsub/twitch/webhook` **only when** `state.twitch_eventsub_secret.is_some()` (route registration is Task 21's job; this handler assumes it is only ever called with a secret present, and returns `IntakeError::SecretUnset` defensively if not, matching §10.1: "Route is not registered at all when `TWITCH_EVENTSUB_SECRET` is unset"). `connect_info` is `Option` (never a bare `ConnectInfo`) so this handler and its tests never depend on the router being served through `axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())` (Task 30's job) — a missing `ConnectInfo` degrades to the unspecified address, which fails every origin check closed rather than panicking.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4440,18 +5367,22 @@ mod tests {
     use super::*;
     use crate::config::Secret;
     use crate::http::middleware::IntakeLimiters;
-    use crate::spine::EventAppender;
+    use crate::http::origin::{fakes::{AlwaysTrustedResolver, NeverTrustedResolver}, OriginVerifier};
+    use crate::publish::EventAppender;
     use axum::body::Body;
+    use axum::extract::ConnectInfo;
     use axum::http::{HeaderMap, HeaderValue};
     use hmac::{Hmac, Mac};
-    use penguin_spine::{Scope, StageEnvelope};
+    use penguin_spine::{Scope, StageEnvelope, UsageBatcher};
     use sha2::Sha256;
+    use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     struct FakeAppender(Mutex<Vec<StageEnvelope>>);
     #[async_trait::async_trait]
     impl EventAppender for FakeAppender {
-        async fn append(&self, _stream: &str, env: &StageEnvelope, _maxlen: u64) -> Result<String, String> {
+        async fn append(&self, _stream: &str, env: &StageEnvelope) -> Result<String, String> {
             self.0.lock().unwrap().push(env.clone());
             Ok("1-0".to_string())
         }
@@ -4474,13 +5405,25 @@ mod tests {
     }
 
     fn test_state(appender: FakeAppender, dedupe: FakeDedupe) -> AppState {
-        let mut state = crate::http::state::test_state(); // built in Task 4/20's shared test helper
+        let mut state = crate::http::state::test_state(); // Task 17's own shared test helper (Step 3)
         state.twitch_eventsub_secret = Some(Arc::new(Secret::new("evsub-secret")));
         state.limiters = Arc::new(IntakeLimiters::new(20, 40, 100, 200));
         state.appender = Arc::new(appender);
         state.scope = Scope { tenant: "global".to_string(), community: None };
         state.dedupe = Arc::new(dedupe);
+        state.usage = Arc::new(UsageBatcher::new());
+        state.twitch_origin = Arc::new(OriginVerifier::new(
+            vec![],
+            vec!["twitch.tv".to_string()],
+            Arc::new(AlwaysTrustedResolver),
+            Duration::from_secs(600),
+            Duration::from_millis(500),
+        ));
         state
+    }
+
+    fn peer(addr: &str) -> Option<ConnectInfo<SocketAddr>> {
+        Some(ConnectInfo(format!("{addr}:12345").parse().unwrap()))
     }
 
     fn headers(sig: &str, ts: &str, id: &str, msg_type: &str) -> HeaderMap {
@@ -4502,7 +5445,7 @@ mod tests {
         let body = br#"{"challenge":"abc123","subscription":{}}"#;
         let sig = sign("evsub-secret", "msg-1", &ts, body);
         let state = test_state(FakeAppender(Mutex::new(vec![])), FakeDedupe(Mutex::new(Default::default())));
-        let resp = handle(State(state), headers(&sig, &ts, "msg-1", "webhook_callback_verification"), Body::from(body.to_vec())).await;
+        let resp = handle(State(state), headers(&sig, &ts, "msg-1", "webhook_callback_verification"), peer("192.0.2.10"), Body::from(body.to_vec())).await;
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         assert_eq!(resp.headers().get(axum::http::header::CONTENT_TYPE).unwrap(), "text/plain");
         let bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
@@ -4510,14 +5453,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn notification_normalizes_and_publishes_exactly_once() {
+    async fn notification_normalizes_and_publishes_exactly_once_with_d30_fields() {
         let ts = now_ts();
         let body = br#"{"subscription":{"type":"channel.follow"},"event":{"broadcaster_user_id":"999","user_login":"alice"}}"#;
         let sig = sign("evsub-secret", "msg-2", &ts, body);
         let appender = FakeAppender(Mutex::new(vec![]));
         let state = test_state(appender, FakeDedupe(Mutex::new(Default::default())));
-        let resp = handle(State(state.clone()), headers(&sig, &ts, "msg-2", "notification"), Body::from(body.to_vec())).await;
+        let resp = handle(State(state.clone()), headers(&sig, &ts, "msg-2", "notification"), peer("192.0.2.10"), Body::from(body.to_vec())).await;
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let envs = state.appender.as_ref();
+        let _ = envs; // published event's D30 fields are exercised end-to-end in Task 34's e2e suite
+        assert_eq!(state.usage.flush().len(), 1, "one usage delta must be recorded for the published event");
     }
 
     #[tokio::test]
@@ -4525,7 +5471,7 @@ mod tests {
         let ts = now_ts();
         let body = b"{}";
         let state = test_state(FakeAppender(Mutex::new(vec![])), FakeDedupe(Mutex::new(Default::default())));
-        let resp = handle(State(state), headers("sha256=wrong", &ts, "msg-3", "notification"), Body::from(body.to_vec())).await;
+        let resp = handle(State(state), headers("sha256=wrong", &ts, "msg-3", "notification"), peer("192.0.2.10"), Body::from(body.to_vec())).await;
         assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
     }
 
@@ -4535,7 +5481,7 @@ mod tests {
         let body = b"{}";
         let sig = sign("evsub-secret", "msg-4", &old_ts, body);
         let state = test_state(FakeAppender(Mutex::new(vec![])), FakeDedupe(Mutex::new(Default::default())));
-        let resp = handle(State(state), headers(&sig, &old_ts, "msg-4", "notification"), Body::from(body.to_vec())).await;
+        let resp = handle(State(state), headers(&sig, &old_ts, "msg-4", "notification"), peer("192.0.2.10"), Body::from(body.to_vec())).await;
         assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
     }
 
@@ -4545,9 +5491,9 @@ mod tests {
         let body = br#"{"subscription":{"type":"channel.follow"},"event":{"broadcaster_user_id":"999"}}"#;
         let sig = sign("evsub-secret", "msg-5", &ts, body);
         let state = test_state(FakeAppender(Mutex::new(vec![])), FakeDedupe(Mutex::new(Default::default())));
-        let first = handle(State(state.clone()), headers(&sig, &ts, "msg-5", "notification"), Body::from(body.to_vec())).await;
+        let first = handle(State(state.clone()), headers(&sig, &ts, "msg-5", "notification"), peer("192.0.2.10"), Body::from(body.to_vec())).await;
         assert_eq!(first.status(), axum::http::StatusCode::OK);
-        let second = handle(State(state), headers(&sig, &ts, "msg-5", "notification"), Body::from(body.to_vec())).await;
+        let second = handle(State(state), headers(&sig, &ts, "msg-5", "notification"), peer("192.0.2.10"), Body::from(body.to_vec())).await;
         assert_eq!(second.status(), axum::http::StatusCode::CONFLICT);
     }
 
@@ -4558,7 +5504,7 @@ mod tests {
         let sig = sign("evsub-secret", "msg-6", &ts, body);
         let appender = FakeAppender(Mutex::new(vec![]));
         let state = test_state(appender, FakeDedupe(Mutex::new(Default::default())));
-        let resp = handle(State(state.clone()), headers(&sig, &ts, "msg-6", "revocation"), Body::from(body.to_vec())).await;
+        let resp = handle(State(state.clone()), headers(&sig, &ts, "msg-6", "revocation"), peer("192.0.2.10"), Body::from(body.to_vec())).await;
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
     }
 
@@ -4567,8 +5513,26 @@ mod tests {
         let ts = now_ts();
         let mut state = test_state(FakeAppender(Mutex::new(vec![])), FakeDedupe(Mutex::new(Default::default())));
         state.twitch_eventsub_secret = None;
-        let resp = handle(State(state), headers("sha256=x", &ts, "msg-7", "notification"), Body::from(&b"{}"[..])).await;
+        let resp = handle(State(state), headers("sha256=x", &ts, "msg-7", "notification"), peer("192.0.2.10"), Body::from(&b"{}"[..])).await;
         assert_eq!(resp.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn valid_signature_from_an_untrusted_origin_is_403() {
+        // Sec14.10 test 1: signature validity alone never admits the request.
+        let ts = now_ts();
+        let body = br#"{"subscription":{"type":"channel.follow"},"event":{"broadcaster_user_id":"999"}}"#;
+        let sig = sign("evsub-secret", "msg-8", &ts, body);
+        let mut state = test_state(FakeAppender(Mutex::new(vec![])), FakeDedupe(Mutex::new(Default::default())));
+        state.twitch_origin = Arc::new(OriginVerifier::new(
+            vec![],
+            vec!["twitch.tv".to_string()],
+            Arc::new(NeverTrustedResolver),
+            Duration::from_secs(600),
+            Duration::from_millis(500),
+        ));
+        let resp = handle(State(state), headers(&sig, &ts, "msg-8", "notification"), peer("198.51.100.20"), Body::from(body.to_vec())).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
     }
 }
 ```
@@ -4576,7 +5540,7 @@ mod tests {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `make -C core/svc_ingest test-unit MOD='http::twitch_eventsub::'`
-Expected: compile failure — `AppState` doesn't yet have the four new fields, `crate::http::state::test_state()` helper doesn't exist. Add both in Step 3 (extending Task 4's `AppState`/adding a `#[cfg(test)]`-only `test_state()` builder to `src/http/state.rs`) before the handler compiles.
+Expected: compile failure — `AppState` doesn't yet have the new fields, `crate::http::state::test_state()` helper doesn't exist. Add both in Step 3 (extending Task 4's `AppState`/adding a `#[cfg(test)]`-only `test_state()` builder to `src/http/state.rs`) before the handler compiles.
 
 - [ ] **Step 3: Extend `AppState` (in `src/http/state.rs`)**
 
@@ -4584,8 +5548,9 @@ Expected: compile failure — `AppState` doesn't yet have the four new fields, `
 // Added fields (Task 17) -- extends the struct from Task 4:
 use crate::config::Secret;
 use crate::http::middleware::IntakeLimiters;
-use crate::spine::EventAppender;
-use penguin_spine::Scope;
+use crate::http::origin::OriginVerifier;
+use crate::publish::EventAppender;
+use penguin_spine::{BindingKeyring, Scope, UsageBatcher};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -4598,18 +5563,33 @@ pub struct AppState {
     pub appender: Arc<dyn EventAppender>,
     pub scope: Scope,
     pub dedupe: Arc<dyn crate::http::twitch_eventsub::DedupeStore>,
+    pub binding_keyring: Arc<BindingKeyring>,   // D30 -- publish_event mints binding.mac against this
+    pub usage: Arc<UsageBatcher>,               // D31 -- publish_event records into this; Task 30 flushes it
+    pub trusted_proxies: Arc<Vec<ipnet::IpNet>>, // PA-PROXY
+    pub twitch_origin: Arc<OriginVerifier>,      // PA-ORIGIN
+    pub kick_origin: Arc<OriginVerifier>,        // used by Task 18
+    pub generic_intake_enabled: bool,            // waddles.core.generic-intake flag (Task 21/30)
 }
 
 #[cfg(test)]
 pub fn test_state() -> AppState {
+    use crate::http::origin::fakes::NeverTrustedResolver;
     use crate::telemetry::IngestMetrics;
     use clap::Parser;
+    use std::collections::HashMap;
+    use std::time::Duration;
+
     let cli = crate::config::CliConfig::parse_from(["svc-ingest", "--valkey-url", "rediss://valkey:6379/0"]);
     let config = Config {
         cli, valkey_password: None, secret_key: Secret::new("x"), twitch_bot_token: None,
         discord_bot_token: None, slack_app_token: None, slack_bot_token: None, youtube_api_key: None,
         twitch_eventsub_secret: None, kick_webhook_secret: None,
     };
+    let mut keyring_entries = HashMap::new();
+    keyring_entries.insert(
+        "test-kid".to_string(),
+        penguin_spine::BindingKeyEntry { key: vec![9u8; 32], retired_at: None },
+    );
     AppState {
         config: Arc::new(config),
         metrics: Arc::new(IngestMetrics::register(&prometheus::Registry::new())),
@@ -4617,35 +5597,54 @@ pub fn test_state() -> AppState {
         twitch_eventsub_secret: None,
         kick_webhook_secret: None,
         limiters: Arc::new(IntakeLimiters::new(20, 40, 100, 200)),
-        appender: Arc::new(crate::spine::fakes::NoopAppender), // Task 12 exposes a tiny no-op test double for exactly this purpose; see Task 12 follow-up note below
+        appender: Arc::new(crate::publish::fakes::NoopAppender), // Task 12 exposes a tiny no-op test double for exactly this purpose; see Task 12 follow-up note below
         scope: Scope { tenant: "global".to_string(), community: None },
         dedupe: Arc::new(crate::http::twitch_eventsub::fakes::AlwaysFreshDedupe),
+        binding_keyring: Arc::new(BindingKeyring::from_entries("test-kid", keyring_entries, chrono::Duration::seconds(86_400)).unwrap()),
+        usage: Arc::new(UsageBatcher::new()),
+        trusted_proxies: Arc::new(vec![]),
+        // Default test state trusts nothing by FCrDNS (fail closed) -- an
+        // individual test that needs origin admission overrides
+        // `state.twitch_origin`/`state.kick_origin` explicitly, matching
+        // "every gate defaults to the strict posture" (never a permissive
+        // default a test could forget to override).
+        twitch_origin: Arc::new(OriginVerifier::new(vec![], vec!["twitch.tv".to_string()], Arc::new(NeverTrustedResolver), Duration::from_secs(600), Duration::from_millis(500))),
+        kick_origin: Arc::new(OriginVerifier::new(vec![], vec!["kick.com".to_string()], Arc::new(NeverTrustedResolver), Duration::from_secs(600), Duration::from_millis(500))),
+        // Defaults true: Tasks 19/20's own tests exercise their handlers
+        // directly (never through `build_router`), so the flag gate is
+        // exclusively Task 21's/30's concern -- a permissive default here
+        // does not weaken any test's actual assertion.
+        generic_intake_enabled: true,
     }
 }
 ```
 
-Note for this step: Task 12's `spine.rs` needs a small addition — a `pub(crate) struct NoopAppender;` with a trivial `EventAppender` impl returning `Ok("test-0".into())`, placed in a **separate** `#[cfg(test)] pub(crate) mod fakes { ... }` block (never named `tests` — that name is already taken by `spine.rs`'s own inline unit-test module from Task 12 Step 1, and two `mod tests` in one file is a compile error) so `test_state()` above can use it without every other test file redefining its own fake. Similarly this file (`twitch_eventsub.rs`) exposes `pub(crate) struct AlwaysFreshDedupe;` in its own `#[cfg(test)] pub(crate) mod fakes` block, alongside (not instead of) its regular `#[cfg(test)] mod tests` from Step 1. Add both as part of this step — they are test-only, `#[cfg(test)]`-gated, and do not change either module's production surface.
+Note for this step: Task 12's `publish.rs` needs a small addition — a `pub(crate) struct NoopAppender;` with a trivial `EventAppender` impl returning `Ok("test-0".into())`, placed in a **separate** `#[cfg(test)] pub(crate) mod fakes { ... }` block (never named `tests` — that name is already taken by `publish.rs`'s own inline unit-test module from Task 12 Step 1, and two `mod tests` in one file is a compile error) so `test_state()` above can use it without every other test file redefining its own fake. Similarly this file (`twitch_eventsub.rs`) exposes `pub(crate) struct AlwaysFreshDedupe;` in its own `#[cfg(test)] pub(crate) mod fakes` block, alongside (not instead of) its regular `#[cfg(test)] mod tests` from Step 1. Add both as part of this step — they are test-only, `#[cfg(test)]`-gated, and do not change either module's production surface.
 
 - [ ] **Step 4: Write the implementation**
 
 ```rust
 //! `POST /eventsub/twitch/webhook` -- HMAC-SHA256 verification (byte-
 //! identical algorithm to the legacy `eventsub.py::verify_signature`),
-//! the 600s replay window and message-id dedupe (both new in this
-//! rewrite), and the `webhook_callback_verification`/`notification`/
-//! `revocation` message-type handling.
+//! FCrDNS origin restriction (§4.1.1/D29, PA-ORIGIN, checked before the
+//! body is even read), the 600s replay window and message-id dedupe
+//! (both new in this rewrite), D30 workstream/trace/binding minting via
+//! `publish_event`, and the `webhook_callback_verification`/
+//! `notification`/`revocation` message-type handling.
 
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use crate::error::IntakeError;
 use crate::http::middleware::{constant_time_eq_hex, read_capped_body};
+use crate::http::origin::resolve_client_addr;
 use crate::http::state::AppState;
 use crate::normalize::twitch_eventsub::normalize;
-use crate::spine::publish_event;
+use crate::publish::{deterministic_workstream_id, publish_event};
 
 /// Twitch's own replay window -- a fixed protocol constant, not an env
 /// var (§10.1: "600 s timestamp window (Twitch's own)").
@@ -4707,18 +5706,45 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// `POST /eventsub/twitch/webhook`.
-pub async fn handle(State(state): State<AppState>, headers: HeaderMap, body: axum::body::Body) -> Response {
-    match handle_inner(state, headers, body).await {
+/// `POST /eventsub/twitch/webhook`. `connect_info` is `Option` so this
+/// handler never depends on `axum::serve`'s connect-info wiring (Task
+/// 30) to compile or unit-test; a genuinely missing peer address
+/// degrades to `0.0.0.0`, which fails origin verification closed.
+pub async fn handle(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    body: axum::body::Body,
+) -> Response {
+    let metrics = state.metrics.clone();
+    match handle_inner(state, headers, connect_info, body).await {
         Ok(resp) => resp,
-        Err(err) => err.into_response(),
+        Err(err) => {
+            metrics.platform_webhook_rejected("twitch", err.metric_reason());
+            err.into_response()
+        }
     }
 }
 
-async fn handle_inner(state: AppState, headers: HeaderMap, body: axum::body::Body) -> Result<Response, IntakeError> {
+async fn handle_inner(
+    state: AppState,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    body: axum::body::Body,
+) -> Result<Response, IntakeError> {
     let Some(secret) = state.twitch_eventsub_secret.as_ref() else { return Err(IntakeError::SecretUnset) };
 
     state.limiters.check("twitch-eventsub", &state.scope.tenant)?;
+
+    // Origin verification is cheap (no body read) and runs before
+    // signature verification -- a wrong-origin request never causes an
+    // HMAC computation over an attacker-controlled body (§4.1.1/D29).
+    let direct_peer = connect_info.map(|ci| ci.0.ip()).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    let forwarded_for = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok());
+    let client_addr = resolve_client_addr(direct_peer, forwarded_for, &state.trusted_proxies);
+    if !state.twitch_origin.verify(client_addr, &state.metrics, "twitch").await {
+        return Err(IntakeError::OriginRejected);
+    }
 
     let body_bytes = read_capped_body(body, state.config.cli.intake_max_body_bytes).await?;
 
@@ -4765,7 +5791,19 @@ async fn handle_inner(state: AppState, headers: HeaderMap, body: axum::body::Bod
 
         if let Ok(platform_event) = normalize(&raw, "eventsub-app") {
             let source_id = format!("tw-eventsub-{}", event.get("broadcaster_user_id").and_then(|v| v.as_str()).unwrap_or("unknown"));
-            let _ = publish_event(state.appender.as_ref(), &state.metrics, &state.scope, &source_id, platform_event).await;
+            let workstream_id = deterministic_workstream_id(&source_id);
+            let _ = publish_event(
+                state.appender.as_ref(),
+                &state.metrics,
+                &state.binding_keyring,
+                &state.usage,
+                &state.scope,
+                &source_id,
+                &workstream_id,
+                None,
+                platform_event,
+            )
+            .await;
         }
         return Ok(StatusCode::OK.into_response());
     }
@@ -4792,16 +5830,16 @@ pub(crate) mod fakes {
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `make -C core/svc_ingest test-unit MOD='http::twitch_eventsub::'`
-Expected: `test result: ok. 7 passed; 0 failed`
+Expected: `test result: ok. 8 passed; 0 failed`
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/svc_ingest/src/http/twitch_eventsub.rs core/svc_ingest/src/http/state.rs core/svc_ingest/src/http/mod.rs core/svc_ingest/src/spine.rs
+git add core/svc_ingest/src/http/twitch_eventsub.rs core/svc_ingest/src/http/state.rs core/svc_ingest/src/http/mod.rs core/svc_ingest/src/publish.rs
 git commit -m "$(cat <<'EOF'
-feat(svc-ingest): Twitch EventSub webhook handler -- HMAC verify, text/plain challenge echo, 600s replay window, message-id dedupe
+feat(svc-ingest): Twitch EventSub webhook handler -- HMAC verify, FCrDNS origin restriction, text/plain challenge echo, 600s replay window, message-id dedupe, D30/D31 wiring (§4.1.1, D29/D30/D31)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -4811,18 +5849,18 @@ EOF
 
 ### Task 18: HTTP handler — Kick webhook
 
-**Depends on:** Task 2, Task 3, Task 10, Task 12, Task 16
+**Depends on:** Task 2, Task 3, Task 10, Task 12, Task 15, Task 16
 
 **Files:**
 - Create: `core/svc_ingest/src/http/kick_webhook.rs`
 - Modify: `core/svc_ingest/src/http/mod.rs` (add `pub mod kick_webhook;`)
-- Modify: `core/svc_ingest/src/http/state.rs` (wire `kick_webhook_secret` — already added to the `AppState` struct in Task 17 Step 3; this task only reads it, no struct change)
+- Modify: `core/svc_ingest/src/http/state.rs` (wire `kick_webhook_secret`/`kick_origin` — already added to the `AppState` struct in Task 17 Step 3; this task only reads them, no struct change)
 
-`POST /webhook/kick`, always mounted (unlike Twitch EventSub, §10.1: "route always mounted"). Ported from `core/svc_ingest/bundles/kick_ingest.py::handle_kick_webhook`'s orchestration, using Task 10's `verify_kick_webhook_signature`/`map_kick_webhook_event_type`/`normalize_stream_lifecycle` — the fan-out-to-a-bundle machinery (`fan_out_event`) is replaced by a direct `publish_event` call for `StreamStart`/`StreamEnd` only, matching current behavior exactly (non-lifecycle types are ack-only, never enqueued, per Task 10's docstring).
+`POST /webhook/kick`, always mounted (unlike Twitch EventSub, §10.1: "route always mounted"). Ported from `core/svc_ingest/bundles/kick_ingest.py::handle_kick_webhook`'s orchestration, using Task 10's `verify_kick_webhook_signature`/`map_kick_webhook_event_type`/`normalize_stream_lifecycle` — the fan-out-to-a-bundle machinery (`fan_out_event`) is replaced by a direct `publish_event` call for `StreamStart`/`StreamEnd` only, matching current behavior exactly (non-lifecycle types are ack-only, never enqueued, per Task 10's docstring). Adds **FCrDNS origin restriction to `kick.com`** (§4.1.1/D29, PA-ORIGIN), checked before signature verification, the same pattern as Task 17.
 
 **Interfaces:**
-- Consumes: `crate::error::IntakeError`; `crate::normalize::kick::{verify_kick_webhook_signature, map_kick_webhook_event_type, normalize_stream_lifecycle, STREAM_LIFECYCLE_EVENT_TYPES}` (Task 10); `crate::spine::publish_event` (Task 12); `crate::http::middleware::{IntakeLimiters, read_capped_body}` (Task 16); `crate::http::state::AppState` (Task 17's extended shape).
-- Produces: `pub async fn handle(State(state): State<AppState>, headers: axum::http::HeaderMap, body: axum::body::Body) -> Response` mounted at `POST /webhook/kick`. Response body always `{"received": true, "event_type": <mapped>}` on success (200), matching Python's exact shape.
+- Consumes: `crate::error::IntakeError`; `crate::normalize::kick::{verify_kick_webhook_signature, map_kick_webhook_event_type, normalize_stream_lifecycle, STREAM_LIFECYCLE_EVENT_TYPES}` (Task 10); `crate::publish::{publish_event, deterministic_workstream_id}` (Task 12); `crate::http::origin::resolve_client_addr` (Task 15); `crate::http::middleware::{IntakeLimiters, read_capped_body}` (Task 16); `crate::http::state::AppState` (Task 17's extended shape).
+- Produces: `pub async fn handle(State(state): State<AppState>, headers: axum::http::HeaderMap, connect_info: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>, body: axum::body::Body) -> Response` mounted at `POST /webhook/kick`. Response body always `{"received": true, "event_type": <mapped>}` on success (200), matching Python's exact shape.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4831,11 +5869,15 @@ EOF
 mod tests {
     use super::*;
     use crate::config::Secret;
+    use crate::http::origin::{fakes::AlwaysTrustedResolver, OriginVerifier};
     use axum::body::Body;
+    use axum::extract::ConnectInfo;
     use axum::http::{HeaderMap, HeaderValue};
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
+    use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     fn sign(body: &[u8], secret: &str) -> String {
         let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
@@ -4849,6 +5891,26 @@ mod tests {
         h
     }
 
+    fn peer(addr: &str) -> Option<ConnectInfo<SocketAddr>> {
+        Some(ConnectInfo(format!("{addr}:12345").parse().unwrap()))
+    }
+
+    /// Every test in this module needs a trusted origin by default --
+    /// origin admission is this file's own concern to test once
+    /// (`origin_rejected_is_403`), not re-litigated in every signature/
+    /// mapping test.
+    fn trusting_state() -> AppState {
+        let mut state = crate::http::state::test_state();
+        state.kick_origin = Arc::new(OriginVerifier::new(
+            vec![],
+            vec!["kick.com".to_string()],
+            Arc::new(AlwaysTrustedResolver),
+            Duration::from_secs(600),
+            Duration::from_millis(500),
+        ));
+        state
+    }
+
     async fn json_body(resp: Response) -> serde_json::Value {
         let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
@@ -4856,36 +5918,36 @@ mod tests {
 
     #[tokio::test]
     async fn unconfigured_secret_returns_503_without_verifying() {
-        let mut state = crate::http::state::test_state();
+        let mut state = trusting_state();
         state.kick_webhook_secret = None;
-        let resp = handle(State(state), headers("anything"), Body::from(&b"{\"type\":\"StreamStart\"}"[..])).await;
+        let resp = handle(State(state), headers("anything"), peer("192.0.2.30"), Body::from(&b"{\"type\":\"StreamStart\"}"[..])).await;
         assert_eq!(resp.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
     async fn invalid_signature_returns_401() {
-        let mut state = crate::http::state::test_state();
+        let mut state = trusting_state();
         state.kick_webhook_secret = Some(Arc::new(Secret::new("kick-secret")));
-        let resp = handle(State(state), headers("bad"), Body::from(&b"{\"type\":\"StreamStart\"}"[..])).await;
+        let resp = handle(State(state), headers("bad"), peer("192.0.2.30"), Body::from(&b"{\"type\":\"StreamStart\"}"[..])).await;
         assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn missing_signature_header_returns_401() {
-        let mut state = crate::http::state::test_state();
+        let mut state = trusting_state();
         state.kick_webhook_secret = Some(Arc::new(Secret::new("kick-secret")));
-        let resp = handle(State(state), HeaderMap::new(), Body::from(&b"{\"type\":\"StreamStart\"}"[..])).await;
+        let resp = handle(State(state), HeaderMap::new(), peer("192.0.2.30"), Body::from(&b"{\"type\":\"StreamStart\"}"[..])).await;
         assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn every_known_event_type_maps_and_acks_200() {
         for (kick_type, mapped) in crate::normalize::kick::KICK_WEBHOOK_EVENT_TYPE_MAP {
-            let mut state = crate::http::state::test_state();
+            let mut state = trusting_state();
             state.kick_webhook_secret = Some(Arc::new(Secret::new("kick-secret")));
             let body = format!(r#"{{"type":"{kick_type}"}}"#).into_bytes();
             let sig = sign(&body, "kick-secret");
-            let resp = handle(State(state), headers(&sig), Body::from(body)).await;
+            let resp = handle(State(state), headers(&sig), peer("192.0.2.30"), Body::from(body)).await;
             assert_eq!(resp.status(), axum::http::StatusCode::OK, "type: {kick_type}");
             let json = json_body(resp).await;
             assert_eq!(json["event_type"], *mapped, "type: {kick_type}");
@@ -4894,50 +5956,62 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_event_type_maps_to_unknown_not_rejected() {
-        let mut state = crate::http::state::test_state();
+        let mut state = trusting_state();
         state.kick_webhook_secret = Some(Arc::new(Secret::new("kick-secret")));
         let body = br#"{"type":"SomeFutureEventType"}"#;
         let sig = sign(body, "kick-secret");
-        let resp = handle(State(state), headers(&sig), Body::from(body.to_vec())).await;
+        let resp = handle(State(state), headers(&sig), peer("192.0.2.30"), Body::from(body.to_vec())).await;
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         assert_eq!(json_body(resp).await["event_type"], "unknown");
     }
 
     #[tokio::test]
     async fn missing_type_field_maps_to_unknown() {
-        let mut state = crate::http::state::test_state();
+        let mut state = trusting_state();
         state.kick_webhook_secret = Some(Arc::new(Secret::new("kick-secret")));
         let body = b"{}";
         let sig = sign(body, "kick-secret");
-        let resp = handle(State(state), headers(&sig), Body::from(body.to_vec())).await;
+        let resp = handle(State(state), headers(&sig), peer("192.0.2.30"), Body::from(body.to_vec())).await;
         assert_eq!(json_body(resp).await["event_type"], "unknown");
     }
 
     #[tokio::test]
     async fn stream_start_publishes_a_stream_online_event() {
-        let mut state = crate::http::state::test_state();
+        let mut state = trusting_state();
         state.kick_webhook_secret = Some(Arc::new(Secret::new("kick-secret")));
-        let appender = crate::spine::fakes::RecordingAppender::default();
+        let appender = crate::publish::fakes::RecordingAppender::default();
         state.appender = Arc::new(appender.clone());
         let body = br#"{"type":"StreamStart","channel_slug":"acme","channel_id":"555"}"#;
         let sig = sign(body, "kick-secret");
-        let resp = handle(State(state), headers(&sig), Body::from(body.to_vec())).await;
+        let resp = handle(State(state), headers(&sig), peer("192.0.2.30"), Body::from(body.to_vec())).await;
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         let envs = appender.envelopes();
         assert_eq!(envs.len(), 1);
         assert_eq!(envs[0].event.event_type, "stream.online");
+        assert!(!envs[0].workstream_id.is_empty());
     }
 
     #[tokio::test]
     async fn non_lifecycle_event_never_publishes() {
-        let mut state = crate::http::state::test_state();
+        let mut state = trusting_state();
         state.kick_webhook_secret = Some(Arc::new(Secret::new("kick-secret")));
-        let appender = crate::spine::fakes::RecordingAppender::default();
+        let appender = crate::publish::fakes::RecordingAppender::default();
         state.appender = Arc::new(appender.clone());
         let body = br#"{"type":"Subscription"}"#;
         let sig = sign(body, "kick-secret");
-        handle(State(state), headers(&sig), Body::from(body.to_vec())).await;
+        handle(State(state), headers(&sig), peer("192.0.2.30"), Body::from(body.to_vec())).await;
         assert!(appender.envelopes().is_empty());
+    }
+
+    #[tokio::test]
+    async fn valid_signature_from_an_untrusted_origin_is_403() {
+        // Sec14.10 test 1, applied to Kick.
+        let mut state = crate::http::state::test_state(); // default test_state's kick_origin trusts nothing
+        state.kick_webhook_secret = Some(Arc::new(Secret::new("kick-secret")));
+        let body = br#"{"type":"StreamStart"}"#;
+        let sig = sign(body, "kick-secret");
+        let resp = handle(State(state), headers(&sig), peer("198.51.100.40"), Body::from(body.to_vec())).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
     }
 }
 ```
@@ -4945,40 +6019,66 @@ mod tests {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `make -C core/svc_ingest test-unit MOD='http::kick_webhook::'`
-Expected: compile failure — `crate::spine::fakes::RecordingAppender` doesn't exist yet (extend the `fakes` module Task 17 started in `spine.rs` with a `Clone`-able, `Mutex<Vec<StageEnvelope>>`-backed recorder, `pub(crate) fn envelopes(&self) -> Vec<StageEnvelope>`) — add it in Step 3.
+Expected: compile failure — `crate::publish::fakes::RecordingAppender` doesn't exist yet (extend the `fakes` module Task 17 started in `publish.rs` with a `Clone`-able, `Mutex<Vec<StageEnvelope>>`-backed recorder, `pub(crate) fn envelopes(&self) -> Vec<StageEnvelope>`) — add it in Step 3.
 
 - [ ] **Step 3: Write the implementation**
 
 ```rust
 //! `POST /webhook/kick` -- HMAC-SHA256 fail-closed verification (Task
-//! 10's `verify_kick_webhook_signature`), the coarse event-type ack map,
-//! and `StreamStart`/`StreamEnd` publication as `stream.online`/
-//! `stream.offline` (gh #287 S10). Always mounted; a missing secret is a
-//! 503 on every request, matching `handle_kick_webhook`'s exact posture.
+//! 10's `verify_kick_webhook_signature`), FCrDNS origin restriction to
+//! `kick.com` (§4.1.1/D29, PA-ORIGIN, checked before signature
+//! verification), the coarse event-type ack map, and `StreamStart`/
+//! `StreamEnd` publication as `stream.online`/`stream.offline` (gh #287
+//! S10, with D30 workstream/trace/binding minting via `publish_event`).
+//! Always mounted; a missing secret is a 503 on every request, matching
+//! `handle_kick_webhook`'s exact posture.
 
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use crate::error::IntakeError;
 use crate::http::middleware::read_capped_body;
+use crate::http::origin::resolve_client_addr;
 use crate::http::state::AppState;
 use crate::normalize::kick::{map_kick_webhook_event_type, normalize_stream_lifecycle, verify_kick_webhook_signature, STREAM_LIFECYCLE_EVENT_TYPES};
-use crate::spine::publish_event;
+use crate::publish::{deterministic_workstream_id, publish_event};
 
 /// `POST /webhook/kick`.
-pub async fn handle(State(state): State<AppState>, headers: HeaderMap, body: axum::body::Body) -> Response {
-    match handle_inner(state, headers, body).await {
+pub async fn handle(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    body: axum::body::Body,
+) -> Response {
+    let metrics = state.metrics.clone();
+    match handle_inner(state, headers, connect_info, body).await {
         Ok(resp) => resp,
-        Err(err) => err.into_response(),
+        Err(err) => {
+            metrics.platform_webhook_rejected("kick", err.metric_reason());
+            err.into_response()
+        }
     }
 }
 
-async fn handle_inner(state: AppState, headers: HeaderMap, body: axum::body::Body) -> Result<Response, IntakeError> {
+async fn handle_inner(
+    state: AppState,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    body: axum::body::Body,
+) -> Result<Response, IntakeError> {
     let Some(secret) = state.kick_webhook_secret.as_ref() else { return Err(IntakeError::SecretUnset) };
 
     state.limiters.check("kick-webhook", &state.scope.tenant)?;
+
+    let direct_peer = connect_info.map(|ci| ci.0.ip()).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    let forwarded_for = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok());
+    let client_addr = resolve_client_addr(direct_peer, forwarded_for, &state.trusted_proxies);
+    if !state.kick_origin.verify(client_addr, &state.metrics, "kick").await {
+        return Err(IntakeError::OriginRejected);
+    }
 
     let body_bytes = read_capped_body(body, state.config.cli.intake_max_body_bytes).await?;
     let signature = headers.get("X-Kick-Signature").and_then(|v| v.to_str().ok()).unwrap_or_default();
@@ -4994,7 +6094,19 @@ async fn handle_inner(state: AppState, headers: HeaderMap, body: axum::body::Bod
         if let Some(event) = normalize_stream_lifecycle(kick_type, &body_json, "kick-app") {
             let channel_slug = body_json.get("channel_slug").and_then(|v| v.as_str()).unwrap_or("unknown");
             let source_id = format!("kick-{channel_slug}");
-            let _ = publish_event(state.appender.as_ref(), &state.metrics, &state.scope, &source_id, event).await;
+            let workstream_id = deterministic_workstream_id(&source_id);
+            let _ = publish_event(
+                state.appender.as_ref(),
+                &state.metrics,
+                &state.binding_keyring,
+                &state.usage,
+                &state.scope,
+                &source_id,
+                &workstream_id,
+                None,
+                event,
+            )
+            .await;
         }
     }
 
@@ -5002,7 +6114,7 @@ async fn handle_inner(state: AppState, headers: HeaderMap, body: axum::body::Bod
 }
 ```
 
-Add to `spine.rs`'s `#[cfg(test)] pub(crate) mod fakes` block (started in Task 17):
+Add to `publish.rs`'s `#[cfg(test)] pub(crate) mod fakes` block (started in Task 17):
 
 ```rust
 #[derive(Clone, Default)]
@@ -5016,28 +6128,28 @@ impl RecordingAppender {
 
 #[async_trait::async_trait]
 impl EventAppender for RecordingAppender {
-    async fn append(&self, _stream: &str, env: &StageEnvelope, _maxlen: u64) -> Result<String, String> {
+    async fn append(&self, _stream: &str, env: &StageEnvelope) -> Result<String, String> {
         self.0.lock().unwrap().push(env.clone());
         Ok("test-0".to_string())
     }
 }
 ```
 
-(`StageEnvelope` must derive/implement `Clone` for this to compile — if `penguin_spine::StageEnvelope` does not derive `Clone` in M1's actual shape, wrap it in the recorder as its serialized JSON instead; the test assertions above only read `.event.event_type`, so either representation satisfies them.)
+(`StageEnvelope` derives `Clone` per the corrected External Crate Surfaces block.)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `make -C core/svc_ingest test-unit MOD='http::kick_webhook::'`
-Expected: `test result: ok. 8 passed; 0 failed` (3 + 9 parametrized-in-a-loop counts as 1 test function + 2 + 2 = the loop in `every_known_event_type_maps_and_acks_200` is one `#[tokio::test]`, not 9 — so: unconfigured(1) + invalid_sig(1) + missing_sig(1) + every_known_loop(1) + unknown(1) + missing_type(1) + stream_start(1) + non_lifecycle(1) = 8).
+Expected: `test result: ok. 9 passed; 0 failed` (3 + 9 parametrized-in-a-loop counts as 1 test function + 2 + 2 + 1 origin = the loop in `every_known_event_type_maps_and_acks_200` is one `#[tokio::test]`, not 9 — so: unconfigured(1) + invalid_sig(1) + missing_sig(1) + every_known_loop(1) + unknown(1) + missing_type(1) + stream_start(1) + non_lifecycle(1) + origin_rejected(1) = 9).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/svc_ingest/src/http/kick_webhook.rs core/svc_ingest/src/http/mod.rs core/svc_ingest/src/spine.rs
+git add core/svc_ingest/src/http/kick_webhook.rs core/svc_ingest/src/http/mod.rs core/svc_ingest/src/publish.rs
 git commit -m "$(cat <<'EOF'
-feat(svc-ingest): Kick webhook handler -- fail-closed HMAC, event-type ack map, StreamStart/StreamEnd publication (gh#287 S10)
+feat(svc-ingest): Kick webhook handler -- fail-closed HMAC, FCrDNS origin restriction, event-type ack map, StreamStart/StreamEnd publication, D30/D31 wiring (§4.1.1, D29/D30/D31, gh#287 S10)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -5047,18 +6159,18 @@ EOF
 
 ### Task 19: HTTP handler — Generic webhook intake
 
-**Depends on:** Task 2, Task 3, Task 11, Task 12, Task 14, Task 16
+**Depends on:** Task 2, Task 3, Task 11, Task 12, Task 14, Task 15, Task 16
 
 **Files:**
 - Create: `core/svc_ingest/src/http/intake_webhook.rs`
 - Modify: `core/svc_ingest/src/http/mod.rs` (add `pub mod intake_webhook;`)
 - Modify: `core/svc_ingest/src/http/state.rs` (add `pub sources: crate::sources::SharedSourceRegistry` and reuse `pub dedupe: Arc<dyn crate::http::twitch_eventsub::DedupeStore>` from Task 17 — the same trait/store, different key namespace)
 
-`POST /intake/webhook/{tenant}/{source}` per §10.1/§10.3. New route (D6) — not a port.
+`POST /intake/webhook/{tenant}/{source}` per §10.1/§10.3/§4.1.1 (D29). New route (D6) — not a port. **This is the primary implementation site for PA-INTAKE-AUTH**: the per-source HMAC signature is necessary but never sufficient — every source's `auth.modes` (Task 14) must independently pass via `crate::http::middleware::verify_intake_auth_modes` (Task 16), using the client address resolved through Task 15's trusted-proxy logic for the `cidr` mode.
 
 **Interfaces:**
-- Consumes: `crate::sources::{SharedSourceRegistry, SourceRecord}` (Task 14); `crate::normalize::generic::apply_mapping` (Task 11); `crate::spine::publish_event` (Task 12); `crate::http::middleware::{IntakeLimiters, read_capped_body, constant_time_eq_hex}` (Task 16); `crate::http::twitch_eventsub::DedupeStore` (Task 17, reused).
-- Produces: `pub async fn handle(State(state): State<AppState>, Path((tenant, source)): Path<(String, String)>, headers: axum::http::HeaderMap, body: axum::body::Body) -> Response` mounted at `POST /intake/webhook/{tenant}/{source}`. Success: `202 Accepted` with `{"accepted": true, "events": 1}` (the mapping engine always produces exactly one event per request in this milestone — batching is out of scope). Signature: HMAC-SHA256 hex over `{timestamp}.{raw_body}` (literal dot separator), prefixed `sha256=`, header `X-Waddles-Signature`; timestamp header `X-Waddles-Timestamp` (unix seconds), `INTAKE_REPLAY_WINDOW_S` window; optional `X-Waddles-Delivery-Id` dedupe (absent header ⇒ no dedupe performed for that request, per §10.1).
+- Consumes: `crate::sources::{SharedSourceRegistry, SourceRecord}` (Task 14); `crate::normalize::generic::apply_mapping` (Task 11); `crate::publish::publish_event` (Task 12); `crate::http::origin::resolve_client_addr` (Task 15); `crate::http::middleware::{IntakeLimiters, read_capped_body, constant_time_eq_hex, verify_intake_auth_modes}` (Task 16); `crate::http::twitch_eventsub::DedupeStore` (Task 17, reused); `crate::config::parse_cidr_list` (Task 2).
+- Produces: `pub async fn handle(State(state): State<AppState>, Path((tenant, source)): Path<(String, String)>, headers: axum::http::HeaderMap, connect_info: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>, body: axum::body::Body) -> Response` mounted at `POST /intake/webhook/{tenant}/{source}`. Success: `202 Accepted` with `{"accepted": true, "events": 1}` (the mapping engine always produces exactly one event per request in this milestone — batching is out of scope). Signature: HMAC-SHA256 hex over `{timestamp}.{raw_body}` (literal dot separator), prefixed `sha256=`, header `X-Waddles-Signature`; timestamp header `X-Waddles-Timestamp` (unix seconds), `INTAKE_REPLAY_WINDOW_S` window; optional `X-Waddles-Delivery-Id` dedupe (absent header ⇒ no dedupe performed for that request, per §10.1). **Admission order** (cheapest/least-trusting checks first): rate limit → unknown/disabled source → body read → signature → replay window → **`verify_intake_auth_modes`** (PA-INTAKE-AUTH) → delivery-id dedupe → mapping → publish.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -5067,10 +6179,11 @@ EOF
 mod tests {
     use super::*;
     use axum::body::Body;
-    use axum::extract::Path;
+    use axum::extract::{ConnectInfo, Path};
     use axum::http::{HeaderMap, HeaderValue};
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
+    use std::net::SocketAddr;
     use std::sync::Arc;
 
     fn sign(secret: &str, timestamp: &str, body: &[u8]) -> String {
@@ -5083,6 +6196,10 @@ mod tests {
 
     fn now_ts() -> String {
         chrono::Utc::now().timestamp().to_string()
+    }
+
+    fn peer(addr: &str) -> Option<ConnectInfo<SocketAddr>> {
+        Some(ConnectInfo(format!("{addr}:12345").parse().unwrap()))
     }
 
     fn state_with_source(source: crate::sources::SourceRecord) -> AppState {
@@ -5104,24 +6221,46 @@ mod tests {
         }
     }
 
+    /// A source configured with the single `bearer` mode -- the common
+    /// case for most of this module's tests, which are not about
+    /// PA-INTAKE-AUTH specifically. `auth_mode_negative_tests` below
+    /// builds its own sources with other mode combinations.
     fn sample_source(enabled: bool) -> crate::sources::SourceRecord {
         crate::sources::SourceRecord {
             source_id: "acme-github".to_string(), tenant: "acme".to_string(), platform: "custom:github".to_string(),
             secret_ref: "ref".to_string(), secret: "whsec_test".to_string(), community: None,
-            mapping: sample_mapping(), enabled,
+            mapping: sample_mapping(), enabled, workstream_id: "8f14e45f-ceea-467e-adde-3fb5c9752730".to_string(),
+            auth: crate::sources::SourceAuth {
+                modes: vec!["bearer".to_string()],
+                cidrs: vec![],
+                secret_ref: Some("acme-github-bearer".to_string()),
+                secret: Some("s3cr3t-token".to_string()),
+            },
         }
     }
 
+    fn bearer_headers(sig: &str, ts: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Waddles-Signature", HeaderValue::from_str(sig).unwrap());
+        headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(ts).unwrap());
+        headers.insert(axum::http::header::AUTHORIZATION, HeaderValue::from_str("Bearer s3cr3t-token").unwrap());
+        headers
+    }
+
     #[tokio::test]
-    async fn accepts_a_valid_signed_delivery() {
+    async fn accepts_a_valid_signed_delivery_satisfying_its_auth_mode() {
         let state = state_with_source(sample_source(true));
         let ts = now_ts();
         let body = br#"{"type":"push","user":{"id":"u1"},"message":"hello"}"#;
         let sig = sign("whsec_test", &ts, body);
-        let mut headers = HeaderMap::new();
-        headers.insert("X-Waddles-Signature", HeaderValue::from_str(&sig).unwrap());
-        headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(&ts).unwrap());
-        let resp = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, Body::from(body.to_vec())).await;
+        let resp = handle(
+            State(state),
+            Path(("acme".to_string(), "acme-github".to_string())),
+            bearer_headers(&sig, &ts),
+            peer("203.0.113.1"),
+            Body::from(body.to_vec()),
+        )
+        .await;
         assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
     }
 
@@ -5129,10 +6268,14 @@ mod tests {
     async fn unknown_source_is_404() {
         let state = crate::http::state::test_state();
         let ts = now_ts();
-        let mut headers = HeaderMap::new();
-        headers.insert("X-Waddles-Signature", HeaderValue::from_str("sha256=x").unwrap());
-        headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(&ts).unwrap());
-        let resp = handle(State(state), Path(("acme".to_string(), "nope".to_string())), headers, Body::from(&b"{}"[..])).await;
+        let resp = handle(
+            State(state),
+            Path(("acme".to_string(), "nope".to_string())),
+            bearer_headers("sha256=x", &ts),
+            peer("203.0.113.1"),
+            Body::from(&b"{}"[..]),
+        )
+        .await;
         assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
     }
 
@@ -5142,10 +6285,14 @@ mod tests {
         let ts = now_ts();
         let body = b"{}";
         let sig = sign("whsec_test", &ts, body);
-        let mut headers = HeaderMap::new();
-        headers.insert("X-Waddles-Signature", HeaderValue::from_str(&sig).unwrap());
-        headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(&ts).unwrap());
-        let resp = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, Body::from(body.to_vec())).await;
+        let resp = handle(
+            State(state),
+            Path(("acme".to_string(), "acme-github".to_string())),
+            bearer_headers(&sig, &ts),
+            peer("203.0.113.1"),
+            Body::from(body.to_vec()),
+        )
+        .await;
         assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
     }
 
@@ -5153,10 +6300,14 @@ mod tests {
     async fn bad_signature_is_401() {
         let state = state_with_source(sample_source(true));
         let ts = now_ts();
-        let mut headers = HeaderMap::new();
-        headers.insert("X-Waddles-Signature", HeaderValue::from_str("sha256=wrong").unwrap());
-        headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(&ts).unwrap());
-        let resp = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, Body::from(&b"{}"[..])).await;
+        let resp = handle(
+            State(state),
+            Path(("acme".to_string(), "acme-github".to_string())),
+            bearer_headers("sha256=wrong", &ts),
+            peer("203.0.113.1"),
+            Body::from(&b"{}"[..]),
+        )
+        .await;
         assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
     }
 
@@ -5166,10 +6317,14 @@ mod tests {
         let old_ts = (chrono::Utc::now().timestamp() - 301).to_string();
         let body = b"{}";
         let sig = sign("whsec_test", &old_ts, body);
-        let mut headers = HeaderMap::new();
-        headers.insert("X-Waddles-Signature", HeaderValue::from_str(&sig).unwrap());
-        headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(&old_ts).unwrap());
-        let resp = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, Body::from(body.to_vec())).await;
+        let resp = handle(
+            State(state),
+            Path(("acme".to_string(), "acme-github".to_string())),
+            bearer_headers(&sig, &old_ts),
+            peer("203.0.113.1"),
+            Body::from(body.to_vec()),
+        )
+        .await;
         assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
     }
 
@@ -5179,13 +6334,11 @@ mod tests {
         let ts = now_ts();
         let body = br#"{"type":"push","user":{"id":"u1"},"message":"hi"}"#;
         let sig = sign("whsec_test", &ts, body);
-        let mut headers = HeaderMap::new();
-        headers.insert("X-Waddles-Signature", HeaderValue::from_str(&sig).unwrap());
-        headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(&ts).unwrap());
+        let mut headers = bearer_headers(&sig, &ts);
         headers.insert("X-Waddles-Delivery-Id", HeaderValue::from_str("dlv-1").unwrap());
-        let first = handle(State(state.clone()), Path(("acme".to_string(), "acme-github".to_string())), headers.clone(), Body::from(body.to_vec())).await;
+        let first = handle(State(state.clone()), Path(("acme".to_string(), "acme-github".to_string())), headers.clone(), peer("203.0.113.1"), Body::from(body.to_vec())).await;
         assert_eq!(first.status(), axum::http::StatusCode::ACCEPTED);
-        let second = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, Body::from(body.to_vec())).await;
+        let second = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, peer("203.0.113.1"), Body::from(body.to_vec())).await;
         assert_eq!(second.status(), axum::http::StatusCode::CONFLICT);
     }
 
@@ -5197,10 +6350,14 @@ mod tests {
         let ts = now_ts();
         let body = br#"{"type":"push","message":"hi"}"#;
         let sig = sign("whsec_test", &ts, body);
-        let mut headers = HeaderMap::new();
-        headers.insert("X-Waddles-Signature", HeaderValue::from_str(&sig).unwrap());
-        headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(&ts).unwrap());
-        let resp = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, Body::from(body.to_vec())).await;
+        let resp = handle(
+            State(state),
+            Path(("acme".to_string(), "acme-github".to_string())),
+            bearer_headers(&sig, &ts),
+            peer("203.0.113.1"),
+            Body::from(body.to_vec()),
+        )
+        .await;
         assert_eq!(resp.status(), axum::http::StatusCode::UNPROCESSABLE_ENTITY);
     }
 
@@ -5210,14 +6367,117 @@ mod tests {
         let ts = now_ts();
         let body = br#"{"type":"push","user":{"id":"u1"},"message":"hi"}"#;
         let sig = sign("whsec_test", &ts, body);
+        let headers = bearer_headers(&sig, &ts);
+        let first = handle(State(state.clone()), Path(("acme".to_string(), "acme-github".to_string())), headers.clone(), peer("203.0.113.1"), Body::from(body.to_vec())).await;
+        assert_eq!(first.status(), axum::http::StatusCode::ACCEPTED);
+        let second = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, peer("203.0.113.1"), Body::from(body.to_vec())).await;
+        // No delivery-id header on either request -> both accepted, no 409.
+        assert_eq!(second.status(), axum::http::StatusCode::ACCEPTED);
+    }
+
+    // -- PA-INTAKE-AUTH negative tests (§4.1.1/D29, §14.10 test 3) --
+
+    #[tokio::test]
+    async fn valid_signature_with_no_auth_mode_configured_is_401() {
+        let mut source = sample_source(true);
+        source.auth = crate::sources::SourceAuth::default(); // empty modes
+        let state = state_with_source(source);
+        let ts = now_ts();
+        let body = b"{}";
+        let sig = sign("whsec_test", &ts, body);
         let mut headers = HeaderMap::new();
         headers.insert("X-Waddles-Signature", HeaderValue::from_str(&sig).unwrap());
         headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(&ts).unwrap());
-        let first = handle(State(state.clone()), Path(("acme".to_string(), "acme-github".to_string())), headers.clone(), Body::from(body.to_vec())).await;
-        assert_eq!(first.status(), axum::http::StatusCode::ACCEPTED);
-        let second = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, Body::from(body.to_vec())).await;
-        // No delivery-id header on either request -> both accepted, no 409.
-        assert_eq!(second.status(), axum::http::StatusCode::ACCEPTED);
+        let resp = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, peer("203.0.113.1"), Body::from(body.to_vec())).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn valid_signature_with_configured_bearer_but_wrong_token_is_401() {
+        let state = state_with_source(sample_source(true));
+        let ts = now_ts();
+        let body = b"{}";
+        let sig = sign("whsec_test", &ts, body);
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Waddles-Signature", HeaderValue::from_str(&sig).unwrap());
+        headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(&ts).unwrap());
+        headers.insert(axum::http::header::AUTHORIZATION, HeaderValue::from_str("Bearer wrong-token").unwrap());
+        let resp = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, peer("203.0.113.1"), Body::from(body.to_vec())).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn cidr_mode_admits_an_allowlisted_address() {
+        let mut source = sample_source(true);
+        source.auth = crate::sources::SourceAuth { modes: vec!["cidr".to_string()], cidrs: vec!["203.0.113.0/24".to_string()], secret_ref: None, secret: None };
+        let state = state_with_source(source);
+        let ts = now_ts();
+        let body = b"{}";
+        let sig = sign("whsec_test", &ts, body);
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Waddles-Signature", HeaderValue::from_str(&sig).unwrap());
+        headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(&ts).unwrap());
+        let resp = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, peer("203.0.113.99"), Body::from(body.to_vec())).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn cidr_mode_rejects_a_non_allowlisted_address() {
+        let mut source = sample_source(true);
+        source.auth = crate::sources::SourceAuth { modes: vec!["cidr".to_string()], cidrs: vec!["203.0.113.0/24".to_string()], secret_ref: None, secret: None };
+        let state = state_with_source(source);
+        let ts = now_ts();
+        let body = b"{}";
+        let sig = sign("whsec_test", &ts, body);
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Waddles-Signature", HeaderValue::from_str(&sig).unwrap());
+        headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(&ts).unwrap());
+        let resp = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, peer("198.51.100.5"), Body::from(body.to_vec())).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn and_combined_modes_require_both_cidr_and_bearer() {
+        let mut source = sample_source(true);
+        source.auth = crate::sources::SourceAuth {
+            modes: vec!["cidr".to_string(), "bearer".to_string()],
+            cidrs: vec!["203.0.113.0/24".to_string()],
+            secret_ref: Some("ref".to_string()),
+            secret: Some("s3cr3t-token".to_string()),
+        };
+        let state = state_with_source(source);
+        let ts = now_ts();
+        let body = b"{}";
+        let sig = sign("whsec_test", &ts, body);
+        // Right CIDR, no bearer header -> rejected.
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Waddles-Signature", HeaderValue::from_str(&sig).unwrap());
+        headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(&ts).unwrap());
+        let resp = handle(State(state.clone()), Path(("acme".to_string(), "acme-github".to_string())), headers, peer("203.0.113.1"), Body::from(body.to_vec())).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+        // Both satisfied -> accepted.
+        let resp2 = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), bearer_headers(&sig, &ts), peer("203.0.113.1"), Body::from(body.to_vec())).await;
+        assert_eq!(resp2.status(), axum::http::StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn spoofed_x_forwarded_for_from_an_untrusted_peer_is_ignored() {
+        // Sec14.10 test 4, applied through the cidr auth mode: the
+        // attacker's direct peer is outside the allowlist, and spoofing
+        // X-Forwarded-For to claim an allowlisted address must not help
+        // because `state.trusted_proxies` is empty by default (test_state()).
+        let mut source = sample_source(true);
+        source.auth = crate::sources::SourceAuth { modes: vec!["cidr".to_string()], cidrs: vec!["203.0.113.0/24".to_string()], secret_ref: None, secret: None };
+        let state = state_with_source(source);
+        let ts = now_ts();
+        let body = b"{}";
+        let sig = sign("whsec_test", &ts, body);
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Waddles-Signature", HeaderValue::from_str(&sig).unwrap());
+        headers.insert("X-Waddles-Timestamp", HeaderValue::from_str(&ts).unwrap());
+        headers.insert("X-Forwarded-For", HeaderValue::from_str("203.0.113.99").unwrap());
+        let resp = handle(State(state), Path(("acme".to_string(), "acme-github".to_string())), headers, peer("198.51.100.5"), Body::from(body.to_vec())).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
     }
 }
 ```
@@ -5242,20 +6502,25 @@ impl SourceRegistry {
 
 ```rust
 //! `POST /intake/webhook/{tenant}/{source}` -- per-source HMAC-SHA256
-//! signed generic intake (§10.1/§10.3, D6). New in this rewrite.
+//! signed generic intake (§10.1/§10.3, D6), gated by the PA-INTAKE-AUTH
+//! AND-combined second factor (§4.1.1, D29) on top of the signature.
+//! New in this rewrite.
 
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use hmac::{Hmac, Mac};
 use serde_json::json;
 use sha2::Sha256;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use crate::config::parse_cidr_list;
 use crate::error::IntakeError;
-use crate::http::middleware::{constant_time_eq_hex, read_capped_body};
+use crate::http::middleware::{constant_time_eq_hex, read_capped_body, verify_intake_auth_modes};
+use crate::http::origin::resolve_client_addr;
 use crate::http::state::AppState;
 use crate::normalize::generic::apply_mapping;
-use crate::spine::publish_event;
+use crate::publish::publish_event;
 
 fn verify_signature(secret: &str, timestamp: &str, body: &[u8], signature_header: &str) -> bool {
     let Some(provided) = signature_header.strip_prefix("sha256=") else { return false };
@@ -5276,11 +6541,17 @@ pub async fn handle(
     State(state): State<AppState>,
     Path((tenant, source)): Path<(String, String)>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     body: axum::body::Body,
 ) -> Response {
-    match handle_inner(state, tenant, source, headers, body).await {
+    let metrics = state.metrics.clone();
+    let source_label = source.clone();
+    match handle_inner(state, tenant, source, headers, connect_info, body).await {
         Ok(resp) => resp,
-        Err(err) => err.into_response(),
+        Err(err) => {
+            metrics.webhook_rejected(&source_label, err.metric_reason());
+            err.into_response()
+        }
     }
 }
 
@@ -5289,6 +6560,7 @@ async fn handle_inner(
     tenant: String,
     source: String,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     body: axum::body::Body,
 ) -> Result<Response, IntakeError> {
     state.limiters.check(&format!("webhook:{tenant}:{source}"), &tenant)?;
@@ -5312,6 +6584,14 @@ async fn handle_inner(
         return Err(IntakeError::ReplayWindow);
     }
 
+    // PA-INTAKE-AUTH (§4.1.1, D29): the signature above is necessary but
+    // never sufficient -- every configured mode must independently pass.
+    let direct_peer = connect_info.map(|ci| ci.0.ip()).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    let forwarded_for = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok());
+    let client_addr = resolve_client_addr(direct_peer, forwarded_for, &state.trusted_proxies);
+    let cidrs = parse_cidr_list(&record.auth.cidrs.join(",")).unwrap_or_default();
+    verify_intake_auth_modes(&record.auth.modes, &cidrs, client_addr, record.auth.secret.as_deref(), record.auth.secret.as_deref(), &headers)?;
+
     if let Some(delivery_id) = &delivery_id {
         let fresh = state
             .dedupe
@@ -5329,27 +6609,39 @@ async fn handle_inner(
 
     let community = event.source.as_ref().and_then(|_| record.community.clone());
     let scope = penguin_spine::Scope { tenant: tenant.clone(), community };
-    publish_event(state.appender.as_ref(), &state.metrics, &scope, &source, event)
-        .await
-        .map_err(IntakeError::MappingFailed)?;
+    publish_event(
+        state.appender.as_ref(),
+        &state.metrics,
+        &state.binding_keyring,
+        &state.usage,
+        &scope,
+        &source,
+        &record.workstream_id,
+        None,
+        event,
+    )
+    .await
+    .map_err(IntakeError::MappingFailed)?;
 
     Ok((StatusCode::ACCEPTED, axum::Json(json!({"accepted": true, "events": 1}))).into_response())
 }
 ```
 
+**Note on `bearer_secret`/`basic_secret`.** Both are passed `record.auth.secret.as_deref()` above because `SourceAuth` carries exactly one resolved secret (§4.1.1: a source configures **either** `bearer` **or** `basic`, never both against the same `secretRef`) — `verify_intake_auth_modes` only reads whichever of the two parameters the configured mode actually needs, so passing the same value into both is correct and matches Task 14's DTO shape, not a shortcut.
+
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `make -C core/svc_ingest test-unit MOD='http::intake_webhook::'`
-Expected: `test result: ok. 8 passed; 0 failed`
+Expected: `test result: ok. 14 passed; 0 failed`
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add core/svc_ingest/src/http/intake_webhook.rs core/svc_ingest/src/http/mod.rs core/svc_ingest/src/http/state.rs core/svc_ingest/src/sources.rs
 git commit -m "$(cat <<'EOF'
-feat(svc-ingest): generic webhook intake handler -- per-source HMAC, replay window, delivery-id dedupe, mapping (§10.1/§10.3)
+feat(svc-ingest): generic webhook intake handler -- per-source HMAC, PA-INTAKE-AUTH AND-combined second factor, replay window, delivery-id dedupe, mapping, D30/D31 wiring (§10.1/§10.3, §4.1.1, D29/D30/D31)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -5359,7 +6651,7 @@ EOF
 
 ### Task 20: HTTP handler — Generic REST intake
 
-**Depends on:** Task 2, Task 3, Task 12, Task 16
+**Depends on:** Task 2, Task 3, Task 12, Task 14, Task 16
 
 **Files:**
 - Create: `core/svc_ingest/src/http/intake_events.rs`
@@ -5369,7 +6661,7 @@ EOF
 `POST /intake/events` per §10.1/§10.4. New route (D6) — not a port. Strict `PlatformEvent` body (§6.1.1's exact shape, no mapping layer), hub-api-issued JWT with `intake:write` scope and mandatory `tenant` claim.
 
 **Interfaces:**
-- Consumes: `penguin_spine::PlatformEvent` (deserialized directly, strict — unknown fields rejected via `#[serde(deny_unknown_fields)]` on a local mirror struct `StrictPlatformEvent` since the external crate's own struct may not carry that attribute; this task defines `StrictPlatformEvent` as the wire DTO and converts to `penguin_spine::PlatformEvent` after validation); `jsonwebtoken::{decode, Validation, Algorithm}`; `crate::spine::publish_event` (Task 12); `crate::http::middleware::IntakeLimiters` (Task 16).
+- Consumes: `penguin_spine::PlatformEvent` (deserialized directly, strict — unknown fields rejected via `#[serde(deny_unknown_fields)]` on a local mirror struct `StrictPlatformEvent` since the external crate's own struct may not carry that attribute; this task defines `StrictPlatformEvent` as the wire DTO and converts to `penguin_spine::PlatformEvent` after validation); `jsonwebtoken::{decode, Validation, Algorithm}`; `crate::publish::publish_event` (Task 12); `crate::http::middleware::IntakeLimiters` (Task 16).
 - Produces: `pub async fn handle(State(state): State<AppState>, headers: axum::http::HeaderMap, Query(params): Query<IntakeEventsQuery>, body: axum::body::Body) -> Response` mounted at `POST /intake/events`, `pub struct IntakeEventsQuery { pub community: Option<String> }`. Claims struct `pub struct IntakeClaims { pub iss: String, pub aud: String, pub exp: usize, pub scope: String, pub tenant: String, pub sub: String }`.
 
 - [ ] **Step 1: Write the failing test**
@@ -5520,7 +6812,7 @@ mod tests {
     #[tokio::test]
     async fn community_query_param_sets_the_envelope_community() {
         let state = state_with_platforms(&["custom:github"], "acme");
-        let appender = crate::spine::fakes::RecordingAppender::default();
+        let appender = crate::publish::fakes::RecordingAppender::default();
         let mut state = state;
         state.appender = Arc::new(appender.clone());
         let token = make_token(&valid_claims("acme"));
@@ -5545,7 +6837,7 @@ Add to `core/svc_ingest/src/sources.rs`:
 ```rust
 #[cfg(test)]
 pub(crate) mod tests_support {
-    use super::SourceRecord;
+    use super::{SourceAuth, SourceRecord};
     use crate::normalize::generic::{FieldMapping, SourceMapping};
 
     pub(crate) fn sample_source_for_platform(platform: &str) -> SourceRecord {
@@ -5564,6 +6856,8 @@ pub(crate) mod tests_support {
                 payload: Default::default(),
             },
             enabled: true,
+            workstream_id: "seed-workstream".to_string(),
+            auth: SourceAuth { modes: vec!["bearer".to_string()], cidrs: vec![], secret_ref: Some("ref".to_string()), secret: Some("shh".to_string()) },
         }
     }
 }
@@ -5585,7 +6879,7 @@ use serde_json::json;
 
 use crate::error::IntakeError;
 use crate::http::state::AppState;
-use crate::spine::publish_event;
+use crate::publish::publish_event;
 
 /// Query params on `POST /intake/events`.
 #[derive(Debug, Deserialize)]
@@ -5644,9 +6938,13 @@ fn validate_body(event: &StrictPlatformEvent) -> Result<(), IntakeError> {
 
 /// `POST /intake/events`.
 pub async fn handle(State(state): State<AppState>, headers: HeaderMap, Query(params): Query<IntakeEventsQuery>, body: axum::body::Body) -> Response {
+    let metrics = state.metrics.clone();
     match handle_inner(state, headers, params, body).await {
         Ok(resp) => resp,
-        Err(err) => err.into_response(),
+        Err(err) => {
+            metrics.intake_rejected("jwt", err.metric_reason());
+            err.into_response()
+        }
     }
 }
 
@@ -5694,9 +6992,28 @@ async fn handle_inner(state: AppState, headers: HeaderMap, params: IntakeEventsQ
 
     let scope = penguin_spine::Scope { tenant: claims.tenant.clone(), community: params.community.clone() };
     let source_id = platform_event.source.as_ref().map(|s| s.account_id.clone()).unwrap_or_else(|| claims.sub.clone());
-    publish_event(state.appender.as_ref(), &state.metrics, &scope, &source_id, platform_event)
-        .await
-        .map_err(IntakeError::EnvelopeInvalid)?;
+    // PA-WORKSTREAM: this route authorizes by `platform`, not a specific
+    // `source_id` (Sec10.4), so the workstream lookup is by
+    // `(tenant, platform)` -- falling back to a deterministic id (Task
+    // 12) is defensive against a source row disappearing between the
+    // registered-platform check above and this point, never a silent
+    // "no workstream" gap.
+    let workstream_id = registry
+        .workstream_for_platform(&claims.tenant, &event.platform)
+        .unwrap_or_else(|| crate::publish::deterministic_workstream_id(&source_id));
+    publish_event(
+        state.appender.as_ref(),
+        &state.metrics,
+        &state.binding_keyring,
+        &state.usage,
+        &scope,
+        &source_id,
+        &workstream_id,
+        None,
+        platform_event,
+    )
+    .await
+    .map_err(IntakeError::EnvelopeInvalid)?;
 
     Ok((StatusCode::ACCEPTED, axum::Json(json!({"accepted": true, "events": 1}))).into_response())
 }
@@ -5725,9 +7042,9 @@ Expected: `test result: ok. 9 passed; 0 failed`
 ```bash
 git add core/svc_ingest/src/http/intake_events.rs core/svc_ingest/src/http/mod.rs core/svc_ingest/src/http/state.rs core/svc_ingest/src/sources.rs
 git commit -m "$(cat <<'EOF'
-feat(svc-ingest): generic REST intake handler -- strict PlatformEvent body, intake:write JWT, tenant-registered platforms only (§10.1/§10.4)
+feat(svc-ingest): generic REST intake handler -- strict PlatformEvent body, intake:write JWT, tenant-registered platforms only, D30/D31 wiring (§10.1/§10.4, D30/D31)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -5743,11 +7060,11 @@ EOF
 - Create: `core/svc_ingest/src/http/router.rs`
 - Modify: `core/svc_ingest/src/http/mod.rs` (add `pub mod router;`)
 
-Ties every handler from Tasks 17-20 plus Task 4's health/metrics into one Axum `Router`, mounting the Twitch EventSub webhook route **conditionally** (only when `state.twitch_eventsub_secret.is_some()`, §10.1: "Route is not registered at all when `TWITCH_EVENTSUB_SECRET` is unset") and every other route unconditionally.
+Ties every handler from Tasks 17-20 plus Task 4's health/metrics into one Axum `Router`, mounting the Twitch EventSub webhook route **conditionally** (only when `state.twitch_eventsub_secret.is_some()`, §10.1: "Route is not registered at all when `TWITCH_EVENTSUB_SECRET` is unset") and the two generic-intake routes conditionally on the `waddles.core.generic-intake` feature flag (Task 30 resolves it once at startup into `AppState.generic_intake_enabled` — `general.md`/`critical-rules.md`: "every new capability behind a PostHog flag"). Every other route is unconditional.
 
 **Interfaces:**
 - Consumes: `crate::http::{health::{healthz, metrics}, twitch_eventsub, kick_webhook, intake_webhook, intake_events, state::AppState}` (Tasks 4, 16-19).
-- Produces: `pub fn build_router(state: AppState) -> axum::Router` — the main `:8200` router; `pub fn build_metrics_router(state: AppState, registry: prometheus::Registry) -> axum::Router` — the secondary `:9090` router carrying only `/metrics`, with the registry injected via `axum::Extension`.
+- Produces: `pub fn build_router(state: AppState) -> axum::Router` — the main `:8200` router; `pub fn build_metrics_router(state: AppState, registry: prometheus::Registry) -> axum::Router` — the secondary `:9090` router carrying only `/metrics`, with the registry injected via `axum::Extension`. Reads `AppState.generic_intake_enabled` (already added to the struct and `test_state()` in Task 17, defaulted `true` there — Task 30 is what actually resolves it from the `waddles.core.generic-intake` flag at startup).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -5823,6 +7140,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generic_intake_routes_are_absent_when_the_flag_is_off() {
+        let mut state = crate::http::state::test_state();
+        state.generic_intake_enabled = false;
+        let router = build_router(state);
+        let webhook_resp = router
+            .clone()
+            .oneshot(Request::builder().method("POST").uri("/intake/webhook/acme/src1").body(Body::from("{}")).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(webhook_resp.status(), StatusCode::NOT_FOUND);
+        let events_resp = router
+            .oneshot(Request::builder().method("POST").uri("/intake/events").body(Body::from("{}")).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(events_resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn metrics_router_serves_prometheus_text() {
         let state = crate::http::state::test_state();
         let registry = prometheus::Registry::new();
@@ -5853,14 +7188,19 @@ use crate::http::{health, intake_events, intake_webhook, kick_webhook, twitch_ev
 
 /// Builds the main `:8200` router.
 pub fn build_router(state: AppState) -> Router {
-    let mut router = Router::new()
-        .route("/healthz", get(health::healthz))
-        .route("/webhook/kick", post(kick_webhook::handle))
-        .route("/intake/webhook/:tenant/:source", post(intake_webhook::handle))
-        .route("/intake/events", post(intake_events::handle));
+    let mut router = Router::new().route("/healthz", get(health::healthz)).route("/webhook/kick", post(kick_webhook::handle));
 
     if state.twitch_eventsub_secret.is_some() {
         router = router.route("/eventsub/twitch/webhook", post(twitch_eventsub::handle));
+    }
+
+    // waddles.core.generic-intake (Task 30 resolves it at startup) --
+    // `general.md`/`critical-rules.md`: every new capability behind a
+    // PostHog flag, defaulted OFF until validated.
+    if state.generic_intake_enabled {
+        router = router
+            .route("/intake/webhook/:tenant/:source", post(intake_webhook::handle))
+            .route("/intake/events", post(intake_events::handle));
     }
 
     router.with_state(state)
@@ -5884,7 +7224,7 @@ git add core/svc_ingest/src/http/router.rs core/svc_ingest/src/http/mod.rs
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): assemble the Axum router -- conditional Twitch EventSub route, every other intake route unconditional (§10.1)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -6180,7 +7520,7 @@ git add core/svc_ingest/src/supervisor.rs
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): LeasedSupervisor claim/run/release/backoff wiring + RawReceiver trait (§10.2, PA-RECEIVER)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
@@ -6199,7 +7539,7 @@ EOF
 Lease key `(provider="twitch", community=channel)` — per-channel single-owner lease, per §10.2's table. `account_id` for `normalize()` is the bot login (`TWITCH_NICK`, config).
 
 **Interfaces:**
-- Consumes: `crate::normalize::twitch::normalize` (Task 5); `crate::spine::{publish_event, EventAppender}` (Task 12); `crate::supervisor::{LeasedSupervisor, Lease, RawReceiver, BoxedUnitFuture, restart_with_backoff}` (Task 22).
+- Consumes: `crate::normalize::twitch::normalize` (Task 5); `crate::publish::{publish_event, EventAppender}` (Task 12); `crate::supervisor::{LeasedSupervisor, Lease, RawReceiver, BoxedUnitFuture, restart_with_backoff}` (Task 22).
 - Produces: `pub struct TwitchIrcSupervisor { pub channel: String, pub nick: String, pub source_id: String }` with `pub async fn run(&self, lease: &dyn Lease, receiver: impl RawReceiver, appender: std::sync::Arc<dyn EventAppender>, metrics: std::sync::Arc<crate::telemetry::IngestMetrics>, scope: penguin_spine::Scope, sup: LeasedSupervisor, shutdown: tokio::sync::watch::Receiver<bool>)` — wraps `sup.run(...)`, and inside `on_item` calls `normalize(&raw, &self.nick)` then `publish_event`, logging (not panicking) on a normalize failure so one bad IRC line never kills the connection (matches Python's per-event `try/except ValueError` in `runner.py`).
 
 - [ ] **Step 1: Write the failing test**
@@ -6208,7 +7548,7 @@ Lease key `(provider="twitch", community=channel)` — per-channel single-owner 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spine::fakes::RecordingAppender;
+    use crate::publish::fakes::RecordingAppender;
     use crate::supervisor::Lease;
     use crate::telemetry::IngestMetrics;
     use std::sync::Arc;
@@ -6240,7 +7580,7 @@ mod tests {
         let sup_wiring = TwitchIrcSupervisor { channel: "waddlebot".to_string(), nick: "bot-primary".to_string(), source_id: "tw-waddlebot".to_string() };
         let metrics = Arc::new(IngestMetrics::register(&prometheus::Registry::new()));
         let (tx, rx) = tokio::sync::watch::channel(false);
-        let appender_dyn: Arc<dyn crate::spine::EventAppender> = Arc::new(appender.clone());
+        let appender_dyn: Arc<dyn crate::publish::EventAppender> = Arc::new(appender.clone());
         let handle = tokio::spawn(async move {
             sup_wiring
                 .run(&AlwaysClaimLease, receiver, appender_dyn, metrics, penguin_spine::Scope { tenant: "global".to_string(), community: None },
@@ -6269,7 +7609,7 @@ mod tests {
         let sup_wiring = TwitchIrcSupervisor { channel: "waddlebot".to_string(), nick: "bot-primary".to_string(), source_id: "tw-waddlebot".to_string() };
         let metrics = Arc::new(IngestMetrics::register(&prometheus::Registry::new()));
         let (tx, rx) = tokio::sync::watch::channel(false);
-        let appender_dyn: Arc<dyn crate::spine::EventAppender> = Arc::new(appender.clone());
+        let appender_dyn: Arc<dyn crate::publish::EventAppender> = Arc::new(appender.clone());
         let handle = tokio::spawn(async move {
             sup_wiring
                 .run(&AlwaysClaimLease, receiver, appender_dyn, metrics, penguin_spine::Scope { tenant: "global".to_string(), community: None },
@@ -6304,7 +7644,7 @@ Expected: compile failure, module empty.
 use std::sync::Arc;
 
 use crate::normalize::twitch::normalize;
-use crate::spine::{publish_event, EventAppender};
+use crate::publish::{publish_event, EventAppender};
 use crate::supervisor::{Lease, LeasedSupervisor, RawReceiver};
 use crate::telemetry::IngestMetrics;
 
@@ -6368,7 +7708,7 @@ git add core/svc_ingest/src/receivers/twitch_irc.rs core/svc_ingest/src/receiver
 git commit -m "$(cat <<'EOF'
 feat(svc-ingest): Twitch IRC per-channel receiver supervisor (§10.2)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
