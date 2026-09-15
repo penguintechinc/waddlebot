@@ -4,11 +4,13 @@
 
 **Goal:** Add the Python/Quart hub-api control-plane surface for Waddles app-bundle installs: version upload + compiler-Job orchestration, the digest table and its Least-User-Access RBAC, install-time permission consent, `consumes`→`app_stream_grants` resolution with Valkey consumer-group lifecycle, grant revocation, the distribution API fields the Rust stages/executors poll, the compiler's artifact callback, and the new tenant/global settings.
 
-**Architecture:** Every new table is owned by hub-api's existing dual-schema convention — real DDL in a new Alembic migration under `alembic/versions/`, mirrored by a `pydal` binder in `hub_api/services/schema.py` for tests (`migrate=False` in production, `migrate=True` in tests). Every new REST surface is one `blueprints/v1/<group>.py` module with a module-level `BLUEPRINTS` list (auto-discovered, zero registration edits) plus a `services/<group>_service.py` doing the real DB work in pydal's query-builder form (never raw `%s` SQL — sqlite tests would 500). `app_versions` — the digest table — has exactly two Postgres writers (`waddles_publisher`, the compiler's trusted-publisher container from M2a, and `hub_api`); every other service role gets zero privileges on it, generated from one normative YAML matrix and asserted equal to the live grants by a CI test, never hand-written twice. hub-api verifies a claimed digest by re-hashing the bucket object; it never computes one itself. Activation and rollback are a separate, hub-api-owned pointer table (`app_active_versions`), never an edit to a digest row.
+**Architecture:** Every new table is owned by hub-api's existing dual-schema convention — real DDL in a new Alembic migration under `alembic/versions/`, queried at runtime through a `penguin-dal` `AsyncDB` (per R52; `hub_api/services/bundle_install_dal.py`, Task 4) that calls `await install_dal.reflect()` once at startup to discover exactly those Alembic-created tables — never a hand-written `pydal`/SQLAlchemy binder, and never a second DDL owner. Every new REST surface is one `blueprints/v1/<group>.py` module with a module-level `BLUEPRINTS` list (auto-discovered, zero registration edits) plus a `services/<group>_service.py` doing the real DB work in `penguin-dal`'s `Query`/`TableProxy` builder form for a single new table (Pattern A), a `raw_sql_rows`/`raw_sql_write` helper for a read-only join/`GROUP BY` case (Pattern B), or `core_transaction()` for a write that must be atomic across two tables (Pattern C, Decision #18) — never raw driver-paramstyle SQL, and never a new query against `penguin-dal` bypassing its parameter binding. `app_versions` — the digest table — has exactly two Postgres writers (`waddles_publisher`, the compiler's trusted-publisher container from M2a, and `hub_api`); every other service role gets zero privileges on it, generated from one normative YAML matrix and asserted equal to the live grants by a CI test, never hand-written twice. hub-api verifies a claimed digest by re-hashing the bucket object; it never computes one itself. Activation and rollback are a separate, hub-api-owned pointer table (`app_active_versions`), never an edit to a digest row.
 
-**Tech Stack:** Python 3.13, Quart, `quart-schema` (`@validate_request`/`@validate_response`), `pydal` (runtime queries, this codebase's established pattern — see Global Constraints for why `penguin-dal` is not used here), Alembic + raw SQL (schema/DDL), `boto3` (S3-compatible bucket), `kubernetes` (Job orchestration), `redis.asyncio` (Valkey admin ops), `cryptography` (AES-256-GCM secret-at-rest), `PyYAML` (RBAC matrix), pytest + `AsyncDAL` file-backed sqlite fixtures.
+**Tech Stack:** Python 3.13, Quart, `quart-schema` (`@validate_request`/`@validate_response`), `penguin-dal==0.4.0` (runtime queries against every table this plan creates, per coordinator ruling R52 — exact pin, same version/API the M1.5 bundle-migration plan pins; `asyncpg` as its async Postgres driver, `aiosqlite` test-only), `pydal` (runtime queries against hub-api's **pre-existing** ~600-endpoint surface only — untouched by this plan, see Global Constraints), Alembic + raw SQL (schema/DDL, unchanged DDL owner), `boto3` (S3-compatible bucket), `kubernetes` (Job orchestration), `redis.asyncio` (Valkey admin ops), `cryptography` (AES-256-GCM secret-at-rest), `PyYAML` (RBAC matrix), pytest + `penguin_dal.AsyncDB` file-backed sqlite fixtures for every new table, existing `AsyncDAL` file-backed sqlite fixtures for existing tables.
 
 **Spec:** `docs/superpowers/specs/2026-09-14-rust-data-plane-design.md` at commit `680a0a9b` (branch `docs/rust-data-plane-spec`) — sections 2 (D24/D26/D28), 5.2, 6.4–6.10, 7.4 (db capability), 8.4, 9, 10.3–10.6, 11.6.2, 11.10, 12.3, 13.5, 16 (M2), 19 (Q1/Q3), 20 (A-series). This plan implements the **hub-api** half of M2 only — the compiler binary and SDKs (M2a) are a separate plan; every boundary this plan shares with M2a is called out explicitly and marked "must match M2a." **Tasks 42-49 (added at commit `e87b389c` of the same spec branch, user review 3) fold in D29/D30/D31** — sections 4.1.1, 5.9, 5.11, 5.12, 6.11, 6.12, 9.7.1, 10.1, 10.3, 11.1, 11.10 (updated), 12.3 (envelope binding key — hub-api never holds it), 15.4, and the M2b milestone row in Sec16. See Decisions #14-#17 below for what changed and why.
+
+**Coordinator ruling R52 (binding, folded in after the plan above was otherwise complete):** "We aren't using pydal anymore — instead we are running penguin-dal." Every table this plan itself creates (the 11 tables named in Decision #6) is queried at runtime through `penguin-dal` (`AsyncDB`, exact pin `0.4.0`, the same version and public API the M1.5 bundle-migration plan uses), never through a new `pydal` binder or a new `dal.define_table()` call. hub-api's **existing** ~600-endpoint pydal surface (`tenants`, `communities`, `community_members`, `community_roles`, `app_catalog`, `hub_users`, `audit_log`, everything `services/schema.py`'s existing `bind_*_tables()` functions already bind) is **not rewritten** — every task below that still reads one of those tables keeps doing so through the existing `async_dal`/`dal` pair, unchanged. See Decision #18 for the full atomicity investigation this ruling required (one genuine cross-table gap, closed in Task 44; every other new-table-plus-`audit_log` write stays deliberately best-effort, matching this plan's own pre-existing convention) and the Global Constraints entries below for the mechanics. Tasks 4 and 43 (the old "pydal test binder" tasks) and every task whose code queries a new table (10, 11, 13-17, 19, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 33, 34, 35, 36, 39, 40, 44, 45, 46, 47, 48) are rewritten accordingly; Decision #17/Finding #12 (RLS scope) is sharpened to cite the spec's own milestone assignment.
 
 ---
 
@@ -17,7 +19,7 @@
 Copied verbatim from the spec and house rules — every task's code must satisfy all of these, not just the ones its own section repeats.
 
 - **Python 3.13, Quart (never Flask), async `def` on every route** (`backend-python.md`).
-- **`penguin-dal` is NOT used in this codebase's hub-api service today.** hub-api's entire existing codebase (every `services/*.py`, every `blueprints/v1/*.py`) uses `pydal` directly via a hand-rolled `AsyncDAL` wrapper (`libs/flask_core/flask_core/database.py`), a documented, load-bearing deviation (mem0: "A decision was made to use synchronous pydal instead of AsyncDAL for data access operations" / `hub_api/PORTING.md`). This plan follows the established convention for consistency with ~600 existing endpoints rather than introducing a second DB access pattern mid-service. **Only the new Postgres *roles and DDL* (Global Constraints item below) use SQLAlchemy directly, matching `backend-database.md` rule #2 ("SQLAlchemy + Alembic — schema init + migrations ONLY").**
+- **`penguin-dal` (R52) is used for every table this plan itself creates; `pydal` is used only by hub-api's pre-existing surface, and this plan adds no new `pydal` table, binder, or query.** hub-api's existing codebase (every pre-M2b `services/*.py`, every pre-M2b `blueprints/v1/*.py`) uses `pydal` directly via a hand-rolled `AsyncDAL` wrapper (`libs/flask_core/flask_core/database.py`), a documented, load-bearing deviation (mem0: "A decision was made to use synchronous pydal instead of AsyncDAL for data access operations" / `hub_api/PORTING.md`) — that surface is **not rewritten by this plan** and every task below that reads one of those pre-existing tables (`tenants`, `communities`, `community_members`, `community_roles`, `app_catalog`, `hub_users`, `audit_log`, etc.) keeps doing so through the existing `async_dal`/`dal` pair, unchanged. The coordinator's binding ruling (R52, 2026-09-14: "we aren't using pydal anymore... instead we are running penguin-dal") applies to **new** data access: every one of the 11 tables this plan's own migrations create (Decision #6) is queried through a `penguin_dal.AsyncDB` (`hub_api/services/bundle_install_dal.py`, Task 4) instead — a coexisting, separate connection pool against the same `DATABASE_URL`, reflecting the same live Postgres schema (see Task 4 for the full wiring). GitHub issue #307 tracks migrating hub-api's *existing* pydal surface onto `penguin-dal` wholesale; it is explicitly out of scope here (open, not started, "sequence after the [v3.0] demo" — see the Findings table). **The new Postgres *roles and DDL* (Global Constraints item below) still use SQLAlchemy directly for schema/DDL only, matching `backend-database.md` rule #2 ("SQLAlchemy + Alembic — schema init + migrations ONLY") — `penguin-dal` never issues DDL in this plan, only `AsyncDB.reflect()` against tables Alembic already created.**
 - **`@dataclass(slots=True, frozen=True)` for every DTO.**
 - **Every function has type hints; `mypy --strict` must pass.**
 - **Every DTO field name is camelCase on the wire** — matches every existing hub-api blueprint (`hub_api/PORTING.md`'s DTO-casing note; `convert_casing` is not enabled in this app's `QuartSchema` setup).
@@ -26,12 +28,13 @@ Copied verbatim from the spec and house rules — every task's code must satisfy
 - **PII tokenization:** the single identity table is `hub_users` (integer `SERIAL` primary key, `config/postgres/migrations/000_create_base_schema.sql:81-98` — this repo's identity table predates and is not a UUID table). Every approver/actor column this plan adds (`app_install_approvals.approved_by`, `app_stream_grants.granted_by`, `platform_settings.updated_by`, `app_active_versions.activated_by`) is `INTEGER REFERENCES hub_users(id)`, matching the established convention (`loyalty_redemptions.fulfilled_by`, `ai_byok_keys.created_by_user_id`, `music_policy.updated_by`) — **a deliberate, documented deviation from the spec's literal "uuid" column-type wording**: the substance of PII tokenization (never a name or email, an opaque reference into the one identity table) is fully satisfied by an integer FK; introducing a parallel UUID identity column on `hub_users` for this one feature would be new scope this plan does not take on.
 - **Secrets** (webhook HMAC secrets) encrypted at rest with AES-256-GCM, key from an env var, never a CLI flag, never logged. Never plaintext in the DB.
 - **90% coverage minimum** on every new module (`critical-rules.md` Coverage) — `pytest --cov=services --cov=blueprints --cov-report=term-missing --cov-fail-under=90` scoped to this plan's new files, run in Task 41.
-- **Dependency pinning:** every new line added to `hub_api/requirements.in` gets an exact version floor with a reason comment, then `hub_api/requirements.txt` is regenerated with `uv pip compile --generate-hashes` (Task 6).
+- **Dependency pinning:** every new line added to `hub_api/requirements.in` gets an exact version floor with a reason comment, then `hub_api/requirements.txt` is regenerated with `uv pip compile --generate-hashes` (Task 6 adds `kubernetes`/`PyYAML`; **Task 4 adds `penguin-dal==0.4.0` exact-pin plus its `asyncpg`/`aiosqlite` drivers, R52** — same exact version the M1.5 bundle-migration plan pins).
 - **Verification integrity:** every scanner/test run in this plan reports a non-zero denominator (files scanned, roles examined, tables examined) — a zero-item run is a FAILURE, not a pass (`critical-rules.md` Verification Integrity). The RBAC live-grants test explicitly asserts `>= 8` roles and `>= 8` tables examined (spec §11.10.1 literal requirement).
 - **Least User Access via RBAC (spec D28, §11.10):** every Postgres role gets exactly the privileges its job needs, generated from one normative file (`config/postgres/rbac-matrix.yaml`), never a hand-written `GRANT`. `app_versions` has **exactly two writers** — `waddles_publisher` (M2a's trusted publisher container) and `hub_api` — every other role (`svc_ingest`, `svc_process`, `svc_action`, `svc_streaming`, `webui`, the executors) gets **zero** privileges on it. Every write is captured by an `AFTER INSERT OR UPDATE OR DELETE` audit trigger recording the writing role, the row key, and the old/new digest. **hub-api verifies a claimed digest by re-hashing the bucket object; it never computes or invents a digest itself.**
 - **Activation/rollback never edits a digest row** — it is an `UPDATE` of `app_active_versions.version_id`, a separate hub-api-owned pointer table (spec §6.10). Activating a digest with no corresponding `app_versions` row is refused.
 - **Feature flags:** every new write surface sits behind a PostHog flag, default OFF, two-gate with license tier, via `flask_core.feature_flags.feature_enabled(flag_key, tenant=..., default=False)`. Flag keys this plan gates on (already defined by the spec, not invented here): `waddles.core.wasm-bundles`, `waddles.core.generic-intake`, `waddles.core.prebuilt-bundles`.
 - **No `flask_core.database.AsyncDAL`/`pydal` reference inside anything that ships to a bundle** — not applicable to this plan (hub-api's own control-plane code is exempt; D21b's ban is on bundle *source*, compiled by M2a's compiler).
+- **R52 (coordinator ruling, binding):** every table this plan's own migrations create is queried at runtime exclusively through `penguin-dal==0.4.0` (`hub_api/services/bundle_install_dal.py`'s `AsyncDB`, Task 4) — never a new `pydal.define_table()`, never a new `dal.<new_table>.insert()`/`.select()`/`.update()`/`.delete()` pydal call. hub-api's pre-existing `pydal` tables and call sites are unchanged. `create_source()`'s `ingest_sources` + `workstreams` writes (Task 44) — the plan's one genuine cross-table atomicity requirement, both new tables — run inside one `install_dal.engine.begin()` block directly (not `core_transaction()`, which only handles independent statements — see Decision #18(a) for why). Every other new-table-plus-`audit_log` write (Tasks 13, 29, 31, 35, 39, 46) stays deliberately best-effort (`try`/`except`, non-blocking), matching this plan's own pre-existing convention for every `audit_log` write it makes — see Decision #18 for the full investigation and why that is correct, not a gap.
 - **Branching:** this work lands on `release/v3.0.X` via a `docs/` branch for the plan itself (already checked out); the *implementation* work this plan describes happens on a `feature/`-prefixed branch off `release/v3.0.X`, per `devops.md`.
 - **Commit format:** `feat(hub-api): ...` / `test(hub-api): ...` / `db(hub-api): ...` / `docs(hub-api): ...` / `chore(hub-api): ...`, each ending with:
   ```
@@ -66,7 +69,8 @@ These resolve every ambiguity a task would otherwise have to re-derive. They are
 | 14 | **`workstreams` (spec §6.11, D30) is 1:1 with `ingest_sources`, but its FK targets `ingest_sources.id`, not the spec's literal `source_id text` FK.** `ingest_sources.source_id` is unique only per `(tenant_id, platform, source_id)` (Task 3's three-column `UNIQUE`), not globally, so the spec's shorthand FK cannot be taken literally in this schema — `platform`/`source_id` are denormalized onto `workstreams` for read convenience instead. `workstreams.ingest_source_id` is **nullable, `ON DELETE SET NULL`** (never `ON DELETE CASCADE`): `workstream_usage_hourly` rows must keep their `workstream_id` FK target for the life of the tenant's usage history even after the source itself is deleted, so deleting a source must never cascade-delete its workstream. `workstreams.id` is a real Postgres `UUID` (`gen_random_uuid()`); the pydal/sqlite test binder has no native UUID field type, so its `id` stays that ORM's usual autoincrement integer — every service function treats `workstream_id` as an opaque string (`str(row.id)`) on the wire and never assumes either representation, exactly like this codebase already treats `app_id`. Schema + backfill: Task 42. Ongoing creation/disable, wired into `ingest_source_service.create_source()`/`delete_source()`: Task 44. | Spec §6.11, §5.11 ("one workstream per configured ingest source... created 1:1 with each row in `intake_sources`"), §15.4 (backfill requirement). The FK-target and nullability deviations are the same class of documented, substance-preserving deviation as Decision #1's PII integer-vs-uuid choice. |
 | 15 | **`routes_to` cross-tenant refusal (spec §5.9, D30) is wired into `approve_version()` (Task 21), extended by Task 46.** "Installed in the same tenant" is defined as: the target `app_id` has a non-superseded `app_install_approvals` row whose `tenant_id` equals the approving call's `tenant_id` (community-agnostic — a tenant-wide **or** any-community approval both count as "installed in this tenant"). A target absent from `app_catalog` entirely is `422 routes_to_target_not_found`; a target that exists but is not installed in this tenant is `422 routes_to_cross_tenant`. Both refusals write an `audit_log` row (`action = "routes_to_refused"`) before raising, so a refusal is exactly as auditable as a success (task brief: "refused at approval time (422 + audit)"). | Spec §5.9's install-time row: "hub-api validates that each target exists in `app_catalog`, is installed in the same tenant as the declaring bundle — a cross-tenant target is refused outright at approval, not merely left unapproved (D30)." `app_install_approvals` is this plan's own, already-existing proxy for "installed" — no new table or cross-service call is needed to answer the question. |
 | 16 | **The usage aggregator (spec §5.12, §6.12, D31) is a Kubernetes CronJob, not an in-process background task, and is gated by the chart value `metering.enabled`, never a PostHog flag.** hub-api's `services/usage_aggregator_service.py` (Task 47) owns its own Valkey consumer group (`hub_api_usage_aggregator`) on `waddles:usage`, `XREADGROUP`s a bounded batch, aggregates in memory, commits one `workstream_usage_hourly` row per distinct `(tenant, community, workstream, stage, app, hour)` group, and only then `XACK`s the entries in that batch — so a crash between commit and ack causes at-least-once redelivery (a duplicate row on the next run), never data loss, which `workstream_usage_hourly`'s own append-only/summed-at-query-time design (spec §6.12) already tolerates by construction. The wire shape of one `waddles:usage` entry is this task's own decision (the spec specifies the transport, not the field names) — documented in full in Task 47's docstring, marked **must match** whichever plan implements the stage-side `XADD` producer (M3 `svc_action`, M4 `svc_process`, M5 `svc_ingest`, and `svc_streaming`'s own future plan). The per-community admin usage view (Task 48) stays **ungated**, following this plan's own established rule (Task 37: "write surfaces are gated; read surfaces are not") — reading usage data can never be blocked by a flag flip, only the recording pipeline can, and that pipeline's gate is the chart value the spec itself names. | Spec §5.12 ("batched and `XADD`ed... Stages are write-only"; "hub-api owns a consumer that reads `waddles:usage` and writes `workstream_usage_hourly`... append-only... corrections are new rows... summed at query time"), §12.3 (`metering.enabled`, a chart value "no charging or enforcement is wired to it"). A long-lived in-process consumer thread inside a horizontally-scaled Quart deployment raises "which replica owns the singleton reader" in a way a CronJob (naturally single-run, `concurrencyPolicy: Forbid`) does not — the same operational shape this plan already uses for `bundle_role_cleanup_job.py` (Task 36). |
-| 17 | **hub-api never touches `security.envelopeBinding.keySecretRef`/`k_binding` — confirmed, not implemented.** Spec §5.11/§12.3 state the binding-MAC key is "held only by the Rust stage services... never by hub-api, never by a bundle, never by the compiler." No task in this plan reads, writes, provisions or rotates that Secret; hub-api's only D30 responsibility is the `workstreams` identity table and its 1:1 lifecycle with `ingest_sources` — the key itself, and its provisioning/rotation, belong to the chart/M6 work across the four Rust stage services (the same ownership split Decision #7 already draws for the Valkey ACL matrix). Likewise, **RLS policies on bundle-reachable tables (`data.tables`) are confirmed out of M2b's scope**, not merely deferred: the spec's own M2b milestone row (§16) lists exactly four hub-api deliverables for D30/D31 — `workstreams`, the usage aggregator, the admin usage view, and `routes_to` refusal — and does not mention RLS; RLS enforcement (`SET LOCAL waddles.tenant`/`waddles.community` driving policies on a bundle's own tables, spec §7.4) is explicitly the Rust stage side's job, confirmed by the M2a plan's own PA4 scope note ("RLS... M3/M4/M5 scope"). `bundle_db_role_service.py` (Task 20) already grants the per-bundle role table-level privileges; it was never the right place for row-level policy DDL, and this plan adds none. | Verifies the task brief's two explicit checks ("hub-api must never be able to read the key if the spec says stage-only — follow the spec exactly"; "RLS policies on bundle-reachable tables") against the spec's own milestone table and the sibling M2a plan, rather than fabricating scope this milestone does not own. Recorded as a Self-Review finding (see below) as well as here, since it is a negative finding — confirming an absence — not a task addition. |
+| 17 | **hub-api never touches `security.envelopeBinding.keySecretRef`/`k_binding` — confirmed, not implemented.** Spec §5.11/§12.3 state the binding-MAC key is "held only by the Rust stage services... never by hub-api, never by a bundle, never by the compiler." No task in this plan reads, writes, provisions or rotates that Secret; hub-api's only D30 responsibility is the `workstreams` identity table and its 1:1 lifecycle with `ingest_sources` — the key itself, and its provisioning/rotation, belong to the chart/M6 work across the four Rust stage services (the same ownership split Decision #7 already draws for the Valkey ACL matrix). Likewise, **RLS policies on bundle-reachable (`data.tables`) tables are confirmed out of M2b's scope and belong to M4, by name, not a vague "M3/M4/M5."** The spec's own M2b milestone row (§16) lists exactly four hub-api deliverables for D30/D31 — `workstreams`, the usage aggregator, the admin usage view, and `routes_to` refusal — and does not mention RLS. Spec §16's **M4 (`svc_process`) deliverable table** carries the actual assignment, verbatim: "DB host capability | Parser allowlist + per-bundle role + **RLS**, with the negative tests green" — the only milestone row in the whole spec that lists RLS as a deliverable (M3's and M5's own deliverable tables have no DB-host-capability row at all). Spec §7.4 confirms the mechanism matches: RLS is enforced on the connection the **stage** opens for a bundle's `db` host call (`SET LOCAL waddles.tenant`/`waddles.community`), never on any connection hub-api opens. `bundle_db_role_service.py` (Task 20) already grants the per-bundle role table-level privileges only; it was never the right place for row-level policy DDL, and this plan adds none — the cross-plan dependency is recorded once more, by milestone, in the Findings table. | Verifies the task brief's two explicit checks ("hub-api must never be able to read the key if the spec says stage-only — follow the spec exactly"; "RLS policies on bundle-reachable tables") against the spec's own milestone table (§16 M4's "DB host capability" row is the specific, named assignment — not the M2a plan's more generic PA4 "M3/M4/M5" negative-sandbox-testing note, which this decision cited in an earlier pass and which this revision replaces with the spec's own, more precise wording), rather than fabricating scope this milestone does not own. Recorded as a Self-Review finding (see below) as well as here, since it is a negative finding — confirming an absence — not a task addition. |
+| 18 | **R52 atomicity investigation, two distinct findings, plus one implementation nuance.** (a) **Genuine cross-table atomicity gap, closed for real: `ingest_source_service.create_source()` creating its 1:1 `workstreams` row (Task 44).** Both `ingest_sources` and `workstreams` are this plan's own new tables (Task 3, Task 42) — not "one pydal table, one penguin-dal table" as first assumed; both now live on the same `install_dal: AsyncDB`. The original (pre-R52) plan left this as two sequential calls, each committing separately, safe only because `create_workstream_for_source()` is idempotent on `ingest_source_id` (a retry never duplicates the row) — a real gap, since a crash between the two calls left an `ingest_sources` row with no workstream until the next retry. Task 44 closes it with one `async with install_dal.engine.begin() as conn:` block wrapping both inserts directly — **not** `core_transaction()`, because the `workstreams` insert needs `ingest_sources.id`, a value the database only assigns when the first `INSERT` executes; `core_transaction()` takes a pre-built list of independent statements and cannot express "build statement 2 from statement 1's result," so a data-dependent pair like this is written directly against `conn`, reading `result.inserted_primary_key` between the two `execute()` calls. Real, not simulated, atomicity — a strict improvement the R52 rewrite enables for free since both tables now share one engine. (b) **Every other new-table-plus-`audit_log` write in this plan (Tasks 13, 29, 31, 35, 39, 46) is deliberately best-effort, by pre-existing, consistent design — not a gap.** Each one's original (pre-R52) code already wrapped the `audit_log` insert in `try: ... except Exception: pass  # noqa: BLE001, S110 -- audit logging failure must not break the main flow`: an audit-write failure must never roll back or block the primary operation. Wrapping these in a shared transaction would be a **regression**, not a fix — it would make a transient audit-log hiccup abort the primary write too, the opposite of the original, intentional behavior. R52 still applies to *which client* performs this best-effort write (`install_dal.audit_log.async_insert(...)`, not the pre-existing pydal `dal.audit_log.insert()` — the call site is new code this plan adds, so it goes through penguin-dal per R52's letter), but the try/except-around-a-single-statement shape is preserved unchanged in every rewritten task below. `install_dal.reflect()` (Task 4) discovers hub-api's **entire** live Postgres schema, not only the 11 new tables, which is what makes `install_dal.audit_log` a valid `TableProxy` in the first place. hub-api's pre-existing `audit_log` writes (every pre-M2b caller) are untouched — they keep using `dal.audit_log.insert()` through the existing pydal `dal`, exactly as before. (c) **`core_transaction()` (`hub_api/services/bundle_install_dal.py`, Task 4) therefore has no call site in this plan's own tasks** — its one candidate use (Task 39's `ingest_sources` update + audit insert) turned out to be case (b), best-effort, and its other candidate (Task 44) turned out to need the data-dependent pattern in (a) instead. It stays in Task 4, documented and covered by its own smoke test (proving two *independent* statements committing together), as the toolkit's Pattern C primitive for the first genuinely independent-multi-statement need M3/M4/M5/M6 bring to this codebase — the same "define once, use when needed" posture M1.5's `raw_sql_rows`/`raw_sql_write` already established (not every helper there has a call site in every task either). | The task brief's own instruction: "design it so atomicity holds ... or order + compensate." Investigating each of this plan's actual call sites (not a hypothetical) found one real gap (a), closed directly rather than through a helper that cannot express the data dependency; found the audit-log sites already non-atomic by deliberate, pre-existing design (b), which is correct, not a defect to "fix" into a regression; and recorded (c) so a future reader does not mistake an unused-in-this-plan helper for dead code. |
 
 ---
 
@@ -88,10 +92,10 @@ alembic/versions/
 docs/
   rbac-matrix.md                            new (Task 2)
 hub_api/
-  requirements.in                           modified — kubernetes, PyYAML (Task 6)
-  app.py                                    modified — one new bind_*_tables() call (Task 4)
+  requirements.in                           modified — kubernetes, PyYAML, penguin-dal==0.4.0 + asyncpg + aiosqlite (Task 6, Task 4, R52)
+  app.py                                    modified — construct + reflect() the penguin-dal install_dal (Task 4, R52)
   services/
-    schema.py                               modified — bind_bundle_install_tables() (Task 4)
+    bundle_install_dal.py                   new — penguin-dal AsyncDB wiring + raw_sql_rows/raw_sql_write/core_transaction helpers, replaces the old pydal binder (Task 4, R52)
     rbac_matrix.py                          new — thin re-export of scripts/db/rbac_matrix for hub-api's own test imports (Task 1)
     bundle_secret_crypto.py                 new (Task 6)
     bundle_manifest_v2.py                   new (Task 7)
@@ -131,7 +135,8 @@ hub_api/
     bundle_versions.py                      modified — POST .../trip-reenable (Task 35)
     workstream_usage.py                     new (Task 48)
   tests/
-    conftest.py                             modified — bundle_install_db fixture (Task 4)
+    conftest.py                             modified — bundle_install_db fixture narrowed to pre-existing tables only, new install_dal penguin-dal fixture added (Task 4, R52)
+    test_bundle_install_fixture_smoke.py    new — proves install_dal reflects all 9 Task 4 tables (Task 4, R52)
     test_rbac_live_grants.py                new (Task 5)
     test_bundle_secret_crypto.py            new (Task 6)
     test_bundle_manifest_v2.py              new (Task 7)
@@ -1329,278 +1334,441 @@ EOF
 
 ---
 
-## Task 4: pydal test binder + `app.py` wiring + shared test fixture
+## Task 4: `penguin-dal` `AsyncDB` wiring (`bundle_install_dal.py`) + `app.py` startup/shutdown + shared test fixture (R52)
 
-**Depends on:** Task 2 (migration 0020's `app_versions`/`app_active_versions`/`app_versions_audit_log`), Task 3 (migration 0021's six tables) — the pydal binder mirrors exactly those nine tables.
+**Depends on:** Task 2 (migration 0020's `app_versions`/`app_active_versions`/`app_versions_audit_log`), Task 3 (migration 0021's six tables) — the new `penguin_dal.AsyncDB` reflects exactly those nine tables at startup, the same nine a real Postgres has after both migrations run. No Alembic migration is added or changed by this task — DDL ownership is unchanged (R52: `penguin-dal` never issues DDL here, only `AsyncDB.reflect()` against tables Alembic already created).
+
+**Coordinator ruling R52 (binding):** "We aren't using pydal anymore — instead we are running penguin-dal." This task replaces the plan's original "pydal test binder" (a `bind_bundle_install_tables()` function in `hub_api/services/schema.py` using `dal.define_table(...)` with pydal `Field` objects) with a `penguin_dal.AsyncDB` — exact pin `penguin-dal==0.4.0`, the same version and public API the M1.5 bundle-migration plan (`docs/superpowers/plans/2026-09-14-rust-data-plane-m1.5-bundle-migration.md`) pins and uses (verified directly against the installed package at `penguin-dal-0.4.0.dist-info` — `penguin_dal.db.AsyncDB`, `penguin_dal.query.{Query,Row,Rows,AsyncQuerySet}`, `penguin_dal.field_proxy.FieldProxy`, `penguin_dal.backends.ensure_async_uri`). **`hub_api/services/schema.py` is not modified by this task, or by any task in this plan** — every pre-existing `bind_*_tables()` function in it, and every pre-existing pydal call site elsewhere in hub-api, is untouched (R52 forbids new pydal, not existing pydal).
 
 **Files:**
-- Modify: `hub_api/services/schema.py` (add `bind_bundle_install_tables`)
-- Modify: `hub_api/app.py` (one new import + one new call in `_bind_reference_tables`)
-- Modify: `hub_api/tests/conftest.py` (add `bundle_install_db` fixture)
+- Create: `hub_api/services/bundle_install_dal.py`
+- Modify: `hub_api/app.py` (one new import + one new construct/reflect call in `startup()`, one new close call in `shutdown()`)
+- Modify: `hub_api/tests/conftest.py` (add the `install_dal` fixture; the existing `bundle_install_db` fixture stays, narrowed to the tables it still owns)
+- Create: `hub_api/tests/test_bundle_install_fixture_smoke.py`
+- Modify: `hub_api/requirements.in` (pin `penguin-dal==0.4.0`, `asyncpg`, `aiosqlite`)
+- Regenerate: `hub_api/requirements.txt`
 
 **Interfaces:**
-- Produces: `services.schema.bind_bundle_install_tables(dal: Any, *, migrate: bool = False) -> None` — binds `app_versions`, `app_active_versions`, `app_versions_audit_log`, `app_version_uploads` (including its `manifest_json` column, the parsed `bundle.yaml` v2, populated by Task 10), `app_install_approvals`, `app_stream_grants`, `custom_platforms`, `ingest_sources`, `platform_settings` on `dal`, idempotent (`"app_versions" in dal.tables` guard). Test fixture `bundle_install_db(tmp_path) -> AsyncDAL`, module constants `BUNDLE_TENANT_ID = 1`, `BUNDLE_COMMUNITY_ID = 1`, `BUNDLE_ADMIN_USER_ID = 1`.
-- Consumes: nothing new — depends only on `bind_auth_tables`/`bind_community_authz_tables`/`bind_lifecycle_tables` already in `hub_api/services/schema.py` (existing).
+- Produces: `services.bundle_install_dal.build_install_dal(database_url: str, pool_size: int) -> AsyncDB` — constructs a `penguin_dal.AsyncDB` against `database_url` (the exact same `HubAPIConfig.database_url` the existing pydal `dal` already uses — same host/port/user/password/scheme, so identical TLS/auth posture with no new config; `penguin_dal.backends.ensure_async_uri()` maps hub-api's existing `postgres://`-scheme DSN, built for pydal by `config.py::_build_db_url`, straight to `postgresql+asyncpg://` — no DSN change needed anywhere) and calls `await .reflect()` once before returning, so every caller receives an `AsyncDB` that already sees the nine tables Tasks 2-3 create (and every other live table, since `reflect()` discovers the whole schema — this is what makes Decision #18's cross-table `audit_log` transaction possible). `services.bundle_install_dal.raw_sql_rows(dal: AsyncDB, sql: str, params: Mapping[str, Any] | None = None) -> Rows` and `raw_sql_write(dal: AsyncDB, sql: str, params: Mapping[str, Any] | None = None) -> Rows` — read-only and single-statement-write raw-SQL escape hatches for joins/`GROUP BY`/`ON CONFLICT` that `penguin_dal`'s single-table `Query` builder cannot express, same idiom and signature as `flask_core.bundle_runtime`'s M1.5 helpers (a hub-api-local copy, not an import from `flask_core.bundle_runtime` — that module's `get_bundle_dal()`/`set_bundle_dal()` contextvar facade is scoped to WASM bundle execution inside a stage runner, which does not apply to hub-api's own persistent per-process `AsyncDB`). `services.bundle_install_dal.core_transaction(dal: AsyncDB, statements: Sequence[Any]) -> None` — runs a list of *independent* SQLAlchemy Core `Insert`/`Update`/`Delete` statements (built against `dal.<table>.table`, a public property on every `TableProxy`) inside one `async with dal.engine.begin() as conn:` block, so two writes that don't depend on each other's result commit or roll back together with correct JSON/datetime type coercion on both backends. Covered by its own smoke test below; Decision #18 records that this plan's own two candidate call sites each turned out to need a different technique (best-effort, or a data-dependent `engine.begin()` written directly) — this function remains available, tested, for the first genuinely independent-multi-statement need a later milestone brings.
+- Test fixture: `install_dal(bundle_install_db) -> AsyncDB` (async, file-backed sqlite, same file as `bundle_install_db`) — every M2b test needing one of the nine new tables depends on this fixture from here on, replacing the old plan's `bundle_install_db.dal.app_versions`-style access. `bundle_install_db` (pydal, unchanged in shape from before this ruling) keeps binding and seeding `tenants`/`communities`/`community_roles`/`community_members`/`app_catalog` **and now also `audit_log`** (added to this fixture in this task, since Decision #18's cross-table transactions need it reachable via `install_dal.reflect()` from here on — every later task that touches `audit_log` depends on this addition, so it lands once, here, rather than being bolted onto each of those tasks individually). Module constants unchanged: `BUNDLE_TENANT_ID = 1`, `BUNDLE_COMMUNITY_ID = 1`, `BUNDLE_ADMIN_USER_ID = 1`.
+- Consumes: `penguin_dal.AsyncDB`, `penguin_dal.Row`, `penguin_dal.Rows` (new dependency, this task). `hub_api/tests/conftest.py`'s existing `bundle_install_db` fixture and `bind_auth_tables`/`bind_community_authz_tables`/`bind_lifecycle_tables`/`bind_platform_tables` (all pre-existing, `bind_platform_tables` newly added to this one fixture's call list in this task to reach `audit_log`).
 
-- [ ] **Step 1: Add the binder function to `services/schema.py`**
+- [ ] **Step 1: Pin `penguin-dal` + async drivers in `hub_api/requirements.in`**
 
-Add this function at the end of `hub_api/services/schema.py` (after the last existing `bind_*_tables` function):
+Add these three lines to `hub_api/requirements.in`, directly under the existing `# Database` comment block, keeping every existing line (including `pydal`/`psycopg2-binary`) in place — hub-api's pre-existing pydal surface is untouched by this plan:
 
-```python
-def bind_bundle_install_tables(dal: Any, *, migrate: bool = False) -> None:
-    """Define the nine tables backing bundle install/consent/grants (M2b, migrations 0020/0021).
-
-    Production always binds with `migrate=False` -- schema owned by
-    those two Alembic migrations, never by this process (same invariant
-    every `bind_*_tables()` function in this file documents). Idempotent
-    via the `"app_versions" in dal.tables` guard so a second call (e.g.
-    a test fixture that also wants `migrate=True`) is a cheap no-op.
-
-    `app_versions`/`app_active_versions`/`app_versions_audit_log` carry
-    no Postgres-role enforcement in a pydal/sqlite test fixture --
-    pydal has no concept of roles, so the Least-User-Access RBAC this
-    plan adds (Tasks 1-2) is asserted only against a real Postgres
-    instance (`tests/test_rbac_live_grants.py`), never through this
-    binder.
-    """
-    if "app_versions" in dal.tables:
-        return
-
-    dal.define_table(
-        "app_versions",
-        Field("app_id", "string", length=255, notnull=True),
-        Field("version", "string", length=50, notnull=True),
-        Field("artifact_digest", "string", length=71),
-        Field("cwasm_digest", "string", length=71),
-        Field("wasmtime_abi", "string", length=50),
-        Field("collector", "string", length=20),
-        Field("size_bytes", "bigint"),
-        Field("language", "string", length=20, notnull=True),
-        Field("artifact_kind", "string", length=20, notnull=True),
-        Field("built_at", "datetime"),
-        Field("builder", "string", length=100),
-        Field("scan_status", "string", length=30, default="not_scanned"),
-        Field("badge", "string", length=100),
-        Field("approval_id", "bigint"),
-        Field("created_at", "datetime"),
-        migrate=migrate,
-    )
-
-    dal.define_table(
-        "app_active_versions",
-        Field("app_id", "string", length=255, notnull=True),
-        Field("tenant_id", "integer", notnull=True),
-        Field("community_id", "integer", notnull=True, default=0),
-        Field("version_id", "bigint", notnull=True),
-        Field("activated_by", "integer"),
-        Field("activated_at", "datetime"),
-        primarykey=["app_id", "tenant_id", "community_id"],
-        migrate=migrate,
-    )
-
-    dal.define_table(
-        "app_versions_audit_log",
-        Field("occurred_at", "datetime"),
-        Field("db_role", "string", length=100, notnull=True),
-        Field("operation", "string", length=10, notnull=True),
-        Field("app_id", "string", length=255, notnull=True),
-        Field("version", "string", length=50, notnull=True),
-        Field("old_digest", "string", length=71),
-        Field("new_digest", "string", length=71),
-        migrate=migrate,
-    )
-
-    dal.define_table(
-        "app_version_uploads",
-        Field("app_id", "string", length=255, notnull=True),
-        Field("version", "string", length=50, notnull=True),
-        Field("tenant_id", "integer", notnull=True),
-        Field("requested_by", "integer"),
-        Field("artifact_kind", "string", length=20, notnull=True),
-        Field("language", "string", length=20, notnull=True),
-        Field("status", "string", length=30, default="UPLOADED"),
-        Field("reject_reason", "string", length=100),
-        Field("compiler_job_name", "string", length=255),
-        Field("staging_manifest_key", "string", length=500),
-        Field("staging_source_key", "string", length=500),
-        Field("staging_component_key", "string", length=500),
-        Field("manifest_json", "json"),
-        Field("app_version_id", "bigint"),
-        Field("created_at", "datetime"),
-        Field("updated_at", "datetime"),
-        migrate=migrate,
-    )
-
-    dal.define_table(
-        "app_install_approvals",
-        Field("tenant_id", "integer", notnull=True),
-        Field("community_id", "integer"),
-        Field("app_id", "string", length=255, notnull=True),
-        Field("version", "string", length=50, notnull=True),
-        Field("permission_hash", "string", length=71, notnull=True),
-        Field("summary_json", "json", notnull=True),
-        Field("approved_by", "integer"),
-        Field("approved_at", "datetime"),
-        Field("superseded_by", "bigint"),
-        migrate=migrate,
-    )
-
-    dal.define_table(
-        "app_stream_grants",
-        Field("tenant_id", "integer", notnull=True),
-        Field("community_id", "integer"),
-        Field("app_id", "string", length=255, notnull=True),
-        Field("stream_key", "string", length=500, notnull=True),
-        Field("platform", "string", length=50, notnull=True),
-        Field("source_id", "string", length=255, notnull=True),
-        Field("label", "string", length=255, notnull=True),
-        Field("granted_by", "integer"),
-        Field("granted_at", "datetime"),
-        Field("revoked_at", "datetime"),
-        migrate=migrate,
-    )
-
-    dal.define_table(
-        "custom_platforms",
-        Field("tenant_id", "integer", notnull=True),
-        Field("name", "string", length=100, notnull=True),
-        Field("created_at", "datetime"),
-        migrate=migrate,
-    )
-
-    dal.define_table(
-        "ingest_sources",
-        Field("tenant_id", "integer", notnull=True),
-        Field("community_id", "integer"),
-        Field("platform", "string", length=50, notnull=True),
-        Field("source_id", "string", length=255, notnull=True),
-        Field("label", "string", length=255, notnull=True),
-        Field("secret_ciphertext", "blob"),
-        Field("secret_iv", "blob"),
-        Field("mapping", "json"),
-        Field("enabled", "boolean", default=True),
-        Field("created_at", "datetime"),
-        Field("updated_at", "datetime"),
-        migrate=migrate,
-    )
-
-    dal.define_table(
-        "platform_settings",
-        Field("key", "string", length=150, notnull=True),
-        Field("value", "text"),
-        Field("updated_by", "integer"),
-        Field("updated_at", "datetime"),
-        migrate=migrate,
-    )
+```
+# penguin-dal (M2b new-table DB access, R52) -- async Postgres via asyncpg;
+# aiosqlite is test-only (in-memory/file-backed sqlite fixtures below).
+# Exact pin per critical-rules.md Dependency Pinning; matches the M1.5
+# bundle-migration plan's own pin.
+penguin-dal==0.4.0
+asyncpg==0.30.0
+aiosqlite==0.20.0
 ```
 
-- [ ] **Step 2: Wire the binder into `app.py`**
+Run: `docker run --rm -v "$(pwd)/hub_api:/work" -w /work python:3.13-slim bash -c "pip install -q uv && uv pip compile requirements.in --generate-hashes -o requirements.txt --python-platform x86_64-manylinux_2_28"`
+Expected: exits 0, `requirements.txt` rewritten with `penguin-dal==0.4.0 \`, `asyncpg==0.30.0 \`, `aiosqlite==0.20.0 \` blocks, each followed by `--hash=sha256:...` lines, in the file's existing autogenerated format (header comment: `# This file was autogenerated by uv via the following command: uv pip compile requirements.in --generate-hashes -o requirements.txt`).
 
-In `hub_api/app.py`, add `bind_bundle_install_tables` to the existing `from services.schema import (...)` block (alphabetical, matching the existing list's ordering convention) and call it at the end of `_bind_reference_tables`:
+Run: `docker run --rm -v "$(pwd)/hub_api:/work" -w /work python:3.13-slim bash -c "pip install -q -r requirements.txt && python3 -c 'import penguin_dal, asyncpg, aiosqlite; print(penguin_dal.__name__, asyncpg.__version__, aiosqlite.__version__)'"`
+Expected: prints `penguin_dal <asyncpg-version> <aiosqlite-version>` with no `pip install` error.
+
+- [ ] **Step 2: Write `hub_api/services/bundle_install_dal.py`**
 
 ```python
-from services.schema import (
-    bind_ai_routing_tables,
-    bind_bundle_install_tables,
-    bind_lifecycle_tables,
-    bind_music_tables,
-    bind_platform_tables,
-    bind_token_billing_tables,
+# hub_api/services/bundle_install_dal.py
+"""penguin-dal AsyncDB wiring for hub-api's M2b bundle-install/consent/grants control-plane tables (R52).
+
+Coordinator ruling R52 ("we aren't using pydal anymore... instead we are
+running penguin-dal") applies to every table this plan's own migrations
+create -- the nine tables Tasks 2-3 add via Alembic (app_versions,
+app_active_versions, app_versions_audit_log, app_version_uploads,
+app_install_approvals, app_stream_grants, custom_platforms,
+ingest_sources, platform_settings), plus workstreams/
+workstream_usage_hourly added by Task 42. hub-api's pre-existing pydal
+surface (tenants, communities, community_members, community_roles,
+app_catalog, hub_users, audit_log, and every other table
+`hub_api/services/schema.py`'s existing bind_*_tables() functions bind)
+is untouched -- this module never binds, defines, or migrates any table;
+`build_install_dal()` only reflects tables Alembic already created.
+
+Coexistence: this AsyncDB is a SEPARATE SQLAlchemy async engine/connection
+pool from the existing pydal AsyncDAL's pool, both pointed at the exact
+same `DATABASE_URL` -- same host/port/user/password/scheme, so identical
+TLS and auth posture with zero new configuration (`penguin_dal.
+backends.ensure_async_uri()` maps hub-api's existing pydal-style
+`postgres://` DSN straight to `postgresql+asyncpg://`). Two pools against
+one DSN is the same pattern hub-api already uses for its own read-replica
+DSN (`HubAPIConfig.database_read_replica_url`) -- a second pool is not a
+new architectural shape for this service.
+
+`raw_sql_rows`/`raw_sql_write` are the Pattern B
+escape hatch (joins/GROUP BY/ON CONFLICT, single-statement) `penguin_dal`'s
+single-table Query/TableProxy builder cannot express -- the same idiom
+and signature as `flask_core.bundle_runtime`'s M1.5 helpers, copied here
+rather than imported: `bundle_runtime`'s `get_bundle_dal()`/
+`set_bundle_dal()` contextvar facade is scoped to WASM bundle execution
+inside a Rust/Python stage runner, which does not describe hub-api's own
+persistent, per-process AsyncDB. `core_transaction()` is Pattern C: a
+multi-statement write that must be atomic (Decision #18) -- it takes
+real SQLAlchemy Core statements, not text SQL, specifically so JSON
+columns (`audit_log.details` and every JSON column this plan writes)
+get correct type-aware serialization on both the sqlite test fixture
+and real Postgres `JSONB`, which raw `text()` parameter binding does
+not provide.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from penguin_dal import AsyncDB, Row, Rows
+from sqlalchemy import text
+
+
+async def build_install_dal(database_url: str, pool_size: int) -> AsyncDB:
+    """Construct the M2b `AsyncDB` and reflect the live schema.
+
+    Called once, in `app.py::startup()`. `reflect()` discovers every
+    table already in the live Postgres database -- Tasks 2-3's nine new
+    tables (created by Alembic before this ever runs) plus every
+    pre-existing table (`audit_log` included, which is what makes
+    Decision #18's cross-table transaction possible without a second
+    DDL owner or a schema duplicated between pydal and penguin-dal).
+
+    Args:
+        database_url: The same DSN `HubAPIConfig.database_url` already
+            builds for the existing pydal DAL -- reused verbatim.
+        pool_size: Connection pool size for this second, independent pool.
+
+    Returns:
+        A fully reflected `AsyncDB`, ready for `TableProxy`/`Query` access
+        against any table in the live schema.
+    """
+    install_dal = AsyncDB(database_url, pool_size=pool_size)
+    await install_dal.reflect()
+    return install_dal
+
+
+async def raw_sql_rows(
+    dal: AsyncDB, sql: str, params: Mapping[str, Any] | None = None
+) -> Rows:
+    """Run a read-only raw SQL query, for the joins/GROUP BY/RANDOM() cases
+    `penguin_dal`'s single-table Query builder cannot express.
+
+    Args:
+        dal: The `install_dal` `AsyncDB` (from `build_install_dal()`).
+        sql: SQL text with named `:param` markers.
+        params: Bind parameter values, or `None` for a parameterless query.
+
+    Returns:
+        A `penguin_dal.Rows` of the result set (empty if no rows matched).
+    """
+    async with dal.engine.connect() as conn:
+        result = await conn.execute(text(sql), params or {})
+        return Rows([Row(dict(mapping)) for mapping in result.mappings().all()])
+
+
+async def raw_sql_write(
+    dal: AsyncDB, sql: str, params: Mapping[str, Any] | None = None
+) -> Rows:
+    """Run a single raw SQL write (INSERT/UPDATE/DELETE, optionally
+    `RETURNING`) in its own committed transaction.
+
+    Args:
+        dal: The `install_dal` `AsyncDB` (from `build_install_dal()`).
+        sql: SQL text with named `:param` markers.
+        params: Bind parameter values, or `None` for a parameterless statement.
+
+    Returns:
+        A `penguin_dal.Rows` of any `RETURNING` rows (empty otherwise).
+    """
+    async with dal.engine.begin() as conn:
+        result = await conn.execute(text(sql), params or {})
+        try:
+            mappings = result.mappings().all()
+        except Exception:  # noqa: BLE001 -- driver raises when the statement has no result set (no RETURNING)
+            mappings = []
+        return Rows([Row(dict(mapping)) for mapping in mappings])
+
+
+async def core_transaction(dal: AsyncDB, statements: Sequence[Any]) -> None:
+    """Run multiple SQLAlchemy Core statements in ONE transaction (Decision #18).
+
+    For a write that must be atomic across one of this plan's new tables
+    and an existing table (`audit_log` is this plan's only case) -- both
+    live in the same Postgres database, so one connection and one
+    `engine.begin()` block gives real atomicity (a failure partway
+    through rolls back every statement already run in this call, not
+    just the one that failed) without coordinating two separate
+    connection pools (this `AsyncDB`'s and the existing pydal `AsyncDAL`'s).
+
+    Deliberately **not** `raw_sql_write`/text()-based: `audit_log.details`
+    and every JSON column this plan writes (`app_install_approvals.
+    summary_json`, `ingest_sources.auth`, ...) need SQLAlchemy's own
+    JSON bind-processing to serialize a Python `dict` correctly on both
+    the sqlite test fixture and real Postgres `JSONB` -- `text()` sends
+    parameter values to the DBAPI driver unprocessed (a raw `dict` is not
+    a value any driver accepts, and a manual `json.dumps()` string still
+    needs a backend-specific cast `text()` cannot express portably).
+    Building each statement against the real reflected `Table` object
+    (`dal.<table>.table`, a public property on every `TableProxy`) with
+    `.insert()`/`.update()` keeps that type-aware serialization while
+    still giving one shared transaction.
+
+    Args:
+        dal: The `install_dal` `AsyncDB` (from `build_install_dal()`).
+        statements: Ordered SQLAlchemy Core `Insert`/`Update`/`Delete`
+            statements (e.g. `dal.ingest_sources.table.update().where(...)
+            .values(...)`), executed in the order given.
+    """
+    async with dal.engine.begin() as conn:
+        for stmt in statements:
+            await conn.execute(stmt)
+```
+
+- [ ] **Step 3: Wire `build_install_dal()` into `app.py`**
+
+In `hub_api/app.py`, add the import (alongside the existing `from services.schema import (...)` block, as its own line -- `bundle_install_dal` is a new module, not part of `services.schema`):
+
+```python
+from services.bundle_install_dal import build_install_dal
+```
+
+In `startup()`, immediately after the existing `_bind_reference_tables(dal)` call (the pydal binder chain is untouched -- this is a new, independent call added after it, not interleaved with it):
+
+```python
+        _bind_reference_tables(dal)
+        app.config["async_dal"] = async_dal
+        app.config["dal"] = dal
+        # penguin-dal (R52): a SEPARATE AsyncDB/pool against the same
+        # DATABASE_URL, reflecting the nine tables Tasks 2-3's Alembic
+        # migrations create (plus every other live table -- see
+        # bundle_install_dal.py's own docstring on why that matters for
+        # Decision #18's audit_log transactions). Every M2b table this
+        # plan adds is queried through this handle, never through a new
+        # pydal binder.
+        install_dal = await build_install_dal(cfg.database_url, pool_size=cfg.db_pool_size)
+        app.config["install_dal"] = install_dal
+        logger.system("hub-api started", action="startup", result="SUCCESS")
+```
+
+(Remove the pre-existing `logger.system("hub-api started", ...)` line from its old position immediately after `_bind_reference_tables`/`app.config["dal"] = dal` -- it moves to after the new `install_dal` line above, so "started" still means every DAL, old and new, is ready before the app accepts traffic.)
+
+In `shutdown()`, add before the existing `rate_limiter.disconnect()` try/except block:
+
+```python
+        install_dal = app.config.get("install_dal")
+        if install_dal is not None:
+            try:
+                await install_dal.close()
+            except Exception as exc:  # noqa: BLE001 - shutdown must not raise
+                logger.warning(f"Error closing install_dal on shutdown: {exc}")
+```
+
+(`AsyncDB.close()` disposes the SQLAlchemy async engine directly and does not have the existing pydal `AsyncDAL.close_async()`'s cross-thread `THREAD_LOCAL` issue documented in `shutdown()`'s own docstring -- this new close call needs no defensive same-thread reasoning, only the same "shutdown must never raise" `try`/`except` shape every other close call in this function already uses.)
+
+- [ ] **Step 4: Add the `install_dal` test fixture to `tests/conftest.py`**
+
+Add these imports to the top of `hub_api/tests/conftest.py` (alongside its existing imports):
+
+```python
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Integer,
+    LargeBinary,
+    MetaData,
+    String,
+    Table,
+    Text,
+    true as sa_true,
 )
+
+from services.bundle_install_dal import build_install_dal
+from services.schema import bind_platform_tables
 ```
 
-```python
-    # Music Station queue feature (new schema, not a Node port) --
-    # services/schema.py::bind_music_tables()'s own docstring explains why
-    # it follows PORTING.md's normal "call from _bind_reference_tables"
-    # checklist step instead of bind_streaming_tables()'s per-request
-    # lazy-bind workaround.
-    bind_music_tables(dal)
-    # Bundle install/consent/grants schema (M2b, migrations 0020/0021) --
-    # same "call once, unconditionally, at the end" convention as every
-    # group above.
-    bind_bundle_install_tables(dal)
-```
-
-- [ ] **Step 3: Add the shared test fixture to `tests/conftest.py`**
-
-Add to the `from services.schema import (...)` block in `hub_api/tests/conftest.py`:
+Add `bind_platform_tables` to the existing `bundle_install_db` fixture's binder calls -- this is the one change to that fixture in this task (everything else about it, including its pydal `define_table` calls for `tenants`/`communities`/`community_roles`/`community_members`/`app_catalog`, is unchanged; `bind_platform_tables` is a pre-existing function in `services/schema.py`, not a new one):
 
 ```python
-    bind_bundle_install_tables,
-```
-
-Then add this fixture (near `lifecycle_db`/`distribution_db`, same file):
-
-```python
-@pytest.fixture
-def bundle_install_db(tmp_path: Any) -> Any:
-    """File-backed `AsyncDAL` for every M2b bundle-install/consent/grants test.
-
-    Same file-backed-sqlite/`pool_size=1`/eager-table-touch shape as
-    `lifecycle_db` above. Extends `bind_auth_tables()` +
-    `bind_community_authz_tables()` + `bind_lifecycle_tables()` (needed
-    for `app_catalog`, which every new table FKs against logically, and
-    for `community_authz`'s admin checks) with this group's own
-    `bind_bundle_install_tables()`. Seeds one tenant, one community, an
-    `admin` community role, a membership granting user `"1"` that role,
-    and one `app_catalog` row (`waddles.socials.music.default`) so
-    version/approval/grant tests have a real `app_id` to reference.
-
-    Deterministic seeded ids (fresh sqlite file, 1-based autoincrement):
-    `BUNDLE_TENANT_ID = 1`, `BUNDLE_COMMUNITY_ID = 1`,
-    `BUNDLE_ADMIN_USER_ID = 1` (module constants below).
-    """
-    async_dal = AsyncDAL(f"sqlite://{tmp_path / 'bundle_install_test.db'}", pool_size=1)
-    dal = async_dal.dal
-    dal.define_table(
-        "tenants",
-        Field("slug", unique=True),
-        Field("display_name"),
-        Field("logo_url"),
-        Field("is_global", "boolean", default=False),
-        Field("is_active", "boolean", default=True),
-        Field("config", "json"),
-    )
     bind_auth_tables(dal, migrate=True)
     bind_community_authz_tables(dal, migrate=True)
     bind_lifecycle_tables(dal, migrate=True)
-    bind_bundle_install_tables(dal, migrate=True)
+    bind_platform_tables(dal, migrate=True)
+```
 
-    tenant_id = dal.tenants.insert(slug=TENANT_SLUG, display_name="Acme Corp", is_active=True)
-    community_id = dal.communities.insert(
-        name="acme-community", display_name="Acme Community", tenant_id=tenant_id, is_active=True
+Add this module-level helper and fixture, near `bundle_install_db` (same file):
+
+```python
+def _create_bundle_install_tables(conn: Any) -> None:
+    """Synchronous SQLAlchemy Core DDL for the nine M2b tables (Tasks 2-3).
+
+    Run via `conn.run_sync()` inside `install_dal`'s `engine.begin()`
+    block below. Alembic owns this DDL in real Postgres (migrations 0020
+    and 0021); a unit test has no Alembic run, so this reproduces the
+    exact same column set as a `sqlite`-compatible SQLAlchemy Core
+    schema -- the same "no native UUID/JSONB, plain generic types" shape
+    the old pydal test binder used, translated to SQLAlchemy Core
+    instead of pydal `Field` objects. Task 43 extends this with
+    `workstreams`/`workstream_usage_hourly`.
+    """
+    metadata = MetaData()
+    Table(
+        "app_versions",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("app_id", String(255), nullable=False),
+        Column("version", String(50), nullable=False),
+        Column("artifact_digest", String(71)),
+        Column("cwasm_digest", String(71)),
+        Column("wasmtime_abi", String(50)),
+        Column("collector", String(20)),
+        Column("size_bytes", BigInteger),
+        Column("language", String(20), nullable=False),
+        Column("artifact_kind", String(20), nullable=False),
+        Column("built_at", DateTime),
+        Column("builder", String(100)),
+        Column("scan_status", String(30), server_default="not_scanned"),
+        Column("badge", String(100)),
+        Column("approval_id", BigInteger),
+        Column("created_at", DateTime),
     )
-    role_id = dal.community_roles.insert(
-        community_id=community_id,
-        name="admin",
-        base_claims={"scopes": ["community:manage_members"]},
+    Table(
+        "app_active_versions",
+        metadata,
+        Column("app_id", String(255), primary_key=True),
+        Column("tenant_id", Integer, primary_key=True),
+        Column("community_id", Integer, primary_key=True, server_default="0"),
+        Column("version_id", BigInteger, nullable=False),
+        Column("activated_by", Integer),
+        Column("activated_at", DateTime),
     )
-    dal.community_members.insert(
-        community_id=community_id,
-        user_id="1",
-        role="admin",
-        community_role_id=role_id,
-        is_active=True,
+    Table(
+        "app_versions_audit_log",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("occurred_at", DateTime),
+        Column("db_role", String(100), nullable=False),
+        Column("operation", String(10), nullable=False),
+        Column("app_id", String(255), nullable=False),
+        Column("version", String(50), nullable=False),
+        Column("old_digest", String(71)),
+        Column("new_digest", String(71)),
     )
-    dal.app_catalog.insert(
-        app_id="waddles.socials.music.default",
-        name="Music Station Song Request",
-        manifest_version="3.0.0",
-        module="socials",
-        feature="waddles.socials.music",
-        provider="builtin",
-        execution_model="native",
-        is_default=True,
-        platform_compatibility={"tested_with": "3.0.0", "min_version": None, "max_version": None},
-        status="active",
-        stages={},
+    Table(
+        "app_version_uploads",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("app_id", String(255), nullable=False),
+        Column("version", String(50), nullable=False),
+        Column("tenant_id", Integer, nullable=False),
+        Column("requested_by", Integer),
+        Column("artifact_kind", String(20), nullable=False),
+        Column("language", String(20), nullable=False),
+        Column("status", String(30), server_default="UPLOADED"),
+        Column("reject_reason", String(100)),
+        Column("compiler_job_name", String(255)),
+        Column("staging_manifest_key", String(500)),
+        Column("staging_source_key", String(500)),
+        Column("staging_component_key", String(500)),
+        Column("manifest_json", JSON),
+        Column("app_version_id", BigInteger),
+        Column("created_at", DateTime),
+        Column("updated_at", DateTime),
     )
-    dal.commit()
-    for table_name in dal.tables:
-        dal(dal[table_name]).count()
-    yield async_dal
-    dal.close()
+    Table(
+        "app_install_approvals",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("tenant_id", Integer, nullable=False),
+        Column("community_id", Integer),
+        Column("app_id", String(255), nullable=False),
+        Column("version", String(50), nullable=False),
+        Column("permission_hash", String(71), nullable=False),
+        Column("summary_json", JSON, nullable=False),
+        Column("approved_by", Integer),
+        Column("approved_at", DateTime),
+        Column("superseded_by", BigInteger),
+    )
+    Table(
+        "app_stream_grants",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("tenant_id", Integer, nullable=False),
+        Column("community_id", Integer),
+        Column("app_id", String(255), nullable=False),
+        Column("stream_key", String(500), nullable=False),
+        Column("platform", String(50), nullable=False),
+        Column("source_id", String(255), nullable=False),
+        Column("label", String(255), nullable=False),
+        Column("granted_by", Integer),
+        Column("granted_at", DateTime),
+        Column("revoked_at", DateTime),
+    )
+    Table(
+        "custom_platforms",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("tenant_id", Integer, nullable=False),
+        Column("name", String(100), nullable=False),
+        Column("created_at", DateTime),
+    )
+    Table(
+        "ingest_sources",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("tenant_id", Integer, nullable=False),
+        Column("community_id", Integer),
+        Column("platform", String(50), nullable=False),
+        Column("source_id", String(255), nullable=False),
+        Column("label", String(255), nullable=False),
+        Column("secret_ciphertext", LargeBinary),
+        Column("secret_iv", LargeBinary),
+        Column("mapping", JSON),
+        Column("enabled", Boolean, server_default=sa_true()),
+        Column("created_at", DateTime),
+        Column("updated_at", DateTime),
+    )
+    Table(
+        "platform_settings",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("key", String(150), nullable=False),
+        Column("value", Text),
+        Column("updated_by", Integer),
+        Column("updated_at", DateTime),
+    )
+    metadata.create_all(conn)
+
+
+@pytest.fixture
+async def install_dal(bundle_install_db: Any) -> Any:
+    """`penguin_dal.AsyncDB` for every M2b test needing one of the nine new tables (R52).
+
+    Points at the exact same sqlite file as `bundle_install_db`
+    (`bundle_install_db.uri`) so both fixtures see each other's rows in
+    the same test -- `bundle_install_db` (pydal, unchanged shape) seeds
+    `tenants`/`communities`/`community_roles`/`community_members`/
+    `app_catalog`/`audit_log`; this fixture creates the nine new M2b
+    tables directly via `_create_bundle_install_tables()` (Alembic owns
+    this DDL in production; there is no Alembic run in a unit test) and
+    then calls `await install_dal.reflect()`, which discovers BOTH the
+    nine tables just created here AND every table `bundle_install_db`
+    already created in the same file -- this is what lets a single M2b
+    write cross a new table and the existing `audit_log` table in one
+    real SQL transaction (Decision #18, `core_transaction()`).
+    """
+    install_dal = AsyncDB(bundle_install_db.uri, pool_size=1, echo=False)
+    async with install_dal.engine.begin() as conn:
+        await conn.run_sync(_create_bundle_install_tables)
+    await install_dal.reflect()
+    yield install_dal
+    await install_dal.close()
 
 
 BUNDLE_TENANT_ID = 1
@@ -1608,19 +1776,26 @@ BUNDLE_COMMUNITY_ID = 1
 BUNDLE_ADMIN_USER_ID = 1
 ```
 
-- [ ] **Step 4: Write a smoke test proving the fixture works**
+Add the one remaining import `install_dal`'s body needs directly (not already covered by the `sqlalchemy` import block above):
+
+```python
+from penguin_dal import AsyncDB
+```
+
+- [ ] **Step 5: Write a smoke test proving the fixture works**
 
 ```python
 # hub_api/tests/test_bundle_install_fixture_smoke.py
-"""Smoke test for the bundle_install_db fixture -- proves every new table binds and is queryable."""
+"""Smoke test for the install_dal fixture -- proves every new table reflects and is queryable, and that install_dal can also see audit_log (Decision #18)."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from services.bundle_install_dal import raw_sql_rows
 
-async def test_every_new_table_is_queryable(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
+
+async def test_every_new_table_is_queryable_and_empty(install_dal: Any) -> None:
     for table_name in (
         "app_versions",
         "app_active_versions",
@@ -1632,48 +1807,90 @@ async def test_every_new_table_is_queryable(bundle_install_db: Any) -> None:
         "ingest_sources",
         "platform_settings",
     ):
-        assert table_name in dal.tables
-        assert dal(dal[table_name]).count() == 0
+        assert table_name in install_dal.tables
+        rows = await raw_sql_rows(install_dal, f"SELECT COUNT(*) AS n FROM {table_name}")
+        assert rows.first()["n"] == 0
 
 
-async def test_seed_data_present(bundle_install_db: Any) -> None:
+async def test_install_dal_also_sees_the_existing_audit_log_table(install_dal: Any) -> None:
+    """Decision #18's precondition: install_dal.reflect() sees pre-existing tables too."""
+    assert "audit_log" in install_dal.tables
+    rows = await raw_sql_rows(install_dal, "SELECT COUNT(*) AS n FROM audit_log")
+    assert rows.first()["n"] == 0
+
+
+async def test_core_transaction_commits_two_independent_statements_together(install_dal: Any) -> None:
+    """core_transaction() (Pattern C) -- for two INDEPENDENT statements sharing one commit.
+
+    Not the shape Task 44 ends up needing (there, the second insert
+    depends on the first's generated id, so that task writes its own
+    `engine.begin()` block directly) -- this is the independent-
+    statements case core_transaction is for, proven here so the helper
+    itself is verified, not just designed.
+    """
+    from services.bundle_install_dal import core_transaction
+
+    settings_table = install_dal.platform_settings.table
+    audit_table = install_dal.audit_log.table
+    await core_transaction(
+        install_dal,
+        [
+            settings_table.insert().values(key="bundles.allow_prebuilt", value="true"),
+            audit_table.insert().values(
+                user_id=None, action="platform_setting_seeded", target_type="platform_settings",
+                target_id="bundles.allow_prebuilt", details={"value": "true"},
+            ),
+        ],
+    )
+    settings_rows = await raw_sql_rows(
+        install_dal, "SELECT value FROM platform_settings WHERE key = :k", {"k": "bundles.allow_prebuilt"}
+    )
+    assert settings_rows.first()["value"] == "true"
+    audit_rows = await raw_sql_rows(
+        install_dal, "SELECT id FROM audit_log WHERE action = :a", {"a": "platform_setting_seeded"}
+    )
+    assert audit_rows.first() is not None
+
+
+async def test_seed_data_present_via_the_pydal_fixture(bundle_install_db: Any) -> None:
     dal = bundle_install_db.dal
     row = dal(dal.app_catalog.app_id == "waddles.socials.music.default").select().first()
     assert row is not None
     assert row.status == "active"
 ```
 
-- [ ] **Step 5: Run the smoke test**
+- [ ] **Step 6: Run the smoke test**
 
 Run: `cd hub_api && python3 -m pytest tests/test_bundle_install_fixture_smoke.py -v`
-Expected: `2 passed`
+Expected: `4 passed`
 
-- [ ] **Step 6: Run the full existing hub-api suite to confirm no regression**
+- [ ] **Step 7: Run the full existing hub-api suite to confirm no regression**
 
 Run: `cd hub_api && python3 -m pytest -q`
-Expected: every previously-passing test still passes; the printed summary line's pass count is the pre-existing count plus the 2 new smoke tests (e.g. `1141 passed` becomes `1143 passed` — confirm against your own `git stash`-free baseline run before this task, since the exact pre-existing count drifts release to release).
+Expected: every previously-passing test still passes; the printed summary line's pass count is the pre-existing count plus the 4 new smoke tests (e.g. `1141 passed` becomes `1145 passed` — confirm against your own baseline run before this task, since the exact pre-existing count drifts release to release).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add hub_api/services/schema.py hub_api/app.py hub_api/tests/conftest.py \
+git add hub_api/requirements.in hub_api/requirements.txt \
+        hub_api/services/bundle_install_dal.py hub_api/app.py hub_api/tests/conftest.py \
         hub_api/tests/test_bundle_install_fixture_smoke.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): bind_bundle_install_tables() + bundle_install_db test fixture
+feat(hub-api): penguin-dal AsyncDB (install_dal) for the nine M2b tables (R52)
 
-Wires the nine M2b tables (app_versions, app_active_versions,
-app_versions_audit_log, app_version_uploads, app_install_approvals,
-app_stream_grants, custom_platforms, ingest_sources, platform_settings)
-into app.py's existing _bind_reference_tables() call chain, and adds
-the shared file-backed-sqlite fixture every later M2b test in this
-plan depends on.
+Coordinator ruling R52 ("we aren't using pydal anymore... instead we are
+running penguin-dal"): every table this plan's own migrations create is
+now queried through a penguin-dal==0.4.0 AsyncDB (bundle_install_dal.py),
+a second connection pool against the same DATABASE_URL, reflecting the
+live schema at startup instead of a new pydal binder. hub-api's existing
+pydal surface (services/schema.py and every pre-M2b call site) is
+unchanged -- this plan adds no new pydal table, binder, or query.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
 ## Task 5: RBAC live-grants CI equality test (Postgres integration)
@@ -2984,16 +3201,16 @@ EOF
 
 ---
 
-## Task 10: `bundle_version_service.py` — `create_version()` orchestration + `get_version()`/`list_versions()`
+## Task 10: `bundle_version_service.py` — `create_version()` orchestration + `get_version()`/`list_versions()` (R52: penguin-dal)
 
-**Depends on:** Task 4 (`app_version_uploads` bound and the `bundle_install_db` fixture), Task 7 (`parse_bundle_manifest_v2`), Task 8 (`stage_upload`), Task 9 (`create_compiler_job`).
+**Depends on:** Task 4 (`install_dal` penguin-dal wiring, reflects `app_version_uploads`), Task 7 (`parse_bundle_manifest_v2`), Task 8 (`stage_upload`), Task 9 (`create_compiler_job`).
 
 **Files:**
 - Create: `hub_api/services/bundle_version_service.py`
 - Test: `hub_api/tests/test_bundle_version_service.py`
 
 **Interfaces:**
-- Produces: state constants `STATUS_UPLOADED, STATUS_VALIDATING, STATUS_SCANNING, STATUS_INSPECTING, STATUS_COMPILING, STATUS_ADDRESSING, STATUS_PUBLISHING, STATUS_PUBLISHED, STATUS_REJECTED`; `async def create_version(async_dal, dal, *, tenant_id: int, app_id: str, requested_by: int, manifest_bytes: bytes, source_bytes: bytes | None, component_bytes: bytes | None, batch_api: Any, namespace: str, known_custom_platforms: frozenset[str], allow_wildcard_consumes: bool, allow_prebuilt: bool) -> Any` (the inserted row, re-selected); `async def get_version(async_dal, dal, *, app_id: str, version: str) -> Any` (raises `not_found()`); `async def list_versions(async_dal, dal, *, app_id: str) -> list[Any]`.
+- Produces: state constants `STATUS_UPLOADED, STATUS_VALIDATING, STATUS_SCANNING, STATUS_INSPECTING, STATUS_COMPILING, STATUS_ADDRESSING, STATUS_PUBLISHING, STATUS_PUBLISHED, STATUS_REJECTED`; `async def create_version(install_dal, *, tenant_id: int, app_id: str, requested_by: int, manifest_bytes: bytes, source_bytes: bytes | None, component_bytes: bytes | None, batch_api: Any, namespace: str, known_custom_platforms: frozenset[str], allow_wildcard_consumes: bool, allow_prebuilt: bool) -> Any` (the inserted row, re-selected); `async def get_version(install_dal, *, app_id: str, version: str) -> Any` (raises `not_found()`); `async def list_versions(install_dal, *, app_id: str) -> list[Any]`. `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `app_version_uploads` is one of this plan's own new tables (R52), so this module never touches the pre-existing pydal `async_dal`/`dal` pair.
 - Consumes: `services.bundle_manifest_v2.parse_bundle_manifest_v2`/`ManifestV2Error` (Task 7), `services.bundle_storage_service.stage_upload` (Task 8), `services.compiler_job_service.create_compiler_job` (Task 9), `services.errors.{ApiError, bad_request, conflict, not_found, forbidden}` (existing), `flask_core.auth.create_jwt_token`/`flask_core.secrets.require_secret_key` (existing).
 
 `BUNDLE_MAX_SOURCE_BYTES = 16_777_216`, `BUNDLE_MAX_COMPONENT_BYTES = 33_554_432` (spec §9.2) are module constants here.
@@ -3006,6 +3223,7 @@ EOF
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -3046,7 +3264,7 @@ def _mock_batch_api() -> Any:
     return mock
 
 
-async def test_create_version_happy_path(bundle_install_db: Any) -> None:
+async def test_create_version_happy_path(install_dal: Any) -> None:
     with patch("services.bundle_storage_service.stage_upload") as mock_stage:
         mock_stage.return_value = MagicMock(
             manifest_key="staging/x/3.0.1/manifest.yaml",
@@ -3054,7 +3272,7 @@ async def test_create_version_happy_path(bundle_install_db: Any) -> None:
             component_key=None,
         )
         row = await create_version(
-            bundle_install_db, bundle_install_db.dal,
+            install_dal,
             tenant_id=1, app_id="waddles.socials.music.default", requested_by=1,
             manifest_bytes=yaml.safe_dump(_MANIFEST).encode(),
             source_bytes=b"fake-tarball", component_bytes=None,
@@ -3066,16 +3284,16 @@ async def test_create_version_happy_path(bundle_install_db: Any) -> None:
     assert row.version == "3.0.1"
 
 
-async def test_create_version_rejects_duplicate(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    dal.app_version_uploads.insert(
+async def test_create_version_rejects_duplicate(install_dal: Any) -> None:
+    now = datetime.now(UTC)
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
         artifact_kind="source", language="python", status=STATUS_UPLOADED,
+        created_at=now, updated_at=now,
     )
-    dal.commit()
     with pytest.raises(ApiError) as exc:
         await create_version(
-            bundle_install_db, dal, tenant_id=1, app_id="waddles.socials.music.default", requested_by=1,
+            install_dal, tenant_id=1, app_id="waddles.socials.music.default", requested_by=1,
             manifest_bytes=yaml.safe_dump(_MANIFEST).encode(),
             source_bytes=b"x", component_bytes=None, batch_api=_mock_batch_api(), namespace="waddles",
             known_custom_platforms=frozenset(), allow_wildcard_consumes=False, allow_prebuilt=True,
@@ -3083,11 +3301,11 @@ async def test_create_version_rejects_duplicate(bundle_install_db: Any) -> None:
     assert exc.value.status_code == 409
 
 
-async def test_create_version_rejects_bad_manifest(bundle_install_db: Any) -> None:
+async def test_create_version_rejects_bad_manifest(install_dal: Any) -> None:
     bad_manifest = {**_MANIFEST, "schema_version": 1}
     with pytest.raises(ApiError) as exc:
         await create_version(
-            bundle_install_db, bundle_install_db.dal, tenant_id=1,
+            install_dal, tenant_id=1,
             app_id="waddles.socials.music.default", requested_by=1,
             manifest_bytes=yaml.safe_dump(bad_manifest).encode(),
             source_bytes=b"x", component_bytes=None, batch_api=_mock_batch_api(), namespace="waddles",
@@ -3097,10 +3315,10 @@ async def test_create_version_rejects_bad_manifest(bundle_install_db: Any) -> No
     assert exc.value.code == "unsupported_schema_version"
 
 
-async def test_create_version_rejects_oversize_source(bundle_install_db: Any) -> None:
+async def test_create_version_rejects_oversize_source(install_dal: Any) -> None:
     with pytest.raises(ApiError) as exc:
         await create_version(
-            bundle_install_db, bundle_install_db.dal, tenant_id=1,
+            install_dal, tenant_id=1,
             app_id="waddles.socials.music.default", requested_by=1,
             manifest_bytes=yaml.safe_dump(_MANIFEST).encode(),
             source_bytes=b"x" * (16_777_216 + 1), component_bytes=None,
@@ -3110,12 +3328,12 @@ async def test_create_version_rejects_oversize_source(bundle_install_db: Any) ->
     assert exc.value.status_code == 413
 
 
-async def test_create_version_rejects_prebuilt_when_disallowed(bundle_install_db: Any) -> None:
+async def test_create_version_rejects_prebuilt_when_disallowed(install_dal: Any) -> None:
     prebuilt_manifest = {**_MANIFEST, "artifact": "prebuilt", "language": "other"}
     del prebuilt_manifest["stages"]["process"]["entry"]
     with pytest.raises(ApiError) as exc:
         await create_version(
-            bundle_install_db, bundle_install_db.dal, tenant_id=1,
+            install_dal, tenant_id=1,
             app_id="waddles.socials.music.default", requested_by=1,
             manifest_bytes=yaml.safe_dump(prebuilt_manifest).encode(),
             source_bytes=None, component_bytes=b"x", batch_api=_mock_batch_api(), namespace="waddles",
@@ -3125,24 +3343,25 @@ async def test_create_version_rejects_prebuilt_when_disallowed(bundle_install_db
     assert exc.value.code == "prebuilt_not_allowed"
 
 
-async def test_get_version_not_found_raises_404(bundle_install_db: Any) -> None:
+async def test_get_version_not_found_raises_404(install_dal: Any) -> None:
     with pytest.raises(ApiError) as exc:
-        await get_version(bundle_install_db, bundle_install_db.dal, app_id="waddles.x.y.default", version="1.0.0")
+        await get_version(install_dal, app_id="waddles.x.y.default", version="1.0.0")
     assert exc.value.status_code == 404
 
 
-async def test_list_versions_returns_all_versions_for_app_id(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    dal.app_version_uploads.insert(
+async def test_list_versions_returns_all_versions_for_app_id(install_dal: Any) -> None:
+    now = datetime.now(UTC)
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="1.0.0", tenant_id=1,
         artifact_kind="source", language="python", status=STATUS_UPLOADED,
+        created_at=now, updated_at=now,
     )
-    dal.app_version_uploads.insert(
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="2.0.0", tenant_id=1,
         artifact_kind="source", language="python", status=STATUS_UPLOADED,
+        created_at=now, updated_at=now,
     )
-    dal.commit()
-    rows = await list_versions(bundle_install_db, dal, app_id="waddles.socials.music.default")
+    rows = await list_versions(install_dal, app_id="waddles.socials.music.default")
     assert {r.version for r in rows} == {"1.0.0", "2.0.0"}
 ```
 
@@ -3160,7 +3379,10 @@ Expected: `ModuleNotFoundError: No module named 'services.bundle_version_service
 `app_version_uploads` is hub-api's own pre-publish lifecycle tracker
 (this plan's Decision #2) -- `app_versions` itself (Task 2) has no
 status column and is written only by `waddles_publisher`/`hub_api`
-post-build (Task 13).
+post-build (Task 13). R52: `app_version_uploads` is one of this plan's
+own new tables, so every function here queries it through the
+penguin-dal `install_dal: AsyncDB` (Task 4) -- never a new pydal
+binder/query.
 """
 
 from __future__ import annotations
@@ -3171,6 +3393,7 @@ from typing import Any
 import yaml
 from flask_core.auth import create_jwt_token
 from flask_core.secrets import require_secret_key
+from penguin_dal import AsyncDB
 
 from services.bundle_manifest_v2 import ManifestV2Error, parse_bundle_manifest_v2
 from services.bundle_storage_service import stage_upload
@@ -3206,8 +3429,7 @@ def _mint_callback_token(tenant_slug: str) -> str:
 
 
 async def create_version(
-    async_dal: Any,
-    dal: Any,
+    install_dal: AsyncDB,
     *,
     tenant_id: int,
     app_id: str,
@@ -3244,9 +3466,10 @@ async def create_version(
     if component_bytes is not None and len(component_bytes) > BUNDLE_MAX_COMPONENT_BYTES:
         raise ApiError("component exceeds 32 MiB", 413, "PAYLOAD_TOO_LARGE")
 
-    existing = await async_dal.select_async(
-        dal((dal.app_version_uploads.app_id == app_id) & (dal.app_version_uploads.version == manifest.version))
-    )
+    existing = await install_dal(
+        (install_dal.app_version_uploads.app_id == app_id)
+        & (install_dal.app_version_uploads.version == manifest.version)
+    ).select()
     if existing:
         raise conflict(f"version {manifest.version} of {app_id} already exists")
 
@@ -3256,15 +3479,13 @@ async def create_version(
     )
 
     now = datetime.now(UTC)
-    upload_id = await async_dal.insert_async(
-        dal.app_version_uploads,
+    upload_id = await install_dal.app_version_uploads.async_insert(
         app_id=app_id, version=manifest.version, tenant_id=tenant_id, requested_by=requested_by,
         artifact_kind=manifest.artifact, language=manifest.language, status=STATUS_UPLOADED,
         staging_manifest_key=staged.manifest_key, staging_source_key=staged.source_key,
         staging_component_key=staged.component_key, manifest_json=raw,
         created_at=now, updated_at=now,
     )
-    async_dal.dal.commit()
 
     callback_token = _mint_callback_token("global")
     job_name = await create_compiler_job(
@@ -3279,31 +3500,30 @@ async def create_version(
         callback_token=callback_token,
     )
 
-    await async_dal.update_async(
-        dal.app_version_uploads.id == upload_id,
+    await install_dal(install_dal.app_version_uploads.id == upload_id).update(
         status=STATUS_VALIDATING, compiler_job_name=job_name, updated_at=datetime.now(UTC),
     )
-    async_dal.dal.commit()
 
-    rows = await async_dal.select_async(dal(dal.app_version_uploads.id == upload_id))
-    return rows[0]
+    rows = await install_dal(install_dal.app_version_uploads.id == upload_id).select()
+    return rows.first()
 
 
-async def get_version(async_dal: Any, dal: Any, *, app_id: str, version: str) -> Any:
+async def get_version(install_dal: AsyncDB, *, app_id: str, version: str) -> Any:
     """The `app_version_uploads` row for `(app_id, version)`. Raises 404 if absent."""
-    rows = await async_dal.select_async(
-        dal((dal.app_version_uploads.app_id == app_id) & (dal.app_version_uploads.version == version))
-    )
-    if not rows:
+    rows = await install_dal(
+        (install_dal.app_version_uploads.app_id == app_id)
+        & (install_dal.app_version_uploads.version == version)
+    ).select()
+    first = rows.first()
+    if first is None:
         raise not_found(f"version {version} of {app_id} not found")
-    return rows[0]
+    return first
 
 
-async def list_versions(async_dal: Any, dal: Any, *, app_id: str) -> list[Any]:
+async def list_versions(install_dal: AsyncDB, *, app_id: str) -> list[Any]:
     """Every uploaded version of `app_id`, newest first."""
-    rows = await async_dal.select_async(
-        dal(dal.app_version_uploads.app_id == app_id),
-        orderby=~dal.app_version_uploads.created_at,
+    rows = await install_dal(install_dal.app_version_uploads.app_id == app_id).select(
+        orderby=~install_dal.app_version_uploads.created_at,
     )
     return list(rows)
 ```
@@ -3318,7 +3538,7 @@ Expected: `7 passed`
 ```bash
 git add hub_api/services/bundle_version_service.py hub_api/tests/test_bundle_version_service.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): bundle_version_service -- create_version() orchestration (parse/stage/launch Job)
+feat(hub-api): bundle_version_service -- create_version() orchestration (parse/stage/launch Job, R52)
 
 Ties bundle_manifest_v2, bundle_storage_service and
 compiler_job_service together: validates the pure-YAML rule subset,
@@ -3326,19 +3546,19 @@ enforces the 16MiB/32MiB size ceilings, rejects a duplicate
 (app_id, version), stages the upload, mints a 1h bundles:artifact
 callback JWT, and launches the compiler Job. app_version_uploads is
 hub-api's own pre-publish lifecycle tracker (app_versions itself has
-no status column, per spec Sec6.10).
+no status column, per spec Sec6.10), queried through penguin-dal's
+install_dal per coordinator ruling R52.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 11: `blueprints/v1/bundle_versions.py` — `POST`/`GET` `/api/v1/apps/{app_id}/versions`
+## Task 11: `blueprints/v1/bundle_versions.py` — `POST`/`GET` `/api/v1/apps/{app_id}/versions` (R52: penguin-dal)
 
-**Depends on:** Task 4 (the `bundle_install_db` fixture), Task 10 (`bundle_version_service.{create_version, get_version, list_versions}`).
+**Depends on:** Task 4 (`bundle_install_db`/`install_dal` fixtures), Task 10 (`bundle_version_service.{create_version, get_version}`, `install_dal`-only per R52).
 
 **Files:**
 - Create: `hub_api/blueprints/v1/bundle_versions.py`
@@ -3346,7 +3566,7 @@ EOF
 
 **Interfaces:**
 - Produces: `POST /api/v1/apps/{app_id}/versions` (multipart: `manifest`, `source` XOR `component`; scope `platform:admin`) → `202` with `{versionId, status, compilerJobName}`; `GET /api/v1/apps/{app_id}/versions/{version}` (`tenant_middleware` only) → `{versionId, appId, version, status, rejectReason, scanStatus, artifactDigest}` (the latter two `null` until Task 13 publishes). Auto-discovered via `BLUEPRINTS` (no registration edit).
-- Consumes: `services.bundle_version_service.{create_version, get_version}` (Task 10). **This task's inline `_allow_prebuilt`/`_known_custom_platforms`/`_allow_wildcard_consumes` helpers are temporary** — Tasks 23-25 add the real `platform_settings_service`/`tenant_bundle_settings`/`custom_platform_service` modules and, as their own final step, replace these three inline queries in this file with calls to those modules. A cheap implementer of *this* task does not need those modules to exist yet.
+- Consumes: `services.bundle_version_service.{create_version, get_version}` (Task 10, `install_dal`-only). **This task's inline `_allow_prebuilt`/`_known_custom_platforms` helpers query the new `platform_settings`/`custom_platforms` tables through `install_dal` (R52); `_allow_wildcard_consumes` queries the pre-existing `tenant_settings` table through the existing pydal `dal` (Decision #8: `allow_wildcard_consumes` lives on hub-api's existing generic tenant-settings surface, not a new table) — this file is the plan's first example of a function needing both handles.** These three helpers are temporary — Tasks 23-25 add the real `platform_settings_service`/`tenant_bundle_settings`/`custom_platform_service` modules and, as their own final step, replace these three inline queries in this file with calls to those modules. A cheap implementer of *this* task does not need those modules to exist yet.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -3385,10 +3605,11 @@ stages:
 
 
 @pytest.fixture
-def app(bundle_install_db: Any) -> Quart:
+def app(bundle_install_db: Any, install_dal: Any) -> Quart:
     app = Quart(__name__)
     app.config["async_dal"] = bundle_install_db
     app.config["dal"] = bundle_install_db.dal
+    app.config["install_dal"] = install_dal
     for bp in BLUEPRINTS:
         app.register_blueprint(bp)
     return app
@@ -3447,6 +3668,13 @@ Expected: `ModuleNotFoundError: No module named 'blueprints.v1.bundle_versions'`
 Global tier (`platform:admin`), same authorization level as the
 existing `marketplace_lifecycle.py::install_bundle`. GET is open to any
 authenticated tenant member, matching `list_bundles`'s own precedent.
+
+R52: `platform_settings`/`custom_platforms`/`app_versions`/
+`app_version_uploads` are this plan's own new tables, queried through
+`current_app.config["install_dal"]` (penguin-dal, Task 4). Only
+`allow_wildcard_consumes` reads a pre-existing table (`tenant_settings`,
+Decision #8), so this module is the plan's first to hold both the new
+`install_dal` and the existing pydal `async_dal`/`dal` pair side by side.
 """
 
 from __future__ import annotations
@@ -3457,6 +3685,7 @@ from typing import Any, cast
 from flask_core.api_utils import error_response
 from flask_core.authz import require_scope
 from flask_core.tenancy import get_tenant_context, tenant_middleware
+from penguin_dal import AsyncDB
 from quart import Blueprint, current_app, request
 from quart_schema import validate_response
 
@@ -3469,6 +3698,10 @@ bundle_versions_bp = Blueprint("v1_bundle_versions", __name__, url_prefix="/api/
 
 def _dal() -> tuple[Any, Any]:
     return current_app.config["async_dal"], current_app.config["dal"]
+
+
+def _install_dal() -> AsyncDB:
+    return cast(AsyncDB, current_app.config["install_dal"])
 
 
 def _err(exc: ApiError) -> tuple[dict[str, object], int]:
@@ -3486,23 +3719,25 @@ def _batch_api() -> Any:
     return client.BatchV1Api()
 
 
-def _allow_prebuilt(dal: Any) -> bool:
-    """Temporary inline query -- superseded by `platform_settings_service` in Task 23."""
-    row = dal(dal.platform_settings.key == "bundles.allow_prebuilt").select().first()
+async def _allow_prebuilt(install_dal: AsyncDB) -> bool:
+    """Temporary inline query against the new `platform_settings` table -- superseded by `platform_settings_service` in Task 23."""
+    row = (await install_dal(install_dal.platform_settings.key == "bundles.allow_prebuilt").select()).first()
     return (row.value if row else "true") == "true"
 
 
 def _allow_wildcard_consumes(dal: Any, tenant_id: int) -> bool:
-    """Temporary inline query -- superseded by `tenant_bundle_settings` in Task 24."""
+    """Temporary inline query against the pre-existing `tenant_settings` table (Decision #8) -- superseded by `tenant_bundle_settings` in Task 24. Unaffected by R52: not a new table."""
     row = dal(
         (dal.tenant_settings.tenant_id == tenant_id) & (dal.tenant_settings.key == "allow_wildcard_consumes")
     ).select().first()
     return (row.value if row else "false") == "true"
 
 
-def _known_custom_platforms(dal: Any, tenant_id: int) -> frozenset[str]:
-    """Temporary inline query -- superseded by `custom_platform_service` in Task 25."""
-    rows = dal(dal.custom_platforms.tenant_id == tenant_id).select(dal.custom_platforms.name)
+async def _known_custom_platforms(install_dal: AsyncDB, tenant_id: int) -> frozenset[str]:
+    """Temporary inline query against the new `custom_platforms` table -- superseded by `custom_platform_service` in Task 25."""
+    rows = await install_dal(install_dal.custom_platforms.tenant_id == tenant_id).select(
+        install_dal.custom_platforms.name
+    )
     return frozenset(r.name for r in rows)
 
 
@@ -3536,10 +3771,10 @@ class VersionDTO:
 async def post_version(app_id: str) -> tuple[dict[str, object], int]:
     """Upload a new bundle version (multipart: `manifest` + `source` XOR `component`)."""
     async_dal, dal = _dal()
+    install_dal = _install_dal()
     ctx = get_tenant_context(request)
     assert ctx is not None  # nosec B101
     files = await request.files
-    form = await request.form
     manifest_file = files.get("manifest")
     if manifest_file is None:
         return _err(bad_request("manifest part is required"))
@@ -3552,13 +3787,13 @@ async def post_version(app_id: str) -> tuple[dict[str, object], int]:
     caller_id = get_current_user_id(request)
     try:
         row = await svc.create_version(
-            async_dal, dal,
+            install_dal,
             tenant_id=ctx.tenant_id, app_id=app_id, requested_by=caller_id,
             manifest_bytes=manifest_bytes, source_bytes=source_bytes, component_bytes=component_bytes,
             batch_api=_batch_api(), namespace=current_app.config.get("K8S_NAMESPACE", "waddles"),
-            known_custom_platforms=_known_custom_platforms(dal, ctx.tenant_id),
+            known_custom_platforms=await _known_custom_platforms(install_dal, ctx.tenant_id),
             allow_wildcard_consumes=_allow_wildcard_consumes(dal, ctx.tenant_id),
-            allow_prebuilt=_allow_prebuilt(dal),
+            allow_prebuilt=await _allow_prebuilt(install_dal),
         )
     except ApiError as exc:
         return _err(exc)
@@ -3578,15 +3813,17 @@ async def post_version(app_id: str) -> tuple[dict[str, object], int]:
 @validate_response(VersionDTO)
 async def get_version(app_id: str, version: str) -> VersionDTO | tuple[dict[str, object], int]:
     """The state-machine state, reject reason (if any), scan status and digest for one version."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     try:
-        row = await svc.get_version(async_dal, dal, app_id=app_id, version=version)
+        row = await svc.get_version(install_dal, app_id=app_id, version=version)
     except ApiError as exc:
         return _err(exc)
     scan_status = None
     artifact_digest = None
     if row.app_version_id is not None:
-        published = dal(dal.app_versions.id == row.app_version_id).select().first()
+        published = (
+            await install_dal(install_dal.app_versions.id == row.app_version_id).select()
+        ).first()
         if published is not None:
             scan_status = published.scan_status
             artifact_digest = published.artifact_digest
@@ -3621,19 +3858,20 @@ Append to `hub_api/pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]` section
 git add hub_api/blueprints/v1/bundle_versions.py hub_api/tests/test_bundle_versions_blueprint.py \
         hub_api/pyproject.toml
 git commit -m "$(cat <<'EOF'
-feat(hub-api): POST/GET /api/v1/apps/{app_id}/versions (spec Sec9.2)
+feat(hub-api): POST/GET /api/v1/apps/{app_id}/versions (spec Sec9.2, R52)
 
 Global-tier (platform:admin) version upload, orchestrating manifest
 validation, bucket staging and compiler-Job launch via
-bundle_version_service. GET is open to any tenant member. Auto-
-discovered blueprint, no registration edit.
+bundle_version_service (penguin-dal install_dal). GET is open to any
+tenant member. allow_wildcard_consumes still reads the pre-existing
+tenant_settings table through the existing pydal dal (Decision #8).
+Auto-discovered blueprint, no registration edit.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
 ## Task 12: Helm — compiler Job RBAC + `bundles.compiler.*`/`sandbox.*` values
@@ -3749,27 +3987,21 @@ EOF
 
 ---
 
-## Task 13: `bundle_artifact_service.py` — the success callback: verify, cross-check, or fallback-insert
+## Task 13: `bundle_artifact_service.py` — the success callback: verify, cross-check, or fallback-insert (R52: penguin-dal)
 
-**Depends on:** Task 4 (bound tables), Task 8 (`bundle_storage_service`'s bucket read, re-hashed here), Task 10 (`app_version_uploads` rows this callback advances).
+**Depends on:** Task 4 (`install_dal` penguin-dal wiring, reflects `app_version_uploads`/`app_versions`/`audit_log`), Task 8 (`bundle_storage_service`'s bucket read, re-hashed here), Task 10 (`app_version_uploads` rows this callback advances).
 
 **Files:**
 - Create: `hub_api/services/bundle_artifact_service.py`
 - Test: `hub_api/tests/test_bundle_artifact_service.py`
 
 **Interfaces:**
-- Produces: `async def record_artifact_notification(async_dal, dal, *, app_id: str, version: str, claimed_digest: str, component_key: str, cwasm_digest: str | None, wasmtime_abi: str | None, collector: str | None, size_bytes: int | None, language: str, artifact_kind: str, built_at: str, builder: str, scan_status: str, badge: str | None) -> Any` (the confirmed `app_versions` row). Raises `ApiError` 409 `digest_mismatch` on a re-hash disagreement (with an `audit_log` entry written first), 404 if no matching `app_version_uploads` row exists.
-- Consumes: `services.bundle_storage_service.fetch_object_sha256` (Task 8); the existing generic `audit_log` table (`dal.audit_log`, already bound by `bind_platform_tables`, itself part of `bind_bundle_install_tables`'s dependency chain via `bind_lifecycle_tables`/`bind_auth_tables` — no new binding needed, `bundle_install_db`'s fixture already includes it transitively through `bind_auth_tables`/`bind_community_authz_tables`... — see Step 1 note below if the fixture needs `bind_platform_tables` added).
+- Produces: `async def record_artifact_notification(install_dal, *, app_id: str, version: str, claimed_digest: str, component_key: str, cwasm_digest: str | None, wasmtime_abi: str | None, collector: str | None, size_bytes: int | None, language: str, artifact_kind: str, built_at: str, builder: str, scan_status: str, badge: str | None) -> Any` (the confirmed `app_versions` row). Raises `ApiError` 409 `digest_mismatch` on a re-hash disagreement (with a best-effort `audit_log` entry written first), 404 if no matching `app_version_uploads` row exists. `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `app_version_uploads` and `app_versions` are this plan's own new tables (R52), and `audit_log` is reachable through the same `install_dal` since `install_dal.reflect()` (Task 4) discovers hub-api's entire live schema, not only the new tables.
+- Consumes: `services.bundle_storage_service.fetch_object_sha256` (Task 8); `install_dal.audit_log` (a plain reflected `TableProxy`, no new binding needed — `install_dal.reflect()` (Task 4) already sees every pre-existing table `bind_platform_tables()` created, `audit_log` included).
 
 This plan's Decision #3: **hub-api verifies, it never computes.** The compiler (M2a's `waddles_publisher`-authenticated container) is expected to `INSERT`/`UPDATE` `app_versions` directly with its own Postgres role — this function's job is to (a) re-hash the bucket object at `component_key` and compare against `claimed_digest`, refusing on any mismatch, and (b) look for the row the publisher already wrote; if none exists yet (a race, or an M2a build that hasn't wired direct-DB-write yet), insert it itself using hub-api's own (also-granted) write privilege, but **only after its own re-hash succeeded** — never inserting an unverified value.
 
-- [ ] **Step 1: Confirm `audit_log` is reachable from `bundle_install_db`**
-
-`hub_api/tests/conftest.py`'s `bundle_install_db` fixture (Task 4) calls `bind_auth_tables`, `bind_community_authz_tables`, `bind_lifecycle_tables`, `bind_bundle_install_tables` — none of those bind `audit_log` (that table is bound by `bind_platform_tables`, per `services/schema.py`). Add one more binder call to the fixture:
-
-Edit `hub_api/tests/conftest.py`'s `from services.schema import (...)` block to also import `bind_platform_tables`, and add `bind_platform_tables(dal, migrate=True)` to `bundle_install_db`'s body, immediately after the `bind_lifecycle_tables(dal, migrate=True)` line (before `bind_bundle_install_tables`).
-
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 1: Write the failing test**
 
 ```python
 # hub_api/tests/test_bundle_artifact_service.py
@@ -3784,37 +4016,35 @@ from unittest.mock import patch
 import pytest
 
 from services.bundle_artifact_service import record_artifact_notification
+from services.bundle_install_dal import raw_sql_rows
 from services.errors import ApiError
 
 _DIGEST = "sha256:" + "a" * 64
 _WRONG_DIGEST = "sha256:" + "b" * 64
 
 
-async def _seed_upload(dal: Any) -> None:
-    dal.app_version_uploads.insert(
+async def _seed_upload(install_dal: Any) -> None:
+    now = datetime.now(UTC)
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
         artifact_kind="source", language="python", status="COMPILING",
-        created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+        created_at=now, updated_at=now,
     )
-    dal.commit()
 
 
 async def test_matching_digest_is_accepted_when_publisher_already_wrote_the_row(
-    bundle_install_db: Any,
+    install_dal: Any,
 ) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await _seed_upload(dal)
-    dal.app_versions.insert(
+    await _seed_upload(install_dal)
+    await install_dal.app_versions.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1",
         artifact_digest=_DIGEST, language="python", artifact_kind="source",
         scan_status="scanned",
     )
-    dal.commit()
 
     with patch("services.bundle_artifact_service.fetch_object_sha256", return_value=_DIGEST):
         result = await record_artifact_notification(
-            async_dal, dal, app_id="waddles.socials.music.default", version="3.0.1",
+            install_dal, app_id="waddles.socials.music.default", version="3.0.1",
             claimed_digest=_DIGEST, component_key="bundles/x/3.0.1/aaa.wasm",
             cwasm_digest=None, wasmtime_abi=None, collector=None, size_bytes=1024,
             language="python", artifact_kind="source", built_at="2026-09-14T12:00:00.000Z",
@@ -3822,19 +4052,19 @@ async def test_matching_digest_is_accepted_when_publisher_already_wrote_the_row(
         )
     assert result.artifact_digest == _DIGEST
 
-    upload = dal(dal.app_version_uploads.app_id == "waddles.socials.music.default").select().first()
+    upload = (
+        await install_dal(install_dal.app_version_uploads.app_id == "waddles.socials.music.default").select()
+    ).first()
     assert upload.status == "PUBLISHED"
     assert upload.app_version_id == result.id
 
 
-async def test_missing_row_is_inserted_as_a_fallback_after_verification(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await _seed_upload(dal)
+async def test_missing_row_is_inserted_as_a_fallback_after_verification(install_dal: Any) -> None:
+    await _seed_upload(install_dal)
 
     with patch("services.bundle_artifact_service.fetch_object_sha256", return_value=_DIGEST):
         result = await record_artifact_notification(
-            async_dal, dal, app_id="waddles.socials.music.default", version="3.0.1",
+            install_dal, app_id="waddles.socials.music.default", version="3.0.1",
             claimed_digest=_DIGEST, component_key="bundles/x/3.0.1/aaa.wasm",
             cwasm_digest="sha256:" + "c" * 64, wasmtime_abi="wasmtime-30", collector="drc",
             size_bytes=2048, language="python", artifact_kind="source",
@@ -3842,18 +4072,19 @@ async def test_missing_row_is_inserted_as_a_fallback_after_verification(bundle_i
             scan_status="scanned", badge=None,
         )
     assert result.artifact_digest == _DIGEST
-    assert dal(dal.app_versions.artifact_digest == _DIGEST).count() == 1
+    count_rows = await raw_sql_rows(
+        install_dal, "SELECT COUNT(*) AS n FROM app_versions WHERE artifact_digest = :d", {"d": _DIGEST}
+    )
+    assert count_rows.first()["n"] == 1
 
 
-async def test_digest_mismatch_is_refused_and_audited(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await _seed_upload(dal)
+async def test_digest_mismatch_is_refused_and_audited(install_dal: Any) -> None:
+    await _seed_upload(install_dal)
 
     with patch("services.bundle_artifact_service.fetch_object_sha256", return_value=_WRONG_DIGEST):
         with pytest.raises(ApiError) as exc:
             await record_artifact_notification(
-                async_dal, dal, app_id="waddles.socials.music.default", version="3.0.1",
+                install_dal, app_id="waddles.socials.music.default", version="3.0.1",
                 claimed_digest=_DIGEST, component_key="bundles/x/3.0.1/aaa.wasm",
                 cwasm_digest=None, wasmtime_abi=None, collector=None, size_bytes=1024,
                 language="python", artifact_kind="source", built_at="2026-09-14T12:00:00.000Z",
@@ -3861,21 +4092,32 @@ async def test_digest_mismatch_is_refused_and_audited(bundle_install_db: Any) ->
             )
     assert exc.value.status_code == 409
     assert exc.value.code == "digest_mismatch"
-    assert dal(dal.app_versions.app_id == "waddles.socials.music.default").count() == 0
+    count_rows = await raw_sql_rows(
+        install_dal, "SELECT COUNT(*) AS n FROM app_versions WHERE app_id = :a",
+        {"a": "waddles.socials.music.default"},
+    )
+    assert count_rows.first()["n"] == 0
 
-    audit_row = dal(dal.audit_log.action == "bundle_artifact_digest_mismatch").select().first()
+    audit_rows = await raw_sql_rows(
+        install_dal, "SELECT details FROM audit_log WHERE action = :a",
+        {"a": "bundle_artifact_digest_mismatch"},
+    )
+    audit_row = audit_rows.first()
     assert audit_row is not None
-    assert audit_row.details["claimed_digest"] == _DIGEST
-    assert audit_row.details["computed_digest"] == _WRONG_DIGEST
+    import json
+
+    details = audit_row["details"]
+    if isinstance(details, str):
+        details = json.loads(details)
+    assert details["claimed_digest"] == _DIGEST
+    assert details["computed_digest"] == _WRONG_DIGEST
 
 
-async def test_unknown_version_upload_raises_404(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
+async def test_unknown_version_upload_raises_404(install_dal: Any) -> None:
     with patch("services.bundle_artifact_service.fetch_object_sha256", return_value=_DIGEST):
         with pytest.raises(ApiError) as exc:
             await record_artifact_notification(
-                async_dal, dal, app_id="waddles.unknown.x.default", version="1.0.0",
+                install_dal, app_id="waddles.unknown.x.default", version="1.0.0",
                 claimed_digest=_DIGEST, component_key="bundles/x/1.0.0/aaa.wasm",
                 cwasm_digest=None, wasmtime_abi=None, collector=None, size_bytes=1,
                 language="python", artifact_kind="source", built_at="2026-09-14T12:00:00.000Z",
@@ -3884,12 +4126,12 @@ async def test_unknown_version_upload_raises_404(bundle_install_db: Any) -> None
     assert exc.value.status_code == 404
 ```
 
-- [ ] **Step 3: Run to verify failure**
+- [ ] **Step 2: Run to verify failure**
 
 Run: `cd hub_api && python3 -m pytest tests/test_bundle_artifact_service.py -v`
 Expected: `ModuleNotFoundError: No module named 'services.bundle_artifact_service'`
 
-- [ ] **Step 4: Write the implementation**
+- [ ] **Step 3: Write the implementation**
 
 ```python
 # hub_api/services/bundle_artifact_service.py
@@ -3903,6 +4145,14 @@ confirming that row exists and matches. Its fallback path (no row yet)
 still only ever stores the value it just re-hash-verified, using
 hub-api's own also-granted write privilege on `app_versions` (spec
 Sec6.10 -- exactly two writers, both permitted, this plan's Decision #3).
+
+R52: `app_version_uploads`/`app_versions` are this plan's own new
+tables, queried through the penguin-dal `install_dal: AsyncDB` (Task
+4). The digest-mismatch `audit_log` write is a separate, best-effort
+write through the same `install_dal` (Decision #18) -- wrapped in
+`try`/`except`, matching this codebase's existing convention for every
+audit-log call site, so a logging failure never blocks the 409 refusal
+this function must still raise.
 """
 
 from __future__ import annotations
@@ -3910,16 +4160,17 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from penguin_dal import AsyncDB
+
 from services.bundle_storage_service import fetch_object_sha256
 from services.errors import ApiError, not_found
 
 
 async def _write_digest_mismatch_audit(
-    async_dal: Any, dal: Any, *, app_id: str, version: str, claimed_digest: str, computed_digest: str
+    install_dal: AsyncDB, *, app_id: str, version: str, claimed_digest: str, computed_digest: str
 ) -> None:
     try:
-        await async_dal.insert_async(
-            dal.audit_log,
+        await install_dal.audit_log.async_insert(
             user_id=None,
             action="bundle_artifact_digest_mismatch",
             target_type="app_version",
@@ -3927,14 +4178,12 @@ async def _write_digest_mismatch_audit(
             details={"claimed_digest": claimed_digest, "computed_digest": computed_digest},
             created_at=datetime.now(UTC),
         )
-        async_dal.dal.commit()
     except Exception:  # noqa: BLE001, S110 -- audit logging failure must not break the main flow
         pass
 
 
 async def record_artifact_notification(
-    async_dal: Any,
-    dal: Any,
+    install_dal: AsyncDB,
     *,
     app_id: str,
     version: str,
@@ -3952,92 +4201,85 @@ async def record_artifact_notification(
     badge: str | None,
 ) -> Any:
     """Verify `claimed_digest` against the bucket, cross-check or fallback-insert, update the upload row."""
-    upload_rows = await async_dal.select_async(
-        dal((dal.app_version_uploads.app_id == app_id) & (dal.app_version_uploads.version == version))
-    )
-    if not upload_rows:
+    upload_rows = await install_dal(
+        (install_dal.app_version_uploads.app_id == app_id)
+        & (install_dal.app_version_uploads.version == version)
+    ).select()
+    upload = upload_rows.first()
+    if upload is None:
         raise not_found(f"no upload request found for {app_id} version {version}")
-    upload = upload_rows[0]
 
     computed_digest = await fetch_object_sha256(component_key)
     if computed_digest != claimed_digest:
         await _write_digest_mismatch_audit(
-            async_dal, dal, app_id=app_id, version=version,
+            install_dal, app_id=app_id, version=version,
             claimed_digest=claimed_digest, computed_digest=computed_digest,
         )
-        await async_dal.update_async(
-            dal.app_version_uploads.id == upload.id,
+        await install_dal(install_dal.app_version_uploads.id == upload.id).update(
             status="REJECTED", reject_reason="digest_mismatch", updated_at=datetime.now(UTC),
         )
-        async_dal.dal.commit()
         raise ApiError(
             f"claimed digest {claimed_digest} does not match the bucket object's actual digest",
             409, "digest_mismatch",
         )
 
-    existing = await async_dal.select_async(
-        dal((dal.app_versions.app_id == app_id) & (dal.app_versions.version == version))
-    )
-    if existing:
-        version_row = existing[0]
-    else:
-        new_id = await async_dal.insert_async(
-            dal.app_versions,
+    existing = await install_dal(
+        (install_dal.app_versions.app_id == app_id) & (install_dal.app_versions.version == version)
+    ).select()
+    version_row = existing.first()
+    if version_row is None:
+        new_id = await install_dal.app_versions.async_insert(
             app_id=app_id, version=version, artifact_digest=claimed_digest,
             cwasm_digest=cwasm_digest, wasmtime_abi=wasmtime_abi, collector=collector,
             size_bytes=size_bytes, language=language, artifact_kind=artifact_kind,
             built_at=built_at, builder=builder, scan_status=scan_status, badge=badge,
             created_at=datetime.now(UTC),
         )
-        async_dal.dal.commit()
-        version_row = (await async_dal.select_async(dal(dal.app_versions.id == new_id)))[0]
+        version_row = (await install_dal(install_dal.app_versions.id == new_id).select()).first()
 
-    await async_dal.update_async(
-        dal.app_version_uploads.id == upload.id,
+    await install_dal(install_dal.app_version_uploads.id == upload.id).update(
         status="PUBLISHED", app_version_id=version_row.id, updated_at=datetime.now(UTC),
     )
-    async_dal.dal.commit()
     return version_row
 ```
 
-- [ ] **Step 5: Run to verify all pass**
+- [ ] **Step 4: Run to verify all pass**
 
 Run: `cd hub_api && python3 -m pytest tests/test_bundle_artifact_service.py -v`
 Expected: `4 passed`
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add hub_api/services/bundle_artifact_service.py hub_api/tests/test_bundle_artifact_service.py \
-        hub_api/tests/conftest.py
+git add hub_api/services/bundle_artifact_service.py hub_api/tests/test_bundle_artifact_service.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): artifact-callback notification/cross-check -- hub-api verifies, never computes a digest
+feat(hub-api): artifact-callback notification/cross-check -- hub-api verifies, never computes a digest (R52)
 
 Re-hashes the bucket object and compares against the compiler's claimed
-digest; refuses + audit-logs on mismatch. Cross-checks against a row
-waddles_publisher (M2a) already wrote, or falls back to inserting one
-itself using hub-api's own also-granted write privilege -- only ever
-after its own verification succeeded (spec Sec6.10, this plan's
-Decision #3).
+digest; refuses + best-effort-audit-logs on mismatch. Cross-checks
+against a row waddles_publisher (M2a) already wrote, or falls back to
+inserting one itself using hub-api's own also-granted write privilege
+-- only ever after its own verification succeeded (spec Sec6.10, this
+plan's Decision #3). Queries the new app_version_uploads/app_versions
+tables through penguin-dal's install_dal per coordinator ruling R52.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 14: `bundle_artifact_service.py` extension — the rejection callback
+## Task 14: `bundle_artifact_service.py` extension — the rejection callback (R52: penguin-dal)
 
-**Depends on:** Task 13 (`bundle_artifact_service`'s success path, extended here with the rejection path).
+**Depends on:** Task 13 (`bundle_artifact_service`'s success path, `install_dal`-only per R52, extended here with the rejection path).
 
 **Files:**
 - Modify: `hub_api/services/bundle_artifact_service.py`
 - Modify: `hub_api/tests/test_bundle_artifact_service.py`
 
 **Interfaces:**
-- Produces: `async def record_rejection(async_dal, dal, *, app_id: str, version: str, reason: str) -> None` — moves the `app_version_uploads` row to `REJECTED` with the given `reason`. Raises 404 if no matching upload row exists.
+- Produces: `async def record_rejection(install_dal, *, app_id: str, version: str, reason: str) -> None` — moves the `app_version_uploads` row to `REJECTED` with the given `reason`. Raises 404 if no matching upload row exists.
 - Consumes: nothing new.
 
 The compiler reports failures from `VALIDATING`/`SCANNING`/`INSPECTING`/`COMPILING`/`PUBLISHING` (spec §9.1's REJECTED transitions) through this second callback — there is no successful-artifact digest to verify on this path, so it does not touch `app_versions` at all.
@@ -4050,27 +4292,25 @@ Append to `hub_api/tests/test_bundle_artifact_service.py`:
 from services.bundle_artifact_service import record_rejection  # noqa: E402 -- appended import
 
 
-async def test_record_rejection_sets_status_and_reason(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await _seed_upload(dal)
+async def test_record_rejection_sets_status_and_reason(install_dal: Any) -> None:
+    await _seed_upload(install_dal)
 
     await record_rejection(
-        async_dal, dal, app_id="waddles.socials.music.default", version="3.0.1",
+        install_dal, app_id="waddles.socials.music.default", version="3.0.1",
         reason="scan_failed",
     )
 
-    row = dal(dal.app_version_uploads.app_id == "waddles.socials.music.default").select().first()
+    row = (
+        await install_dal(install_dal.app_version_uploads.app_id == "waddles.socials.music.default").select()
+    ).first()
     assert row.status == "REJECTED"
     assert row.reject_reason == "scan_failed"
 
 
-async def test_record_rejection_unknown_version_raises_404(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
+async def test_record_rejection_unknown_version_raises_404(install_dal: Any) -> None:
     with pytest.raises(ApiError) as exc:
         await record_rejection(
-            async_dal, dal, app_id="waddles.unknown.x.default", version="1.0.0", reason="scan_failed"
+            install_dal, app_id="waddles.unknown.x.default", version="1.0.0", reason="scan_failed"
         )
     assert exc.value.status_code == 404
 ```
@@ -4085,18 +4325,18 @@ Expected: `ImportError: cannot import name 'record_rejection'`
 Append to `hub_api/services/bundle_artifact_service.py`:
 
 ```python
-async def record_rejection(async_dal: Any, dal: Any, *, app_id: str, version: str, reason: str) -> None:
+async def record_rejection(install_dal: AsyncDB, *, app_id: str, version: str, reason: str) -> None:
     """Move the upload to REJECTED with `reason` -- no `app_versions` write on this path."""
-    upload_rows = await async_dal.select_async(
-        dal((dal.app_version_uploads.app_id == app_id) & (dal.app_version_uploads.version == version))
-    )
-    if not upload_rows:
+    upload_rows = await install_dal(
+        (install_dal.app_version_uploads.app_id == app_id)
+        & (install_dal.app_version_uploads.version == version)
+    ).select()
+    upload = upload_rows.first()
+    if upload is None:
         raise not_found(f"no upload request found for {app_id} version {version}")
-    await async_dal.update_async(
-        dal.app_version_uploads.id == upload_rows[0].id,
+    await install_dal(install_dal.app_version_uploads.id == upload.id).update(
         status="REJECTED", reject_reason=reason, updated_at=datetime.now(UTC),
     )
-    async_dal.dal.commit()
 ```
 
 - [ ] **Step 4: Run to verify all pass**
@@ -4109,22 +4349,22 @@ Expected: `6 passed`
 ```bash
 git add hub_api/services/bundle_artifact_service.py hub_api/tests/test_bundle_artifact_service.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): record_rejection() -- compiler failure callback (spec Sec9.1 REJECTED transitions)
+feat(hub-api): record_rejection() -- compiler failure callback (spec Sec9.1 REJECTED transitions, R52)
 
 Handles VALIDATING/SCANNING/INSPECTING/COMPILING/PUBLISHING failures
 reported by the compiler; never touches app_versions on this path.
+Queries app_version_uploads through penguin-dal's install_dal.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 15: `blueprints/v1/bundle_artifact_callback.py` — the compiler's two callbacks
+## Task 15: `blueprints/v1/bundle_artifact_callback.py` — the compiler's two callbacks (R52: penguin-dal)
 
-**Depends on:** Tasks 13-14 (both callback handlers this blueprint exposes).
+**Depends on:** Tasks 13-14 (both callback handlers this blueprint exposes, `install_dal`-only per R52).
 
 **Files:**
 - Create: `hub_api/blueprints/v1/bundle_artifact_callback.py`
@@ -4132,7 +4372,7 @@ EOF
 
 **Interfaces:**
 - Produces: `POST /api/v1/bundles/{app_id}/versions/{version}/artifact` (scope `bundles:artifact`) → `200 {"success": true, "artifactDigest": ...}` or `409 digest_mismatch`; `POST /api/v1/bundles/{app_id}/versions/{version}/rejected` (scope `bundles:artifact`) → `200 {"success": true}`. **Must match M2a** — request body shapes below are this plan's contract; reconcile in M2a's plan if it defines the payload differently.
-- Consumes: `services.bundle_artifact_service.{record_artifact_notification, record_rejection}` (Tasks 13-14).
+- Consumes: `services.bundle_artifact_service.{record_artifact_notification, record_rejection}` (Tasks 13-14), `current_app.config["install_dal"]` (Task 4).
 
 Request body for the artifact endpoint (JSON): `{"artifactDigest": str, "componentKey": str, "cwasmDigest": str|null, "wasmtimeAbi": str|null, "collector": str|null, "sizeBytes": int|null, "language": str, "artifactKind": str, "builtAt": str, "builder": str, "scanStatus": str, "badge": str|null}`. Rejection endpoint: `{"reason": str}`.
 
@@ -4158,17 +4398,15 @@ _DIGEST = "sha256:" + "a" * 64
 
 
 @pytest.fixture
-def app(bundle_install_db: Any) -> Quart:
-    dal = bundle_install_db.dal
-    dal.app_version_uploads.insert(
+async def app(install_dal: Any) -> Quart:
+    now = datetime.now(UTC)
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
         artifact_kind="source", language="python", status="COMPILING",
-        created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+        created_at=now, updated_at=now,
     )
-    dal.commit()
     app = Quart(__name__)
-    app.config["async_dal"] = bundle_install_db
-    app.config["dal"] = dal
+    app.config["install_dal"] = install_dal
     for bp in BLUEPRINTS:
         app.register_blueprint(bp)
     return app
@@ -4235,7 +4473,9 @@ Machine-JWT auth, scope `bundles:artifact`, minted by
 `bundle_version_service._mint_callback_token` at Job-creation time
 (Task 10). **Must match M2a**: the compiler is the caller of both
 routes below; if M2a's own plan defines a different payload shape,
-reconcile there.
+reconcile there. R52: both handlers read `current_app.config
+["install_dal"]` -- `app_version_uploads`/`app_versions` are this
+plan's own new tables.
 """
 
 from __future__ import annotations
@@ -4246,6 +4486,7 @@ from typing import Any, cast
 from flask_core.api_utils import error_response
 from flask_core.authz import require_scope
 from flask_core.tenancy import tenant_middleware
+from penguin_dal import AsyncDB
 from quart import Blueprint, current_app, request
 from quart_schema import validate_request, validate_response
 
@@ -4257,8 +4498,8 @@ bundle_artifact_callback_bp = Blueprint(
 )
 
 
-def _dal() -> tuple[Any, Any]:
-    return current_app.config["async_dal"], current_app.config["dal"]
+def _install_dal() -> AsyncDB:
+    return cast(AsyncDB, current_app.config["install_dal"])
 
 
 def _err(exc: ApiError) -> tuple[dict[str, object], int]:
@@ -4315,10 +4556,10 @@ async def post_artifact(
     data: ArtifactCallbackRequest, app_id: str, version: str
 ) -> ArtifactCallbackResponse | tuple[dict[str, object], int]:
     """The compiler's success callback -- hub-api re-hashes the bucket object before trusting it."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     try:
         version_row = await svc.record_artifact_notification(
-            async_dal, dal, app_id=app_id, version=version,
+            install_dal, app_id=app_id, version=version,
             claimed_digest=data.artifactDigest, component_key=data.componentKey,
             cwasm_digest=data.cwasmDigest, wasmtime_abi=data.wasmtimeAbi, collector=data.collector,
             size_bytes=data.sizeBytes, language=data.language, artifact_kind=data.artifactKind,
@@ -4338,9 +4579,9 @@ async def post_rejected(
     data: RejectedCallbackRequest, app_id: str, version: str
 ) -> MessageResponse | tuple[dict[str, object], int]:
     """The compiler's failure callback -- never touches app_versions."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     try:
-        await svc.record_rejection(async_dal, dal, app_id=app_id, version=version, reason=data.reason)
+        await svc.record_rejection(install_dal, app_id=app_id, version=version, reason=data.reason)
     except ApiError as exc:
         return _err(exc)
     return MessageResponse(success=True, message=f"version {version} of {app_id} rejected: {data.reason}")
@@ -4359,30 +4600,30 @@ Expected: `3 passed`
 ```bash
 git add hub_api/blueprints/v1/bundle_artifact_callback.py hub_api/tests/test_bundle_artifact_callback_blueprint.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): POST /api/v1/bundles/{app_id}/versions/{version}/{artifact,rejected} (spec Sec9.1, Sec9.4)
+feat(hub-api): POST /api/v1/bundles/{app_id}/versions/{version}/{artifact,rejected} (spec Sec9.1, Sec9.4, R52)
 
 The compiler's two callbacks, scope bundles:artifact. Marked "must
 match M2a" -- the payload shapes here are this plan's contract until
-M2a's own plan reconciles against them.
+M2a's own plan reconciles against them. Reads install_dal (penguin-dal)
+from app config.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 16: `bundle_activation_service.py` — activate/rollback via `app_active_versions`
+## Task 16: `bundle_activation_service.py` — activate/rollback via `app_active_versions` (R52: penguin-dal)
 
-**Depends on:** Task 2 (`app_versions`/`app_active_versions` DDL), Task 4 (the pydal binder and the `bundle_install_db` fixture).
+**Depends on:** Task 2 (`app_versions`/`app_active_versions` DDL), Task 4 (`install_dal` penguin-dal wiring + `bundle_install_db`/`install_dal` fixtures).
 
 **Files:**
 - Create: `hub_api/services/bundle_activation_service.py`
 - Test: `hub_api/tests/test_bundle_activation_service.py`
 
 **Interfaces:**
-- Produces: `TENANT_WIDE_COMMUNITY_ID = 0` (the sentinel from Task 2's migration); `async def activate_version(async_dal, dal, *, tenant_id: int, community_id: int | None, app_id: str, version: str, activated_by: int) -> Any` (upserts `app_active_versions`, returns the row) — raises `ApiError` 409 `digest_not_verified` when no `app_versions` row exists for `(app_id, version)` with a non-null `artifact_digest`; `async def get_active_version(async_dal, dal, *, tenant_id: int, community_id: int | None, app_id: str) -> Any | None` (joins to `app_versions`, `None` if nothing is active for that scope — consumed by Task 32's distribution-service extension).
+- Produces: `TENANT_WIDE_COMMUNITY_ID = 0` (the sentinel from Task 2's migration); `async def activate_version(install_dal, *, tenant_id: int, community_id: int | None, app_id: str, version: str, activated_by: int) -> Any` (upserts `app_active_versions`, returns the row) — raises `ApiError` 409 `digest_not_verified` when no `app_versions` row exists for `(app_id, version)` with a non-null `artifact_digest`; `async def get_active_version(install_dal, *, tenant_id: int, community_id: int | None, app_id: str) -> Any | None` (joins to `app_versions`, `None` if nothing is active for that scope — consumed by Task 32's distribution-service extension). `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `app_versions` and `app_active_versions` are this plan's own new tables (R52).
 - Consumes: nothing new (queries `app_versions`/`app_active_versions` directly).
 
 Rollback is this same function called again with an older `version` that is still present in `app_versions` — no separate endpoint (this plan's Decision #4).
@@ -4410,126 +4651,113 @@ _DIGEST_V1 = "sha256:" + "1" * 64
 _DIGEST_V2 = "sha256:" + "2" * 64
 
 
-async def _insert_version(dal: Any, version: str, digest: str | None) -> int:
-    return dal.app_versions.insert(
+async def _insert_version(install_dal: Any, version: str, digest: str | None) -> int:
+    return await install_dal.app_versions.async_insert(
         app_id="waddles.socials.music.default", version=version, artifact_digest=digest,
         language="python", artifact_kind="source", scan_status="scanned",
     )
 
 
-async def test_activate_version_refuses_an_unverified_digest(bundle_install_db: Any) -> None:
+async def test_activate_version_refuses_an_unverified_digest(install_dal: Any) -> None:
     """The explicit refusal case: a version with no app_versions row (never verified) cannot activate."""
-    async_dal = bundle_install_db
-    dal = async_dal.dal
     with pytest.raises(ApiError) as exc:
         await activate_version(
-            async_dal, dal, tenant_id=1, community_id=None,
+            install_dal, tenant_id=1, community_id=None,
             app_id="waddles.socials.music.default", version="9.9.9", activated_by=1,
         )
     assert exc.value.status_code == 409
     assert exc.value.code == "digest_not_verified"
 
 
-async def test_activate_version_with_null_digest_row_is_also_refused(bundle_install_db: Any) -> None:
+async def test_activate_version_with_null_digest_row_is_also_refused(install_dal: Any) -> None:
     """A row exists but its digest is still NULL (upload accepted, never published) -- also refused."""
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    dal.app_versions.insert(
+    await install_dal.app_versions.async_insert(
         app_id="waddles.socials.music.default", version="0.0.1", artifact_digest=None,
         language="python", artifact_kind="source", scan_status="not_scanned",
     )
-    dal.commit()
     with pytest.raises(ApiError) as exc:
         await activate_version(
-            async_dal, dal, tenant_id=1, community_id=None,
+            install_dal, tenant_id=1, community_id=None,
             app_id="waddles.socials.music.default", version="0.0.1", activated_by=1,
         )
     assert exc.value.code == "digest_not_verified"
 
 
-async def test_activate_version_tenant_wide_succeeds_and_is_readable(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await _insert_version(dal, "1.0.0", _DIGEST_V1)
-    dal.commit()
+async def test_activate_version_tenant_wide_succeeds_and_is_readable(install_dal: Any) -> None:
+    await _insert_version(install_dal, "1.0.0", _DIGEST_V1)
 
     await activate_version(
-        async_dal, dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         app_id="waddles.socials.music.default", version="1.0.0", activated_by=1,
     )
 
     active = await get_active_version(
-        async_dal, dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default"
+        install_dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default"
     )
     assert active is not None
     assert active.artifact_digest == _DIGEST_V1
 
-    row = dal(
-        (dal.app_active_versions.app_id == "waddles.socials.music.default")
-        & (dal.app_active_versions.tenant_id == 1)
-        & (dal.app_active_versions.community_id == TENANT_WIDE_COMMUNITY_ID)
-    ).select().first()
+    row = (
+        await install_dal(
+            (install_dal.app_active_versions.app_id == "waddles.socials.music.default")
+            & (install_dal.app_active_versions.tenant_id == 1)
+            & (install_dal.app_active_versions.community_id == TENANT_WIDE_COMMUNITY_ID)
+        ).select()
+    ).first()
     assert row is not None
     assert row.activated_by == 1
 
 
-async def test_rollback_is_activate_version_pointed_at_an_older_version(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await _insert_version(dal, "1.0.0", _DIGEST_V1)
-    await _insert_version(dal, "2.0.0", _DIGEST_V2)
-    dal.commit()
+async def test_rollback_is_activate_version_pointed_at_an_older_version(install_dal: Any) -> None:
+    await _insert_version(install_dal, "1.0.0", _DIGEST_V1)
+    await _insert_version(install_dal, "2.0.0", _DIGEST_V2)
 
     await activate_version(
-        async_dal, dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         app_id="waddles.socials.music.default", version="2.0.0", activated_by=1,
     )
     await activate_version(
-        async_dal, dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         app_id="waddles.socials.music.default", version="1.0.0", activated_by=1,
     )
 
     active = await get_active_version(
-        async_dal, dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default"
+        install_dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default"
     )
     assert active.artifact_digest == _DIGEST_V1
 
-    count = dal(
-        (dal.app_active_versions.app_id == "waddles.socials.music.default")
-        & (dal.app_active_versions.tenant_id == 1)
+    count = await install_dal(
+        (install_dal.app_active_versions.app_id == "waddles.socials.music.default")
+        & (install_dal.app_active_versions.tenant_id == 1)
     ).count()
     assert count == 1  # upsert, not a second row
 
 
-async def test_get_active_version_returns_none_when_nothing_activated(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_get_active_version_returns_none_when_nothing_activated(install_dal: Any) -> None:
     active = await get_active_version(
-        async_dal, async_dal.dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default"
+        install_dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default"
     )
     assert active is None
 
 
-async def test_community_scoped_and_tenant_wide_are_independent(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await _insert_version(dal, "1.0.0", _DIGEST_V1)
-    await _insert_version(dal, "2.0.0", _DIGEST_V2)
-    dal.commit()
+async def test_community_scoped_and_tenant_wide_are_independent(install_dal: Any) -> None:
+    await _insert_version(install_dal, "1.0.0", _DIGEST_V1)
+    await _insert_version(install_dal, "2.0.0", _DIGEST_V2)
 
     await activate_version(
-        async_dal, dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         app_id="waddles.socials.music.default", version="1.0.0", activated_by=1,
     )
     await activate_version(
-        async_dal, dal, tenant_id=1, community_id=1,
+        install_dal, tenant_id=1, community_id=1,
         app_id="waddles.socials.music.default", version="2.0.0", activated_by=1,
     )
 
     tenant_wide = await get_active_version(
-        async_dal, dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default"
+        install_dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default"
     )
     community_scoped = await get_active_version(
-        async_dal, dal, tenant_id=1, community_id=1, app_id="waddles.socials.music.default"
+        install_dal, tenant_id=1, community_id=1, app_id="waddles.socials.music.default"
     )
     assert tenant_wide.artifact_digest == _DIGEST_V1
     assert community_scoped.artifact_digest == _DIGEST_V2
@@ -4555,12 +4783,17 @@ already-published version; there is no separate rollback endpoint
 
 `community_id = 0` is the tenant-wide sentinel from migration 0020
 (`communities.id` is a real SERIAL starting at 1, so 0 never collides).
+
+R52: `app_versions`/`app_active_versions` are this plan's own new
+tables, queried through the penguin-dal `install_dal: AsyncDB` (Task 4).
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
+
+from penguin_dal import AsyncDB
 
 from services.errors import ApiError
 
@@ -4572,8 +4805,7 @@ def _scope_community_id(community_id: int | None) -> int:
 
 
 async def activate_version(
-    async_dal: Any,
-    dal: Any,
+    install_dal: AsyncDB,
     *,
     tenant_id: int,
     community_id: int | None,
@@ -4582,58 +4814,52 @@ async def activate_version(
     activated_by: int,
 ) -> Any:
     """Point `(tenant_id, community_id, app_id)` at `version`'s digest. Refuses an unverified digest."""
-    version_rows = await async_dal.select_async(
-        dal((dal.app_versions.app_id == app_id) & (dal.app_versions.version == version))
-    )
-    if not version_rows or version_rows[0].artifact_digest is None:
+    version_rows = await install_dal(
+        (install_dal.app_versions.app_id == app_id) & (install_dal.app_versions.version == version)
+    ).select()
+    version_row = version_rows.first()
+    if version_row is None or version_row.artifact_digest is None:
         raise ApiError(
             f"{app_id} version {version} has no verified artifact digest -- cannot activate",
             409, "digest_not_verified",
         )
-    version_row = version_rows[0]
     scope_community_id = _scope_community_id(community_id)
 
-    existing = await async_dal.select_async(
-        dal(
-            (dal.app_active_versions.app_id == app_id)
-            & (dal.app_active_versions.tenant_id == tenant_id)
-            & (dal.app_active_versions.community_id == scope_community_id)
-        )
-    )
+    existing = await install_dal(
+        (install_dal.app_active_versions.app_id == app_id)
+        & (install_dal.app_active_versions.tenant_id == tenant_id)
+        & (install_dal.app_active_versions.community_id == scope_community_id)
+    ).select()
     now = datetime.now(UTC)
     if existing:
-        await async_dal.update_async(
-            (dal.app_active_versions.app_id == app_id)
-            & (dal.app_active_versions.tenant_id == tenant_id)
-            & (dal.app_active_versions.community_id == scope_community_id),
-            version_id=version_row.id, activated_by=activated_by, activated_at=now,
-        )
+        await install_dal(
+            (install_dal.app_active_versions.app_id == app_id)
+            & (install_dal.app_active_versions.tenant_id == tenant_id)
+            & (install_dal.app_active_versions.community_id == scope_community_id)
+        ).update(version_id=version_row.id, activated_by=activated_by, activated_at=now)
     else:
-        await async_dal.insert_async(
-            dal.app_active_versions,
+        await install_dal.app_active_versions.async_insert(
             app_id=app_id, tenant_id=tenant_id, community_id=scope_community_id,
             version_id=version_row.id, activated_by=activated_by, activated_at=now,
         )
-    async_dal.dal.commit()
     return version_row
 
 
 async def get_active_version(
-    async_dal: Any, dal: Any, *, tenant_id: int, community_id: int | None, app_id: str
+    install_dal: AsyncDB, *, tenant_id: int, community_id: int | None, app_id: str
 ) -> Any | None:
     """The `app_versions` row currently active for `(tenant_id, community_id, app_id)`, or `None`."""
     scope_community_id = _scope_community_id(community_id)
-    pointer_rows = await async_dal.select_async(
-        dal(
-            (dal.app_active_versions.app_id == app_id)
-            & (dal.app_active_versions.tenant_id == tenant_id)
-            & (dal.app_active_versions.community_id == scope_community_id)
-        )
-    )
-    if not pointer_rows:
+    pointer_rows = await install_dal(
+        (install_dal.app_active_versions.app_id == app_id)
+        & (install_dal.app_active_versions.tenant_id == tenant_id)
+        & (install_dal.app_active_versions.community_id == scope_community_id)
+    ).select()
+    pointer = pointer_rows.first()
+    if pointer is None:
         return None
-    version_rows = await async_dal.select_async(dal(dal.app_versions.id == pointer_rows[0].version_id))
-    return version_rows[0] if version_rows else None
+    version_rows = await install_dal(install_dal.app_versions.id == pointer.version_id).select()
+    return version_rows.first()
 ```
 
 - [ ] **Step 4: Run to verify all pass**
@@ -4646,25 +4872,25 @@ Expected: `6 passed`
 ```bash
 git add hub_api/services/bundle_activation_service.py hub_api/tests/test_bundle_activation_service.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): bundle_activation_service -- activate/rollback via app_active_versions (spec Sec6.10)
+feat(hub-api): bundle_activation_service -- activate/rollback via app_active_versions (spec Sec6.10, R52)
 
 Refuses to activate a digest hub-api never verified (no app_versions
 row, or artifact_digest still NULL). Rollback is this same function
 pointed at an older, already-published version -- no separate
 endpoint. Tenant-wide and community-scoped activation are independent
-(community_id=0 sentinel).
+(community_id=0 sentinel). Queries the new app_versions/
+app_active_versions tables through penguin-dal's install_dal.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 17: `blueprints/v1/bundle_versions.py` extension — `POST .../activate`
+## Task 17: `blueprints/v1/bundle_versions.py` extension — `POST .../activate` (R52: penguin-dal)
 
-**Depends on:** Task 11 (`blueprints/v1/bundle_versions.py` and its `bundle_versions_bp`), Task 16 (`activate_version`).
+**Depends on:** Task 11 (`blueprints/v1/bundle_versions.py` and its `bundle_versions_bp`, `_install_dal()` helper), Task 16 (`activate_version`, `install_dal`-only per R52).
 
 **Files:**
 - Modify: `hub_api/blueprints/v1/bundle_versions.py`
@@ -4693,13 +4919,12 @@ async def test_activate_refuses_unverified_digest(app: Quart) -> None:
 
 
 async def test_activate_happy_path(app: Quart) -> None:
-    dal = app.config["dal"]
-    dal.app_versions.insert(
+    install_dal = app.config["install_dal"]
+    await install_dal.app_versions.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1",
         artifact_digest="sha256:" + "a" * 64, language="python", artifact_kind="source",
         scan_status="scanned",
     )
-    dal.commit()
     token = make_token(scope="platform:admin", tenant="acme-corp")
     client = app.test_client()
     response = await client.post(
@@ -4756,13 +4981,13 @@ async def post_activate(
     data: ActivateVersionRequest, app_id: str, version: str
 ) -> ActivateVersionResponse | tuple[dict[str, object], int]:
     """Activate (or roll back to) `version` for the caller's tenant, optionally one community."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     ctx = get_tenant_context(request)
     assert ctx is not None  # nosec B101
     caller_id = get_current_user_id(request)
     try:
         version_row = await activation_svc.activate_version(
-            async_dal, dal, tenant_id=ctx.tenant_id, community_id=data.communityId,
+            install_dal, tenant_id=ctx.tenant_id, community_id=data.communityId,
             app_id=app_id, version=version, activated_by=caller_id,
         )
     except ApiError as exc:
@@ -4780,18 +5005,18 @@ Expected: `5 passed`
 ```bash
 git add hub_api/blueprints/v1/bundle_versions.py hub_api/tests/test_bundle_versions_blueprint.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): POST /api/v1/apps/{app_id}/versions/{version}/activate (spec Sec6.10)
+feat(hub-api): POST /api/v1/apps/{app_id}/versions/{version}/activate (spec Sec6.10, R52)
 
 Wires bundle_activation_service into the versions blueprint. 409
 digest_not_verified is a documented, tested response shape for a
-version with no verified app_versions row.
+version with no verified app_versions row. Reads install_dal
+(penguin-dal) from app config.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
 ## Task 18: `permission_summary_service.py` — the consent-screen summary + canonical hash
@@ -4984,16 +5209,16 @@ EOF
 
 ---
 
-## Task 19: `bundle_approval_service.py` — permission summary retrieval, approve, deny
+## Task 19: `bundle_approval_service.py` — permission summary retrieval, approve, deny (R52: penguin-dal)
 
-**Depends on:** Task 3 (`app_install_approvals` DDL), Task 4 (bound tables + fixture), Task 18 (`build_permission_summary`, `permission_hash`).
+**Depends on:** Task 3 (`app_install_approvals` DDL), Task 4 (`install_dal` penguin-dal wiring + `bundle_install_db`/`install_dal` fixtures), Task 18 (`build_permission_summary`, `permission_hash`).
 
 **Files:**
 - Create: `hub_api/services/bundle_approval_service.py`
 - Test: `hub_api/tests/test_bundle_approval_service.py`
 
 **Interfaces:**
-- Produces: `async def get_permission_summary(async_dal, dal, *, app_id: str, version: str) -> tuple[dict[str, Any], str]` (the summary dict and its hash); `def classify_diff(new_summary: dict, previous_summary: dict | None) -> str` (one of `"initial"`, `"widened"`, `"narrowed"`, `"unchanged"`); `async def approve_version(async_dal, dal, *, app_id: str, version: str, tenant_id: int, community_id: int | None, approved_by: int, expected_permission_hash: str | None = None) -> Any` (the new `app_install_approvals` row) — raises `ApiError` 409 `permission_hash_mismatch` when `expected_permission_hash` is given and disagrees (spec §9.7.5, fail-closed), 409 `version_not_published` if the version hasn't reached `PUBLISHED`; `async def deny_version(async_dal, dal, *, app_id: str, version: str, reason: str) -> None`.
+- Produces: `async def get_permission_summary(install_dal, *, app_id: str, version: str) -> tuple[dict[str, Any], str]` (the summary dict and its hash); `def classify_diff(new_summary: dict, previous_summary: dict | None) -> str` (one of `"initial"`, `"widened"`, `"narrowed"`, `"unchanged"`); `async def approve_version(install_dal, *, app_id: str, version: str, tenant_id: int, community_id: int | None, approved_by: int, expected_permission_hash: str | None = None) -> Any` (the new `app_install_approvals` row) — raises `ApiError` 409 `permission_hash_mismatch` when `expected_permission_hash` is given and disagrees (spec §9.7.5, fail-closed), 409 `version_not_published` if the version hasn't reached `PUBLISHED`; `async def deny_version(install_dal, *, app_id: str, version: str, reason: str) -> None`. `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `app_install_approvals`/`app_version_uploads` are this plan's own new tables (R52); this module never touches `audit_log` (no audit write in this task's scope).
 - Consumes: `services.permission_summary_service.{build_permission_summary, permission_hash}` (Task 18).
 
 **Scope note:** capability derivation (`_derive_capabilities`) is based on the manifest's declared shape (egress non-empty ⇒ `http`, `data_tables` non-empty ⇒ `db`, an `action` stage ⇒ `relay`; `context`/`kv`/`flags`/`log`/`clock` always) — spec §9.7.1's stronger claim ("cross-checked against the component's actual imports") requires M2a's compiler to report an imports list on the artifact callback, which is a documented follow-on once M2a ships that field; this plan does not block on it.
@@ -5032,74 +5257,68 @@ _MANIFEST = {
 }
 
 
-async def _seed_published(dal: Any, *, manifest: dict = _MANIFEST) -> None:
-    version_id = dal.app_versions.insert(
+async def _seed_published(install_dal: Any, *, manifest: dict = _MANIFEST) -> None:
+    now = datetime.now(UTC)
+    version_id = await install_dal.app_versions.async_insert(
         app_id=manifest["app_id"], version=manifest["version"], artifact_digest="sha256:" + "a" * 64,
         language="python", artifact_kind="source", scan_status="scanned",
     )
-    dal.app_version_uploads.insert(
+    await install_dal.app_version_uploads.async_insert(
         app_id=manifest["app_id"], version=manifest["version"], tenant_id=1,
         artifact_kind="source", language="python", status="PUBLISHED",
         manifest_json=manifest, app_version_id=version_id,
-        created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+        created_at=now, updated_at=now,
     )
-    dal.commit()
 
 
-async def test_get_permission_summary_is_deterministic(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    await _seed_published(dal)
+async def test_get_permission_summary_is_deterministic(install_dal: Any) -> None:
+    await _seed_published(install_dal)
     summary1, hash1 = await get_permission_summary(
-        bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.1"
+        install_dal, app_id="waddles.socials.music.default", version="3.0.1"
     )
     summary2, hash2 = await get_permission_summary(
-        bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.1"
+        install_dal, app_id="waddles.socials.music.default", version="3.0.1"
     )
     assert summary1 == summary2
     assert hash1 == hash2
 
 
-async def test_get_permission_summary_unknown_version_raises_404(bundle_install_db: Any) -> None:
+async def test_get_permission_summary_unknown_version_raises_404(install_dal: Any) -> None:
     with pytest.raises(ApiError) as exc:
-        await get_permission_summary(
-            bundle_install_db, bundle_install_db.dal, app_id="waddles.x.y.default", version="1.0.0"
-        )
+        await get_permission_summary(install_dal, app_id="waddles.x.y.default", version="1.0.0")
     assert exc.value.status_code == 404
 
 
-async def test_approve_version_records_a_row(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    await _seed_published(dal)
+async def test_approve_version_records_a_row(install_dal: Any) -> None:
+    await _seed_published(install_dal)
     row = await approve_version(
-        bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.1",
+        install_dal, app_id="waddles.socials.music.default", version="3.0.1",
         tenant_id=1, community_id=None, approved_by=1,
     )
     assert row.approved_by == 1
     assert row.permission_hash.startswith("sha256:")
 
 
-async def test_approve_version_not_published_is_refused(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    dal.app_version_uploads.insert(
+async def test_approve_version_not_published_is_refused(install_dal: Any) -> None:
+    now = datetime.now(UTC)
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="0.0.1", tenant_id=1,
         artifact_kind="source", language="python", status="COMPILING",
-        manifest_json=_MANIFEST, created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+        manifest_json=_MANIFEST, created_at=now, updated_at=now,
     )
-    dal.commit()
     with pytest.raises(ApiError) as exc:
         await approve_version(
-            bundle_install_db, dal, app_id="waddles.socials.music.default", version="0.0.1",
+            install_dal, app_id="waddles.socials.music.default", version="0.0.1",
             tenant_id=1, community_id=None, approved_by=1,
         )
     assert exc.value.code == "version_not_published"
 
 
-async def test_approve_version_headless_hash_mismatch_fails_closed(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    await _seed_published(dal)
+async def test_approve_version_headless_hash_mismatch_fails_closed(install_dal: Any) -> None:
+    await _seed_published(install_dal)
     with pytest.raises(ApiError) as exc:
         await approve_version(
-            bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.1",
+            install_dal, app_id="waddles.socials.music.default", version="3.0.1",
             tenant_id=1, community_id=None, approved_by=1,
             expected_permission_hash="sha256:" + "0" * 64,
         )
@@ -5107,20 +5326,21 @@ async def test_approve_version_headless_hash_mismatch_fails_closed(bundle_instal
     assert exc.value.code == "permission_hash_mismatch"
 
 
-async def test_approve_version_supersedes_the_previous_current_approval(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    await _seed_published(dal)
+async def test_approve_version_supersedes_the_previous_current_approval(install_dal: Any) -> None:
+    await _seed_published(install_dal)
     first = await approve_version(
-        bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.1",
+        install_dal, app_id="waddles.socials.music.default", version="3.0.1",
         tenant_id=1, community_id=None, approved_by=1,
     )
     newer_manifest = {**_MANIFEST, "version": "3.0.2"}
-    await _seed_published(dal, manifest=newer_manifest)
+    await _seed_published(install_dal, manifest=newer_manifest)
     second = await approve_version(
-        bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.2",
+        install_dal, app_id="waddles.socials.music.default", version="3.0.2",
         tenant_id=1, community_id=None, approved_by=1,
     )
-    refreshed_first = dal(dal.app_install_approvals.id == first.id).select().first()
+    refreshed_first = (
+        await install_dal(install_dal.app_install_approvals.id == first.id).select()
+    ).first()
     assert refreshed_first.superseded_by == second.id
 
 
@@ -5146,14 +5366,15 @@ def test_classify_diff_initial_with_no_previous() -> None:
     assert classify_diff(summary, None) == "initial"
 
 
-async def test_deny_version_sets_rejected(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    await _seed_published(dal)
+async def test_deny_version_sets_rejected(install_dal: Any) -> None:
+    await _seed_published(install_dal)
     await deny_version(
-        bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.1",
+        install_dal, app_id="waddles.socials.music.default", version="3.0.1",
         reason="egress host not acceptable",
     )
-    row = dal(dal.app_version_uploads.version == "3.0.1").select().first()
+    row = (
+        await install_dal(install_dal.app_version_uploads.version == "3.0.1").select()
+    ).first()
     assert row.status == "REJECTED"
     assert row.reject_reason == "egress host not acceptable"
 ```
@@ -5167,12 +5388,19 @@ Expected: `ModuleNotFoundError: No module named 'services.bundle_approval_servic
 
 ```python
 # hub_api/services/bundle_approval_service.py
-"""Permission-summary retrieval, approval (with widen/narrow diff), and denial (spec Sec9.7)."""
+"""Permission-summary retrieval, approval (with widen/narrow diff), and denial (spec Sec9.7).
+
+R52: `app_install_approvals`/`app_version_uploads`/`app_versions` are
+this plan's own new tables, queried through the penguin-dal
+`install_dal: AsyncDB` (Task 4) -- never a new pydal binder/query.
+"""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
+
+from penguin_dal import AsyncDB
 
 from services.bundle_manifest_v2 import BundleManifestV2, ConsumeRule, EgressRule, Limits
 from services.errors import ApiError, not_found
@@ -5226,14 +5454,18 @@ def _derive_capabilities(manifest: BundleManifestV2) -> frozenset[str]:
     return frozenset(caps)
 
 
-async def get_permission_summary(async_dal: Any, dal: Any, *, app_id: str, version: str) -> tuple[dict[str, Any], str]:
+async def get_permission_summary(
+    install_dal: AsyncDB, *, app_id: str, version: str
+) -> tuple[dict[str, Any], str]:
     """The consent-screen summary and its hash for one uploaded version."""
-    rows = await async_dal.select_async(
-        dal((dal.app_version_uploads.app_id == app_id) & (dal.app_version_uploads.version == version))
-    )
-    if not rows:
+    rows = await install_dal(
+        (install_dal.app_version_uploads.app_id == app_id)
+        & (install_dal.app_version_uploads.version == version)
+    ).select()
+    upload = rows.first()
+    if upload is None:
         raise not_found(f"version {version} of {app_id} not found")
-    manifest = _reparse_trusted(rows[0].manifest_json)
+    manifest = _reparse_trusted(upload.manifest_json)
     summary = build_permission_summary(
         manifest,
         grant_labels=[
@@ -5265,15 +5497,14 @@ def classify_diff(new_summary: dict[str, Any], previous_summary: dict[str, Any] 
         return "unchanged"
     added, removed = new_set - old_set, old_set - new_set
     if added and not removed:
-        return "narrowed" if False else "widened"
+        return "widened"
     if removed and not added:
         return "narrowed"
     return "widened"  # mixed add+remove is treated as widening -- the conservative choice
 
 
 async def approve_version(
-    async_dal: Any,
-    dal: Any,
+    install_dal: AsyncDB,
     *,
     app_id: str,
     version: str,
@@ -5283,90 +5514,78 @@ async def approve_version(
     expected_permission_hash: str | None = None,
 ) -> Any:
     """Record an `app_install_approvals` row. Fails closed on a headless hash mismatch (spec Sec9.7.5)."""
-    upload_rows = await async_dal.select_async(
-        dal((dal.app_version_uploads.app_id == app_id) & (dal.app_version_uploads.version == version))
-    )
-    if not upload_rows:
+    upload_rows = await install_dal(
+        (install_dal.app_version_uploads.app_id == app_id)
+        & (install_dal.app_version_uploads.version == version)
+    ).select()
+    upload = upload_rows.first()
+    if upload is None:
         raise not_found(f"version {version} of {app_id} not found")
-    if upload_rows[0].status != "PUBLISHED":
+    if upload.status != "PUBLISHED":
         raise ApiError(f"version {version} of {app_id} is not published yet", 409, "version_not_published")
 
-    summary, computed_hash = await get_permission_summary(async_dal, dal, app_id=app_id, version=version)
+    summary, computed_hash = await get_permission_summary(install_dal, app_id=app_id, version=version)
     if expected_permission_hash is not None and expected_permission_hash != computed_hash:
         raise ApiError(
             "the supplied permission_hash does not match the current summary", 409, "permission_hash_mismatch"
         )
 
-    previous_rows = await async_dal.select_async(
-        dal(
-            (dal.app_install_approvals.app_id == app_id)
-            & (dal.app_install_approvals.tenant_id == tenant_id)
-            & (dal.app_install_approvals.community_id == community_id)
-            & (dal.app_install_approvals.superseded_by == None)  # noqa: E711 -- pydal query operator
-        )
-    )
+    previous_rows = await install_dal(
+        (install_dal.app_install_approvals.app_id == app_id)
+        & (install_dal.app_install_approvals.tenant_id == tenant_id)
+        & (install_dal.app_install_approvals.community_id == community_id)
+        & (install_dal.app_install_approvals.superseded_by == None)  # noqa: E711 -- penguin-dal query operator
+    ).select()
+    previous = previous_rows.first()
     now = datetime.now(UTC)
-    new_id = await async_dal.insert_async(
-        dal.app_install_approvals,
+    new_id = await install_dal.app_install_approvals.async_insert(
         tenant_id=tenant_id, community_id=community_id, app_id=app_id, version=version,
         permission_hash=computed_hash, summary_json=summary, approved_by=approved_by, approved_at=now,
     )
-    if previous_rows:
-        await async_dal.update_async(dal.app_install_approvals.id == previous_rows[0].id, superseded_by=new_id)
-    async_dal.dal.commit()
-    return (await async_dal.select_async(dal(dal.app_install_approvals.id == new_id)))[0]
+    if previous is not None:
+        await install_dal(install_dal.app_install_approvals.id == previous.id).update(superseded_by=new_id)
+    return (await install_dal(install_dal.app_install_approvals.id == new_id).select()).first()
 
 
-async def deny_version(async_dal: Any, dal: Any, *, app_id: str, version: str, reason: str) -> None:
+async def deny_version(install_dal: AsyncDB, *, app_id: str, version: str, reason: str) -> None:
     """Move the version to REJECTED with `reason` -- reuses `app_version_uploads.status`."""
-    rows = await async_dal.select_async(
-        dal((dal.app_version_uploads.app_id == app_id) & (dal.app_version_uploads.version == version))
-    )
-    if not rows:
+    rows = await install_dal(
+        (install_dal.app_version_uploads.app_id == app_id)
+        & (install_dal.app_version_uploads.version == version)
+    ).select()
+    upload = rows.first()
+    if upload is None:
         raise not_found(f"version {version} of {app_id} not found")
-    await async_dal.update_async(
-        dal.app_version_uploads.id == rows[0].id,
+    await install_dal(install_dal.app_version_uploads.id == upload.id).update(
         status="REJECTED", reject_reason=reason, updated_at=datetime.now(UTC),
     )
-    async_dal.dal.commit()
 ```
 
-- [ ] **Step 4: Clean up the dead branch in `classify_diff`**
-
-The `"narrowed" if False else "widened"` expression above is a leftover from working through the truth table during authoring. Simplify it before committing:
-
-```python
-    if added and not removed:
-        return "widened"
-    if removed and not added:
-        return "narrowed"
-    return "widened"  # mixed add+remove is treated as widening -- the conservative choice
-```
-
-- [ ] **Step 5: Run to verify all pass**
+- [ ] **Step 4: Run to verify all pass**
 
 Run: `cd hub_api && python3 -m pytest tests/test_bundle_approval_service.py -v`
 Expected: `12 passed`
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add hub_api/services/bundle_approval_service.py hub_api/tests/test_bundle_approval_service.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): bundle_approval_service -- permission summary, approve (fail-closed hash check), deny
+feat(hub-api): bundle_approval_service -- permission summary, approve (fail-closed hash check), deny (R52)
 
 approve_version() fails closed on a headless permission_hash mismatch
 (spec Sec9.7.5), supersedes the previous current approval on a new
 one, and refuses a version that hasn't reached PUBLISHED.
 classify_diff() labels widened/narrowed/unchanged/initial for the
-upgrade-diff UI (Sec9.7.4).
+upgrade-diff UI (Sec9.7.4). Queries the new app_install_approvals/
+app_version_uploads/app_versions tables through penguin-dal's
+install_dal.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
 ## Task 20: `bundle_db_role_service.py` — per-bundle Postgres roles for the `db` capability
@@ -5555,9 +5774,9 @@ EOF
 
 ---
 
-## Task 21: Wire per-bundle role creation into `approve_version()`
+## Task 21: Wire per-bundle role creation into `approve_version()` (R52: penguin-dal)
 
-**Depends on:** Task 19 (`approve_version`), Task 20 (`create_bundle_role`).
+**Depends on:** Task 19 (`approve_version`, `install_dal`-only per R52), Task 20 (`create_bundle_role`).
 
 **Files:**
 - Modify: `hub_api/services/bundle_approval_service.py`
@@ -5575,25 +5794,23 @@ Append to `hub_api/tests/test_bundle_approval_service.py`:
 from unittest.mock import AsyncMock, patch  # noqa: E402 -- appended import
 
 
-async def test_approve_version_creates_the_bundle_role_when_engine_given(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    await _seed_published(dal)
+async def test_approve_version_creates_the_bundle_role_when_engine_given(install_dal: Any) -> None:
+    await _seed_published(install_dal)
     mock_engine = object()
     with patch("services.bundle_approval_service.create_bundle_role", new_callable=AsyncMock) as mock_create:
         mock_create.return_value = "bundle_waddles_socials_music_default"
         await approve_version(
-            bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.1",
+            install_dal, app_id="waddles.socials.music.default", version="3.0.1",
             tenant_id=1, community_id=None, approved_by=1, db_engine=mock_engine,
         )
     mock_create.assert_called_once_with(mock_engine, app_id="waddles.socials.music.default", tables=["music_queue"])
 
 
-async def test_approve_version_skips_role_creation_without_an_engine(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    await _seed_published(dal)
+async def test_approve_version_skips_role_creation_without_an_engine(install_dal: Any) -> None:
+    await _seed_published(install_dal)
     with patch("services.bundle_approval_service.create_bundle_role", new_callable=AsyncMock) as mock_create:
         await approve_version(
-            bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.1",
+            install_dal, app_id="waddles.socials.music.default", version="3.0.1",
             tenant_id=1, community_id=None, approved_by=1,
         )
     mock_create.assert_not_called()
@@ -5616,8 +5833,7 @@ Change `approve_version`'s signature and body:
 
 ```python
 async def approve_version(
-    async_dal: Any,
-    dal: Any,
+    install_dal: AsyncDB,
     *,
     app_id: str,
     version: str,
@@ -5634,43 +5850,42 @@ async def approve_version(
     Sec11.6.2). `db_engine=None` (test/dev default) skips role
     management entirely.
     """
-    upload_rows = await async_dal.select_async(
-        dal((dal.app_version_uploads.app_id == app_id) & (dal.app_version_uploads.version == version))
-    )
-    if not upload_rows:
+    upload_rows = await install_dal(
+        (install_dal.app_version_uploads.app_id == app_id)
+        & (install_dal.app_version_uploads.version == version)
+    ).select()
+    upload = upload_rows.first()
+    if upload is None:
         raise not_found(f"version {version} of {app_id} not found")
-    if upload_rows[0].status != "PUBLISHED":
+    if upload.status != "PUBLISHED":
         raise ApiError(f"version {version} of {app_id} is not published yet", 409, "version_not_published")
 
-    manifest = _reparse_trusted(upload_rows[0].manifest_json)
-    summary, computed_hash = await get_permission_summary(async_dal, dal, app_id=app_id, version=version)
+    manifest = _reparse_trusted(upload.manifest_json)
+    summary, computed_hash = await get_permission_summary(install_dal, app_id=app_id, version=version)
     if expected_permission_hash is not None and expected_permission_hash != computed_hash:
         raise ApiError(
             "the supplied permission_hash does not match the current summary", 409, "permission_hash_mismatch"
         )
 
-    previous_rows = await async_dal.select_async(
-        dal(
-            (dal.app_install_approvals.app_id == app_id)
-            & (dal.app_install_approvals.tenant_id == tenant_id)
-            & (dal.app_install_approvals.community_id == community_id)
-            & (dal.app_install_approvals.superseded_by == None)  # noqa: E711 -- pydal query operator
-        )
-    )
+    previous_rows = await install_dal(
+        (install_dal.app_install_approvals.app_id == app_id)
+        & (install_dal.app_install_approvals.tenant_id == tenant_id)
+        & (install_dal.app_install_approvals.community_id == community_id)
+        & (install_dal.app_install_approvals.superseded_by == None)  # noqa: E711 -- penguin-dal query operator
+    ).select()
+    previous = previous_rows.first()
     now = datetime.now(UTC)
-    new_id = await async_dal.insert_async(
-        dal.app_install_approvals,
+    new_id = await install_dal.app_install_approvals.async_insert(
         tenant_id=tenant_id, community_id=community_id, app_id=app_id, version=version,
         permission_hash=computed_hash, summary_json=summary, approved_by=approved_by, approved_at=now,
     )
-    if previous_rows:
-        await async_dal.update_async(dal.app_install_approvals.id == previous_rows[0].id, superseded_by=new_id)
-    async_dal.dal.commit()
+    if previous is not None:
+        await install_dal(install_dal.app_install_approvals.id == previous.id).update(superseded_by=new_id)
 
     if db_engine is not None and manifest.data_tables:
         await create_bundle_role(db_engine, app_id=app_id, tables=list(manifest.data_tables))
 
-    return (await async_dal.select_async(dal(dal.app_install_approvals.id == new_id)))[0]
+    return (await install_dal(install_dal.app_install_approvals.id == new_id).select()).first()
 ```
 
 (This replaces the entire existing function body from Task 19 — the only changes are the new `db_engine` parameter, computing `manifest` once up front instead of discarding it, and the new role-creation call at the end.)
@@ -5685,23 +5900,24 @@ Expected: `14 passed`
 ```bash
 git add hub_api/services/bundle_approval_service.py hub_api/tests/test_bundle_approval_service.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): approve_version() creates the per-bundle Postgres role when data.tables is non-empty
+feat(hub-api): approve_version() creates the per-bundle Postgres role when data.tables is non-empty (R52)
 
 Optional db_engine parameter, defaulting to None (skips role
 management in tests/dev). Wires bundle_db_role_service into the
-approval flow per spec Sec11.6.2.
+approval flow per spec Sec11.6.2. approve_version() itself queries
+app_install_approvals/app_version_uploads through penguin-dal's
+install_dal.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 22: `blueprints/v1/bundle_approvals.py` — `GET permissions`, `POST approve`/`deny`
+## Task 22: `blueprints/v1/bundle_approvals.py` — `GET permissions`, `POST approve`/`deny` (R52: penguin-dal)
 
-**Depends on:** Task 19 (`get_permission_summary`, `approve_version`, `deny_version`), Task 21 (`approve_version`'s `db_engine` keyword).
+**Depends on:** Task 19 (`get_permission_summary`, `approve_version`, `deny_version`, `install_dal`-only per R52), Task 21 (`approve_version`'s `db_engine` keyword).
 
 **Files:**
 - Create: `hub_api/blueprints/v1/bundle_approvals.py`
@@ -5709,7 +5925,7 @@ EOF
 
 **Interfaces:**
 - Produces: `GET /api/v1/apps/{app_id}/versions/{version}/permissions` (scope `platform:admin`) → `{summary, permissionHash}`; `POST /api/v1/apps/{app_id}/versions/{version}/approve` (scope `platform:admin`, body `{"communityId": int|null, "permissionHash": str|null}`) → `200 {"success": true, "permissionHash": ...}` or `409 permission_hash_mismatch` (with the current `summary`/`hash` in the body, per spec §9.7.5); `POST .../deny` (scope `platform:admin`, body `{"reason": str}`) → `200`.
-- Consumes: `services.bundle_approval_service.{get_permission_summary, approve_version, deny_version}` (Tasks 19/21).
+- Consumes: `services.bundle_approval_service.{get_permission_summary, approve_version, deny_version}` (Tasks 19/21), `current_app.config["install_dal"]` (Task 4).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -5737,22 +5953,20 @@ _MANIFEST = {
 
 
 @pytest.fixture
-def app(bundle_install_db: Any) -> Quart:
-    dal = bundle_install_db.dal
-    version_id = dal.app_versions.insert(
+async def app(install_dal: Any) -> Quart:
+    now = datetime.now(UTC)
+    version_id = await install_dal.app_versions.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", artifact_digest="sha256:" + "a" * 64,
         language="python", artifact_kind="source", scan_status="scanned",
     )
-    dal.app_version_uploads.insert(
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
         artifact_kind="source", language="python", status="PUBLISHED",
         manifest_json=_MANIFEST, app_version_id=version_id,
-        created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+        created_at=now, updated_at=now,
     )
-    dal.commit()
     app = Quart(__name__)
-    app.config["async_dal"] = bundle_install_db
-    app.config["dal"] = dal
+    app.config["install_dal"] = install_dal
     for bp in BLUEPRINTS:
         app.register_blueprint(bp)
     return app
@@ -5824,7 +6038,12 @@ Expected: `ModuleNotFoundError: No module named 'blueprints.v1.bundle_approvals'
 
 ```python
 # hub_api/blueprints/v1/bundle_approvals.py
-"""v1 `bundle_approvals` group -- GET permissions, POST approve/deny (spec Sec9.7)."""
+"""v1 `bundle_approvals` group -- GET permissions, POST approve/deny (spec Sec9.7).
+
+R52: every handler reads `current_app.config["install_dal"]` --
+`app_install_approvals`/`app_version_uploads`/`app_versions` are this
+plan's own new tables.
+"""
 
 from __future__ import annotations
 
@@ -5835,6 +6054,7 @@ from typing import Any, cast
 from flask_core.api_utils import error_response
 from flask_core.authz import require_scope
 from flask_core.tenancy import tenant_middleware
+from penguin_dal import AsyncDB
 from quart import Blueprint, current_app, request
 from quart_schema import validate_request, validate_response
 
@@ -5845,8 +6065,8 @@ from services.errors import ApiError
 bundle_approvals_bp = Blueprint("v1_bundle_approvals", __name__, url_prefix="/api/v1/apps")
 
 
-def _dal() -> tuple[Any, Any]:
-    return current_app.config["async_dal"], current_app.config["dal"]
+def _install_dal() -> AsyncDB:
+    return cast(AsyncDB, current_app.config["install_dal"])
 
 
 def _err(exc: ApiError) -> tuple[dict[str, object], int]:
@@ -5911,9 +6131,9 @@ async def get_permissions(
     app_id: str, version: str
 ) -> PermissionSummaryResponse | tuple[dict[str, object], int]:
     """The consent-screen summary and its hash -- a headless caller inspects this before approving."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     try:
-        summary, permission_hash = await svc.get_permission_summary(async_dal, dal, app_id=app_id, version=version)
+        summary, permission_hash = await svc.get_permission_summary(install_dal, app_id=app_id, version=version)
     except ApiError as exc:
         return _err(exc)
     return PermissionSummaryResponse(success=True, summary=summary, permissionHash=permission_hash)
@@ -5925,16 +6145,16 @@ async def get_permissions(
 @validate_request(ApproveRequest)
 async def post_approve(data: ApproveRequest, app_id: str, version: str) -> tuple[dict[str, object], int]:
     """Approve a version. A headless caller supplies `permissionHash`; a mismatch fails closed (409)."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     caller_id = get_current_user_id(request)
     try:
         row = await svc.approve_version(
-            async_dal, dal, app_id=app_id, version=version, tenant_id=1, community_id=data.communityId,
+            install_dal, app_id=app_id, version=version, tenant_id=1, community_id=data.communityId,
             approved_by=caller_id, expected_permission_hash=data.permissionHash, db_engine=_db_engine(),
         )
     except ApiError as exc:
         if exc.code == "permission_hash_mismatch":
-            summary, current_hash = await svc.get_permission_summary(async_dal, dal, app_id=app_id, version=version)
+            summary, current_hash = await svc.get_permission_summary(install_dal, app_id=app_id, version=version)
             return (
                 {
                     "success": False,
@@ -5955,9 +6175,9 @@ async def post_approve(data: ApproveRequest, app_id: str, version: str) -> tuple
 @validate_response(MessageResponse)
 async def post_deny(data: DenyRequest, app_id: str, version: str) -> MessageResponse | tuple[dict[str, object], int]:
     """Deny a version -- moves it to REJECTED with `reason`."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     try:
-        await svc.deny_version(async_dal, dal, app_id=app_id, version=version, reason=data.reason)
+        await svc.deny_version(install_dal, app_id=app_id, version=version, reason=data.reason)
     except ApiError as exc:
         return _err(exc)
     return MessageResponse(success=True, message=f"version {version} of {app_id} denied: {data.reason}")
@@ -5985,22 +6205,22 @@ Append to `hub_api/pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]`:
 git add hub_api/blueprints/v1/bundle_approvals.py hub_api/tests/test_bundle_approvals_blueprint.py \
         hub_api/pyproject.toml
 git commit -m "$(cat <<'EOF'
-feat(hub-api): GET permissions, POST approve/deny (spec Sec9.7)
+feat(hub-api): GET permissions, POST approve/deny (spec Sec9.7, R52)
 
 approve's headless path fails closed with 409 permission_hash_mismatch
-plus the current summary/hash in the body, per spec Sec9.7.5.
+plus the current summary/hash in the body, per spec Sec9.7.5. Reads
+install_dal (penguin-dal) from app config.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 23: `platform_settings_service.py` + `blueprints/v1/bundle_settings.py` — the global `bundles.allow_prebuilt` setting
+## Task 23: `platform_settings_service.py` + `blueprints/v1/bundle_settings.py` — the global `bundles.allow_prebuilt` setting (R52: penguin-dal)
 
-**Depends on:** Task 3 (`platform_settings` DDL, seeded with `bundles.allow_prebuilt`), Task 4 (bound tables + fixture).
+**Depends on:** Task 3 (`platform_settings` DDL, seeded with `bundles.allow_prebuilt`), Task 4 (`install_dal` penguin-dal wiring + `bundle_install_db`/`install_dal` fixtures).
 
 **Files:**
 - Create: `hub_api/services/platform_settings_service.py`
@@ -6009,7 +6229,7 @@ EOF
 - Test: `hub_api/tests/test_bundle_settings_blueprint.py`
 
 **Interfaces:**
-- Produces: `SETTING_ALLOW_PREBUILT = "bundles.allow_prebuilt"`; `async def get_platform_setting_bool(async_dal, dal, *, key: str, default: bool) -> bool`; `async def set_platform_setting(async_dal, dal, *, key: str, value: str, updated_by: int) -> None`; `GET /api/v1/marketplace/settings` (scope `platform:admin`) → `{success, settings: [{key, value}]}`; `PUT /api/v1/marketplace/settings` (scope `platform:admin`, body `{"settings": [{"key": str, "value": str}]}`) → `200`.
+- Produces: `SETTING_ALLOW_PREBUILT = "bundles.allow_prebuilt"`; `async def get_platform_setting_bool(install_dal, *, key: str, default: bool) -> bool`; `async def set_platform_setting(install_dal, *, key: str, value: str, updated_by: int) -> None`; `GET /api/v1/marketplace/settings` (scope `platform:admin`) → `{success, settings: [{key, value}]}`; `PUT /api/v1/marketplace/settings` (scope `platform:admin`, body `{"settings": [{"key": str, "value": str}]}`) → `200`. `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `platform_settings` is this plan's own new table (R52).
 - Consumes: nothing new.
 
 - [ ] **Step 1: Write the failing service test**
@@ -6029,35 +6249,27 @@ from services.platform_settings_service import (
 )
 
 
-async def test_default_is_used_when_unset(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    value = await get_platform_setting_bool(async_dal, async_dal.dal, key="nonexistent.key", default=True)
+async def test_default_is_used_when_unset(install_dal: Any) -> None:
+    value = await get_platform_setting_bool(install_dal, key="nonexistent.key", default=True)
     assert value is True
 
 
-async def test_seeded_bundles_allow_prebuilt_reads_true(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    dal.platform_settings.insert(key=SETTING_ALLOW_PREBUILT, value="true")
-    dal.commit()
-    value = await get_platform_setting_bool(bundle_install_db, dal, key=SETTING_ALLOW_PREBUILT, default=False)
+async def test_seeded_bundles_allow_prebuilt_reads_true(install_dal: Any) -> None:
+    await install_dal.platform_settings.async_insert(key=SETTING_ALLOW_PREBUILT, value="true")
+    value = await get_platform_setting_bool(install_dal, key=SETTING_ALLOW_PREBUILT, default=False)
     assert value is True
 
 
-async def test_set_platform_setting_updates_an_existing_row(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    dal.platform_settings.insert(key=SETTING_ALLOW_PREBUILT, value="true")
-    dal.commit()
-    await set_platform_setting(async_dal, dal, key=SETTING_ALLOW_PREBUILT, value="false", updated_by=1)
-    value = await get_platform_setting_bool(async_dal, dal, key=SETTING_ALLOW_PREBUILT, default=True)
+async def test_set_platform_setting_updates_an_existing_row(install_dal: Any) -> None:
+    await install_dal.platform_settings.async_insert(key=SETTING_ALLOW_PREBUILT, value="true")
+    await set_platform_setting(install_dal, key=SETTING_ALLOW_PREBUILT, value="false", updated_by=1)
+    value = await get_platform_setting_bool(install_dal, key=SETTING_ALLOW_PREBUILT, default=True)
     assert value is False
 
 
-async def test_set_platform_setting_inserts_when_absent(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await set_platform_setting(async_dal, dal, key="a.new.key", value="1", updated_by=1)
-    row = dal(dal.platform_settings.key == "a.new.key").select().first()
+async def test_set_platform_setting_inserts_when_absent(install_dal: Any) -> None:
+    await set_platform_setting(install_dal, key="a.new.key", value="1", updated_by=1)
+    row = (await install_dal(install_dal.platform_settings.key == "a.new.key").select()).first()
     assert row.value == "1"
     assert row.updated_by == 1
 ```
@@ -6075,38 +6287,41 @@ Expected: `ModuleNotFoundError: No module named 'services.platform_settings_serv
 
 The single global setting this milestone introduces:
 `bundles.allow_prebuilt` (spec Sec6.4.4 V18, Sec12.3), default `true`,
-seeded by migration 0021.
+seeded by migration 0021. R52: `platform_settings` is this plan's own
+new table, queried through the penguin-dal `install_dal: AsyncDB`
+(Task 4).
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+
+from penguin_dal import AsyncDB
 
 SETTING_ALLOW_PREBUILT = "bundles.allow_prebuilt"
 
 
-async def get_platform_setting_bool(async_dal: Any, dal: Any, *, key: str, default: bool) -> bool:
+async def get_platform_setting_bool(install_dal: AsyncDB, *, key: str, default: bool) -> bool:
     """`True`/`False` for `key`, or `default` when the row does not exist."""
-    rows = await async_dal.select_async(dal(dal.platform_settings.key == key))
-    if not rows:
+    rows = await install_dal(install_dal.platform_settings.key == key).select()
+    row = rows.first()
+    if row is None:
         return default
-    return rows[0].value == "true"
+    return row.value == "true"
 
 
-async def set_platform_setting(async_dal: Any, dal: Any, *, key: str, value: str, updated_by: int) -> None:
-    """Upsert `key` -> `value` (select-then-branch -- pydal has no portable `ON CONFLICT`, PORTING.md Gotcha #1)."""
-    existing = await async_dal.select_async(dal(dal.platform_settings.key == key))
+async def set_platform_setting(install_dal: AsyncDB, *, key: str, value: str, updated_by: int) -> None:
+    """Upsert `key` -> `value` (select-then-branch -- `penguin_dal` has no portable `ON CONFLICT`, same gotcha the original pydal `PORTING.md` documented)."""
+    existing = await install_dal(install_dal.platform_settings.key == key).select()
     now = datetime.now(UTC)
     if existing:
-        await async_dal.update_async(
-            dal.platform_settings.key == key, value=value, updated_by=updated_by, updated_at=now
+        await install_dal(install_dal.platform_settings.key == key).update(
+            value=value, updated_by=updated_by, updated_at=now
         )
     else:
-        await async_dal.insert_async(
-            dal.platform_settings, key=key, value=value, updated_by=updated_by, updated_at=now
+        await install_dal.platform_settings.async_insert(
+            key=key, value=value, updated_by=updated_by, updated_at=now
         )
-    async_dal.dal.commit()
 ```
 
 - [ ] **Step 4: Run the service test to verify it passes**
@@ -6132,13 +6347,10 @@ from tests.conftest import make_token
 
 
 @pytest.fixture
-def app(bundle_install_db: Any) -> Quart:
-    dal = bundle_install_db.dal
-    dal.platform_settings.insert(key="bundles.allow_prebuilt", value="true")
-    dal.commit()
+async def app(install_dal: Any) -> Quart:
+    await install_dal.platform_settings.async_insert(key="bundles.allow_prebuilt", value="true")
     app = Quart(__name__)
-    app.config["async_dal"] = bundle_install_db
-    app.config["dal"] = dal
+    app.config["install_dal"] = install_dal
     for bp in BLUEPRINTS:
         app.register_blueprint(bp)
     return app
@@ -6180,7 +6392,11 @@ Expected: `ModuleNotFoundError: No module named 'blueprints.v1.bundle_settings'`
 
 ```python
 # hub_api/blueprints/v1/bundle_settings.py
-"""v1 `bundle_settings` group -- GET/PUT /api/v1/marketplace/settings (global admin, spec Sec12.3)."""
+"""v1 `bundle_settings` group -- GET/PUT /api/v1/marketplace/settings (global admin, spec Sec12.3).
+
+R52: reads `current_app.config["install_dal"]` -- `platform_settings`
+is this plan's own new table.
+"""
 
 from __future__ import annotations
 
@@ -6189,6 +6405,7 @@ from typing import Any, cast
 
 from flask_core.authz import require_scope
 from flask_core.tenancy import tenant_middleware
+from penguin_dal import AsyncDB
 from quart import Blueprint, current_app, request
 from quart_schema import validate_request, validate_response
 
@@ -6198,8 +6415,8 @@ from services.current_user import get_current_user_id
 bundle_settings_bp = Blueprint("v1_bundle_settings", __name__, url_prefix="/api/v1/marketplace")
 
 
-def _dal() -> tuple[Any, Any]:
-    return current_app.config["async_dal"], current_app.config["dal"]
+def _install_dal() -> AsyncDB:
+    return cast(AsyncDB, current_app.config["install_dal"])
 
 
 @dataclass(slots=True, frozen=True)
@@ -6247,8 +6464,8 @@ class MessageResponse:
 @validate_response(SettingsListResponse)
 async def get_settings() -> SettingsListResponse:
     """List every global bundle setting."""
-    async_dal, dal = _dal()
-    rows = await async_dal.select_async(dal(dal.platform_settings.id > 0))
+    install_dal = _install_dal()
+    rows = await install_dal(install_dal.platform_settings.id > 0).select()
     return SettingsListResponse(success=True, settings=[SettingDTO(key=r.key, value=r.value) for r in rows])
 
 
@@ -6259,10 +6476,10 @@ async def get_settings() -> SettingsListResponse:
 @validate_response(MessageResponse)
 async def put_settings(data: UpdateSettingsRequest) -> MessageResponse:
     """Upsert one or more global bundle settings."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     caller_id = get_current_user_id(request)
     for setting in data.settings:
-        await svc.set_platform_setting(async_dal, dal, key=setting.key, value=setting.value, updated_by=caller_id)
+        await svc.set_platform_setting(install_dal, key=setting.key, value=setting.value, updated_by=caller_id)
     return MessageResponse(success=True, message="settings updated")
 
 
@@ -6276,7 +6493,7 @@ Expected: `3 passed`
 
 - [ ] **Step 9: Refactor `bundle_versions.py`'s inline `_allow_prebuilt` helper**
 
-Task 11 added a temporary inline `_allow_prebuilt(dal)` query to `hub_api/blueprints/v1/bundle_versions.py`. Replace it now that the real service exists:
+Task 11 added a temporary inline `_allow_prebuilt(install_dal)` query to `hub_api/blueprints/v1/bundle_versions.py`. Replace it now that the real service exists:
 
 ```python
 from services.platform_settings_service import SETTING_ALLOW_PREBUILT, get_platform_setting_bool
@@ -6286,7 +6503,7 @@ Delete the `_allow_prebuilt` function from `bundle_versions.py` and replace its 
 
 ```python
             allow_prebuilt=await get_platform_setting_bool(
-                async_dal, dal, key=SETTING_ALLOW_PREBUILT, default=True
+                install_dal, key=SETTING_ALLOW_PREBUILT, default=True
             ),
 ```
 
@@ -6302,22 +6519,24 @@ git add hub_api/services/platform_settings_service.py hub_api/blueprints/v1/bund
         hub_api/tests/test_platform_settings_service.py hub_api/tests/test_bundle_settings_blueprint.py \
         hub_api/blueprints/v1/bundle_versions.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): GET/PUT /api/v1/marketplace/settings -- global bundles.allow_prebuilt (spec Sec12.3)
+feat(hub-api): GET/PUT /api/v1/marketplace/settings -- global bundles.allow_prebuilt (spec Sec12.3, R52)
 
 Refactors Task 11's temporary inline _allow_prebuilt() query in
-bundle_versions.py to call the real service.
+bundle_versions.py to call the real service. Queries the new
+platform_settings table through penguin-dal's install_dal.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 24: `tenant_bundle_settings.py` — tenant `allow_wildcard_consumes`/`bundles.egress.allowPrivateHosts`
+## Task 24: `tenant_bundle_settings.py` — tenant `allow_wildcard_consumes`/`bundles.egress.allowPrivateHosts` (confirmed unaffected by R52)
 
-**Depends on:** Task 4 (the `bundle_install_db` fixture), Task 11 (`blueprints/v1/bundle_versions.py`, refactored here to read both tenant settings).
+**R52 note:** `tenant_settings` is a **pre-existing** table (Decision #8) — not one of this plan's own new tables — so this entire task is unchanged by the penguin-dal ruling: every function here keeps using the existing pydal `async_dal`/`dal` pair, exactly as originally written. It is called out explicitly (rather than silently left alone) so a reader auditing the R52 rewrite can confirm this task was checked, not skipped.
+
+**Depends on:** Task 4 (the `bundle_install_db` fixture), Task 11 (`blueprints/v1/bundle_versions.py`; its `post_version` handler binds `async_dal, dal = _dal()` alongside the new `install_dal = _install_dal()`, so both handles are already in scope for this task's refactor).
 
 **Files:**
 - Create: `hub_api/services/tenant_bundle_settings.py`
@@ -6461,9 +6680,9 @@ EOF
 
 ---
 
-## Task 25: `custom_platform_service.py` + `blueprints/v1/custom_platforms.py` — registry + `intake:write` token minting
+## Task 25: `custom_platform_service.py` + `blueprints/v1/custom_platforms.py` — registry + `intake:write` token minting (R52: penguin-dal)
 
-**Depends on:** Task 3 (`custom_platforms` DDL), Task 4 (bound tables + fixture).
+**Depends on:** Task 3 (`custom_platforms` DDL), Task 4 (`install_dal` penguin-dal wiring + `bundle_install_db`/`install_dal` fixtures).
 
 **Files:**
 - Create: `hub_api/services/custom_platform_service.py`
@@ -6472,7 +6691,7 @@ EOF
 - Test: `hub_api/tests/test_custom_platforms_blueprint.py`
 
 **Interfaces:**
-- Produces: `async def list_platform_names(async_dal, dal, *, tenant_id: int) -> frozenset[str]`; `async def create_platform(async_dal, dal, *, tenant_id: int, name: str) -> Any` (409 on duplicate); `async def delete_platform(async_dal, dal, *, tenant_id: int, name: str) -> None` (404 if absent); `def mint_intake_token(tenant_slug: str, platform_name: str) -> str` (24h JWT, scope `intake:write`, mandatory `tenant` claim — spec §10.4). Endpoints: `POST /api/v1/tenant/{slug}/custom-platforms` (scope `tenant:admin`), `GET /api/v1/tenant/{slug}/custom-platforms` (`tenant_middleware` only), `DELETE /api/v1/tenant/{slug}/custom-platforms/{name}` (scope `tenant:admin`), `POST /api/v1/tenant/{slug}/custom-platforms/{name}/tokens` (scope `tenant:admin`) → `{token, expiresInHours}` — re-mintable any time, JWTs are stateless so nothing is stored.
+- Produces: `async def list_platform_names(install_dal, *, tenant_id: int) -> frozenset[str]`; `async def create_platform(install_dal, *, tenant_id: int, name: str) -> Any` (409 on duplicate); `async def delete_platform(install_dal, *, tenant_id: int, name: str) -> None` (404 if absent); `def mint_intake_token(tenant_slug: str, platform_name: str) -> str` (24h JWT, scope `intake:write`, mandatory `tenant` claim — spec §10.4, pure JWT minting, no DB access). Endpoints: `POST /api/v1/tenant/{slug}/custom-platforms` (scope `tenant:admin`), `GET /api/v1/tenant/{slug}/custom-platforms` (`tenant_middleware` only), `DELETE /api/v1/tenant/{slug}/custom-platforms/{name}` (scope `tenant:admin`), `POST /api/v1/tenant/{slug}/custom-platforms/{name}/tokens` (scope `tenant:admin`) → `{token, expiresInHours}` — re-mintable any time, JWTs are stateless so nothing is stored. `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `custom_platforms` is this plan's own new table (R52).
 - Consumes: nothing new.
 
 - [ ] **Step 1: Write the failing service test**
@@ -6497,33 +6716,29 @@ from services.custom_platform_service import (
 from services.errors import ApiError
 
 
-async def test_create_and_list_platform(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    await create_platform(async_dal, async_dal.dal, tenant_id=1, name="mycrm")
-    names = await list_platform_names(async_dal, async_dal.dal, tenant_id=1)
+async def test_create_and_list_platform(install_dal: Any) -> None:
+    await create_platform(install_dal, tenant_id=1, name="mycrm")
+    names = await list_platform_names(install_dal, tenant_id=1)
     assert names == frozenset({"mycrm"})
 
 
-async def test_create_duplicate_platform_raises_409(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    await create_platform(async_dal, async_dal.dal, tenant_id=1, name="mycrm")
+async def test_create_duplicate_platform_raises_409(install_dal: Any) -> None:
+    await create_platform(install_dal, tenant_id=1, name="mycrm")
     with pytest.raises(ApiError) as exc:
-        await create_platform(async_dal, async_dal.dal, tenant_id=1, name="mycrm")
+        await create_platform(install_dal, tenant_id=1, name="mycrm")
     assert exc.value.status_code == 409
 
 
-async def test_delete_platform_removes_it(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    await create_platform(async_dal, async_dal.dal, tenant_id=1, name="mycrm")
-    await delete_platform(async_dal, async_dal.dal, tenant_id=1, name="mycrm")
-    names = await list_platform_names(async_dal, async_dal.dal, tenant_id=1)
+async def test_delete_platform_removes_it(install_dal: Any) -> None:
+    await create_platform(install_dal, tenant_id=1, name="mycrm")
+    await delete_platform(install_dal, tenant_id=1, name="mycrm")
+    names = await list_platform_names(install_dal, tenant_id=1)
     assert names == frozenset()
 
 
-async def test_delete_unknown_platform_raises_404(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_delete_unknown_platform_raises_404(install_dal: Any) -> None:
     with pytest.raises(ApiError) as exc:
-        await delete_platform(async_dal, async_dal.dal, tenant_id=1, name="ghost")
+        await delete_platform(install_dal, tenant_id=1, name="ghost")
     assert exc.value.status_code == 404
 
 
@@ -6544,50 +6759,53 @@ Expected: `ModuleNotFoundError: No module named 'services.custom_platform_servic
 
 ```python
 # hub_api/services/custom_platform_service.py
-"""Per-tenant custom platform registry (spec Sec6.4.3, Sec10.4) + `intake:write` token minting."""
+"""Per-tenant custom platform registry (spec Sec6.4.3, Sec10.4) + `intake:write` token minting.
+
+R52: `custom_platforms` is this plan's own new table, queried through
+the penguin-dal `install_dal: AsyncDB` (Task 4). `mint_intake_token`
+does no database access at all -- pure JWT minting, unaffected by R52.
+"""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
 from flask_core.auth import create_jwt_token
 from flask_core.secrets import require_secret_key
+from penguin_dal import AsyncDB
 
 from services.errors import ApiError, conflict, not_found
 
 
-async def list_platform_names(async_dal: Any, dal: Any, *, tenant_id: int) -> frozenset[str]:
+async def list_platform_names(install_dal: AsyncDB, *, tenant_id: int) -> frozenset[str]:
     """Every custom platform name registered for `tenant_id`."""
-    rows = await async_dal.select_async(dal(dal.custom_platforms.tenant_id == tenant_id))
+    rows = await install_dal(install_dal.custom_platforms.tenant_id == tenant_id).select()
     return frozenset(r.name for r in rows)
 
 
-async def create_platform(async_dal: Any, dal: Any, *, tenant_id: int, name: str) -> Any:
+async def create_platform(install_dal: AsyncDB, *, tenant_id: int, name: str) -> Any:
     """Register a new custom platform name. Raises 409 on duplicate."""
-    existing = await async_dal.select_async(
-        dal((dal.custom_platforms.tenant_id == tenant_id) & (dal.custom_platforms.name == name))
-    )
+    existing = await install_dal(
+        (install_dal.custom_platforms.tenant_id == tenant_id) & (install_dal.custom_platforms.name == name)
+    ).select()
     if existing:
         raise conflict(f"custom platform {name!r} already registered")
-    new_id = await async_dal.insert_async(
-        dal.custom_platforms, tenant_id=tenant_id, name=name, created_at=datetime.now(UTC)
+    new_id = await install_dal.custom_platforms.async_insert(
+        tenant_id=tenant_id, name=name, created_at=datetime.now(UTC)
     )
-    async_dal.dal.commit()
-    return (await async_dal.select_async(dal(dal.custom_platforms.id == new_id)))[0]
+    return (await install_dal(install_dal.custom_platforms.id == new_id).select()).first()
 
 
-async def delete_platform(async_dal: Any, dal: Any, *, tenant_id: int, name: str) -> None:
+async def delete_platform(install_dal: AsyncDB, *, tenant_id: int, name: str) -> None:
     """Remove a custom platform. Raises 404 if it does not exist."""
-    existing = await async_dal.select_async(
-        dal((dal.custom_platforms.tenant_id == tenant_id) & (dal.custom_platforms.name == name))
-    )
+    existing = await install_dal(
+        (install_dal.custom_platforms.tenant_id == tenant_id) & (install_dal.custom_platforms.name == name)
+    ).select()
     if not existing:
         raise not_found(f"custom platform {name!r} not found")
-    await async_dal.delete_async(
-        (dal.custom_platforms.tenant_id == tenant_id) & (dal.custom_platforms.name == name)
-    )
-    async_dal.dal.commit()
+    await install_dal(
+        (install_dal.custom_platforms.tenant_id == tenant_id) & (install_dal.custom_platforms.name == name)
+    ).delete()
 
 
 def mint_intake_token(tenant_slug: str, platform_name: str) -> str:
@@ -6604,6 +6822,8 @@ def mint_intake_token(tenant_slug: str, platform_name: str) -> str:
         secret_key=require_secret_key(), tenant=tenant_slug, scope="intake:write", expiration_hours=24,
     )
 ```
+
+Add `from typing import Any` to this module's imports (used by `create_platform`'s return type).
 
 - [ ] **Step 4: Run to verify all pass**
 
@@ -6628,10 +6848,9 @@ from tests.conftest import TENANT_SLUG, make_token
 
 
 @pytest.fixture
-def app(bundle_install_db: Any) -> Quart:
+def app(install_dal: Any) -> Quart:
     app = Quart(__name__)
-    app.config["async_dal"] = bundle_install_db
-    app.config["dal"] = bundle_install_db.dal
+    app.config["install_dal"] = install_dal
     for bp in BLUEPRINTS:
         app.register_blueprint(bp)
     return app
@@ -6694,7 +6913,11 @@ Expected: `ModuleNotFoundError: No module named 'blueprints.v1.custom_platforms'
 
 ```python
 # hub_api/blueprints/v1/custom_platforms.py
-"""v1 `custom_platforms` group -- per-tenant registry + intake:write token minting (spec Sec6.4.3, Sec10.4)."""
+"""v1 `custom_platforms` group -- per-tenant registry + intake:write token minting (spec Sec6.4.3, Sec10.4).
+
+R52: reads `current_app.config["install_dal"]` -- `custom_platforms` is
+this plan's own new table.
+"""
 
 from __future__ import annotations
 
@@ -6704,6 +6927,7 @@ from typing import Any, cast
 from flask_core.api_utils import error_response
 from flask_core.authz import require_scope
 from flask_core.tenancy import get_tenant_context, tenant_middleware
+from penguin_dal import AsyncDB
 from quart import Blueprint, current_app, request
 from quart_schema import validate_request, validate_response
 
@@ -6716,8 +6940,8 @@ custom_platforms_bp = Blueprint(
 )
 
 
-def _dal() -> tuple[Any, Any]:
-    return current_app.config["async_dal"], current_app.config["dal"]
+def _install_dal() -> AsyncDB:
+    return cast(AsyncDB, current_app.config["install_dal"])
 
 
 def _err(exc: ApiError) -> tuple[dict[str, object], int]:
@@ -6769,10 +6993,10 @@ class TokenResponse:
 @validate_request(CreatePlatformRequest)
 async def create_platform(data: CreatePlatformRequest, tenant_slug: str) -> tuple[dict[str, object], int]:
     """Register a new custom platform name."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     try:
         tenant_id = _tenant_id(tenant_slug)
-        await svc.create_platform(async_dal, dal, tenant_id=tenant_id, name=data.name)
+        await svc.create_platform(install_dal, tenant_id=tenant_id, name=data.name)
     except ApiError as exc:
         return _err(exc)
     return {"success": True, "message": f"platform {data.name} registered"}, 201
@@ -6783,12 +7007,12 @@ async def create_platform(data: CreatePlatformRequest, tenant_slug: str) -> tupl
 @validate_response(PlatformListResponse)
 async def list_platforms(tenant_slug: str) -> PlatformListResponse | tuple[dict[str, object], int]:
     """List every custom platform registered for this tenant."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     try:
         tenant_id = _tenant_id(tenant_slug)
     except ApiError as exc:
         return _err(exc)
-    names = await svc.list_platform_names(async_dal, dal, tenant_id=tenant_id)
+    names = await svc.list_platform_names(install_dal, tenant_id=tenant_id)
     return PlatformListResponse(success=True, names=sorted(names))
 
 
@@ -6798,10 +7022,10 @@ async def list_platforms(tenant_slug: str) -> PlatformListResponse | tuple[dict[
 @validate_response(MessageResponse)
 async def delete_platform(tenant_slug: str, name: str) -> MessageResponse | tuple[dict[str, object], int]:
     """Remove a custom platform."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     try:
         tenant_id = _tenant_id(tenant_slug)
-        await svc.delete_platform(async_dal, dal, tenant_id=tenant_id, name=name)
+        await svc.delete_platform(install_dal, tenant_id=tenant_id, name=name)
     except ApiError as exc:
         return _err(exc)
     return MessageResponse(success=True, message=f"platform {name} removed")
@@ -6837,10 +7061,10 @@ Add the import to `hub_api/blueprints/v1/bundle_versions.py`:
 from services.custom_platform_service import list_platform_names
 ```
 
-Delete the `_known_custom_platforms` function and replace its one call site:
+Delete the `_known_custom_platforms` function from `bundle_versions.py` and replace its one call site:
 
 ```python
-            known_custom_platforms=await list_platform_names(async_dal, dal, tenant_id=ctx.tenant_id),
+            known_custom_platforms=await list_platform_names(install_dal, tenant_id=ctx.tenant_id),
 ```
 
 - [ ] **Step 10: Run the versions blueprint tests to confirm the refactor didn't break anything**
@@ -6863,31 +7087,31 @@ git add hub_api/services/custom_platform_service.py hub_api/blueprints/v1/custom
         hub_api/tests/test_custom_platform_service.py hub_api/tests/test_custom_platforms_blueprint.py \
         hub_api/blueprints/v1/bundle_versions.py hub_api/pyproject.toml
 git commit -m "$(cat <<'EOF'
-feat(hub-api): custom platform registry + intake:write token minting (spec Sec6.4.3, Sec10.4)
+feat(hub-api): custom platform registry + intake:write token minting (spec Sec6.4.3, Sec10.4, R52)
 
 POST/GET/DELETE /api/v1/tenant/{slug}/custom-platforms plus a token-
 minting endpoint issuing 24h intake:write JWTs for REST-intake
 integrations. Refactors Task 11's temporary inline query in
-bundle_versions.py.
+bundle_versions.py. Queries the new custom_platforms table through
+penguin-dal's install_dal.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 26: `ingest_source_service.py` — the per-tenant ingest source registry
+## Task 26: `ingest_source_service.py` — the per-tenant ingest source registry (R52: penguin-dal)
 
-**Depends on:** Task 3 (`ingest_sources` DDL), Task 4 (bound tables + fixture), Task 6 (`bundle_secret_crypto.{encrypt, decrypt}`).
+**Depends on:** Task 3 (`ingest_sources` DDL), Task 4 (`install_dal` penguin-dal fixture/wiring), Task 6 (`bundle_secret_crypto.{encrypt, decrypt}`).
 
 **Files:**
 - Create: `hub_api/services/ingest_source_service.py`
 - Test: `hub_api/tests/test_ingest_source_service.py`
 
 **Interfaces:**
-- Produces: `async def create_source(async_dal, dal, *, tenant_id: int, community_id: int | None, platform: str, source_id: str, label: str, mapping: dict[str, Any] | None) -> tuple[Any, str]` (the row and the **plaintext secret, returned exactly once** — spec §10.3's per-source HMAC secret); `async def list_sources(async_dal, dal, *, tenant_id: int) -> list[Any]` (never returns the plaintext secret, only whether one is set); `async def delete_source(async_dal, dal, *, tenant_id: int, source_id: str) -> None`; `async def resolve_secret(async_dal, dal, *, tenant_id: int, platform: str, source_id: str) -> str | None` (decrypts, for the webhook-verification path a later milestone's Rust ingest calls through the distribution API's `/sources` endpoint, Task 34).
+- Produces: `async def create_source(install_dal, *, tenant_id: int, community_id: int | None, platform: str, source_id: str, label: str, mapping: dict[str, Any] | None) -> tuple[Any, str]` (the row and the **plaintext secret, returned exactly once** — spec §10.3's per-source HMAC secret); `async def list_sources(install_dal, *, tenant_id: int) -> list[Any]` (never returns the plaintext secret, only whether one is set); `async def delete_source(install_dal, *, tenant_id: int, source_id: str) -> None`; `async def resolve_secret(install_dal, *, tenant_id: int, platform: str, source_id: str) -> str | None` (decrypts, for the webhook-verification path a later milestone's Rust ingest calls through the distribution API's `/sources` endpoint, Task 34). `install_dal` is the `penguin_dal.AsyncDB` from `services.bundle_install_dal.build_install_dal()` (Task 4) — `ingest_sources` is one of this plan's own new tables (R52), so every function here takes only `install_dal`, never the pre-existing pydal `async_dal`/`dal` pair.
 - Consumes: `services.bundle_secret_crypto.{encrypt, decrypt}` (Task 6).
 
 - [ ] **Step 1: Write the failing test**
@@ -6911,62 +7135,58 @@ def _key_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BUNDLE_SECRET_ENCRYPTION_KEY", "b" * 64)
 
 
-async def test_create_source_returns_a_plaintext_secret_once(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_create_source_returns_a_plaintext_secret_once(install_dal: Any) -> None:
     row, secret = await create_source(
-        async_dal, async_dal.dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         platform="custom:mycrm", source_id="ticketing-1", label="MyCRM Ticketing", mapping={"event_type": {"pointer": "/type"}},
     )
     assert len(secret) >= 32
     assert row.platform == "custom:mycrm"
 
 
-async def test_list_sources_never_returns_the_plaintext_secret(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_list_sources_never_returns_the_plaintext_secret(install_dal: Any) -> None:
     await create_source(
-        async_dal, async_dal.dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         platform="custom:mycrm", source_id="ticketing-1", label="MyCRM Ticketing", mapping=None,
     )
-    rows = await list_sources(async_dal, async_dal.dal, tenant_id=1)
+    rows = await list_sources(install_dal, tenant_id=1)
     assert len(rows) == 1
     assert not hasattr(rows[0], "secret_ciphertext") or rows[0].secret_ciphertext is not None
-    # the ROW object still carries the encrypted column (pydal returns all fields);
-    # the service-layer contract is that a DTO built from this row (Task 27's
-    # blueprint) never surfaces secret_ciphertext/secret_iv on the wire.
+    # the ROW object still carries the encrypted column (penguin_dal.Row
+    # returns all selected columns, same as pydal did); the service-layer
+    # contract is that a DTO built from this row (Task 27's blueprint)
+    # never surfaces secret_ciphertext/secret_iv on the wire.
 
 
-async def test_resolve_secret_round_trips(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_resolve_secret_round_trips(install_dal: Any) -> None:
     _, secret = await create_source(
-        async_dal, async_dal.dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         platform="custom:mycrm", source_id="ticketing-1", label="MyCRM Ticketing", mapping=None,
     )
-    resolved = await resolve_secret(async_dal, async_dal.dal, tenant_id=1, platform="custom:mycrm", source_id="ticketing-1")
+    resolved = await resolve_secret(install_dal, tenant_id=1, platform="custom:mycrm", source_id="ticketing-1")
     assert resolved == secret
 
 
-async def test_duplicate_source_raises_409(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_duplicate_source_raises_409(install_dal: Any) -> None:
     await create_source(
-        async_dal, async_dal.dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         platform="custom:mycrm", source_id="ticketing-1", label="x", mapping=None,
     )
     with pytest.raises(ApiError) as exc:
         await create_source(
-            async_dal, async_dal.dal, tenant_id=1, community_id=None,
+            install_dal, tenant_id=1, community_id=None,
             platform="custom:mycrm", source_id="ticketing-1", label="y", mapping=None,
         )
     assert exc.value.status_code == 409
 
 
-async def test_delete_source_removes_it(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_delete_source_removes_it(install_dal: Any) -> None:
     await create_source(
-        async_dal, async_dal.dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         platform="custom:mycrm", source_id="ticketing-1", label="x", mapping=None,
     )
-    await delete_source(async_dal, async_dal.dal, tenant_id=1, source_id="ticketing-1")
-    rows = await list_sources(async_dal, async_dal.dal, tenant_id=1)
+    await delete_source(install_dal, tenant_id=1, source_id="ticketing-1")
+    rows = await list_sources(install_dal, tenant_id=1)
     assert rows == []
 ```
 
@@ -6979,7 +7199,14 @@ Expected: `ModuleNotFoundError: No module named 'services.ingest_source_service'
 
 ```python
 # hub_api/services/ingest_source_service.py
-"""Per-tenant ingest source registry (spec Sec5.2, Sec10.3) -- secret shown once, AES-256-GCM at rest."""
+"""Per-tenant ingest source registry (spec Sec5.2, Sec10.3) -- secret shown once, AES-256-GCM at rest.
+
+R52: `ingest_sources` is one of this plan's own new tables (migration
+0021, Task 3), so every function here queries it through the
+penguin-dal `install_dal: AsyncDB` (Task 4) -- never a new pydal
+binder/query. hub-api's pre-existing pydal surface is untouched and not
+referenced anywhere in this module.
+"""
 
 from __future__ import annotations
 
@@ -6987,13 +7214,14 @@ import secrets
 from datetime import UTC, datetime
 from typing import Any
 
+from penguin_dal import AsyncDB
+
 from services.bundle_secret_crypto import decrypt, encrypt
 from services.errors import conflict, not_found
 
 
 async def create_source(
-    async_dal: Any,
-    dal: Any,
+    install_dal: AsyncDB,
     *,
     tenant_id: int,
     community_id: int | None,
@@ -7003,61 +7231,59 @@ async def create_source(
     mapping: dict[str, Any] | None,
 ) -> tuple[Any, str]:
     """Register a new ingest source. Returns `(row, plaintext_secret)` -- the secret is never stored plaintext."""
-    existing = await async_dal.select_async(
-        dal(
-            (dal.ingest_sources.tenant_id == tenant_id)
-            & (dal.ingest_sources.platform == platform)
-            & (dal.ingest_sources.source_id == source_id)
-        )
-    )
+    existing = await install_dal(
+        (install_dal.ingest_sources.tenant_id == tenant_id)
+        & (install_dal.ingest_sources.platform == platform)
+        & (install_dal.ingest_sources.source_id == source_id)
+    ).select()
     if existing:
         raise conflict(f"ingest source {platform}/{source_id} already registered for this tenant")
 
     plaintext_secret = secrets.token_urlsafe(32)
     ciphertext, iv = encrypt(plaintext_secret)
     now = datetime.now(UTC)
-    new_id = await async_dal.insert_async(
-        dal.ingest_sources,
+    new_id = await install_dal.ingest_sources.async_insert(
         tenant_id=tenant_id, community_id=community_id, platform=platform, source_id=source_id,
         label=label, secret_ciphertext=ciphertext, secret_iv=iv, mapping=mapping, enabled=True,
         created_at=now, updated_at=now,
     )
-    async_dal.dal.commit()
-    row = (await async_dal.select_async(dal(dal.ingest_sources.id == new_id)))[0]
+    row = (await install_dal(install_dal.ingest_sources.id == new_id).select()).first()
     return row, plaintext_secret
 
 
-async def list_sources(async_dal: Any, dal: Any, *, tenant_id: int) -> list[Any]:
+async def list_sources(install_dal: AsyncDB, *, tenant_id: int) -> list[Any]:
     """Every ingest source for `tenant_id`."""
-    rows = await async_dal.select_async(dal(dal.ingest_sources.tenant_id == tenant_id))
+    rows = await install_dal(install_dal.ingest_sources.tenant_id == tenant_id).select()
     return list(rows)
 
 
-async def delete_source(async_dal: Any, dal: Any, *, tenant_id: int, source_id: str) -> None:
+async def delete_source(install_dal: AsyncDB, *, tenant_id: int, source_id: str) -> None:
     """Remove an ingest source by its `source_id`. Raises 404 if absent."""
-    existing = await async_dal.select_async(
-        dal((dal.ingest_sources.tenant_id == tenant_id) & (dal.ingest_sources.source_id == source_id))
-    )
+    existing = await install_dal(
+        (install_dal.ingest_sources.tenant_id == tenant_id)
+        & (install_dal.ingest_sources.source_id == source_id)
+    ).select()
     if not existing:
         raise not_found(f"ingest source {source_id!r} not found")
-    await async_dal.delete_async(
-        (dal.ingest_sources.tenant_id == tenant_id) & (dal.ingest_sources.source_id == source_id)
-    )
-    async_dal.dal.commit()
+    await install_dal(
+        (install_dal.ingest_sources.tenant_id == tenant_id)
+        & (install_dal.ingest_sources.source_id == source_id)
+    ).delete()
 
 
-async def resolve_secret(async_dal: Any, dal: Any, *, tenant_id: int, platform: str, source_id: str) -> str | None:
+async def resolve_secret(
+    install_dal: AsyncDB, *, tenant_id: int, platform: str, source_id: str
+) -> str | None:
     """Decrypt and return the source's secret, or `None` if no such source exists."""
-    rows = await async_dal.select_async(
-        dal(
-            (dal.ingest_sources.tenant_id == tenant_id)
-            & (dal.ingest_sources.platform == platform)
-            & (dal.ingest_sources.source_id == source_id)
-        )
-    )
-    if not rows or rows[0].secret_ciphertext is None:
+    rows = await install_dal(
+        (install_dal.ingest_sources.tenant_id == tenant_id)
+        & (install_dal.ingest_sources.platform == platform)
+        & (install_dal.ingest_sources.source_id == source_id)
+    ).select()
+    first = rows.first()
+    if first is None or first.secret_ciphertext is None:
         return None
-    return decrypt(rows[0].secret_ciphertext, rows[0].secret_iv)
+    return decrypt(first.secret_ciphertext, first.secret_iv)
 ```
 
 - [ ] **Step 4: Run to verify all pass**
@@ -7070,22 +7296,23 @@ Expected: `5 passed`
 ```bash
 git add hub_api/services/ingest_source_service.py hub_api/tests/test_ingest_source_service.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): ingest_source_service -- per-tenant ingest source registry (spec Sec5.2, Sec10.3)
+feat(hub-api): ingest_source_service -- per-tenant ingest source registry (spec Sec5.2, Sec10.3, R52)
 
 Webhook secrets shown once at creation, AES-256-GCM at rest via
-bundle_secret_crypto, never re-exposed plaintext after that.
+bundle_secret_crypto, never re-exposed plaintext after that. Queries
+the new ingest_sources table through penguin-dal's install_dal
+(coordinator ruling R52), not a new pydal binder.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 27: `blueprints/v1/ingest_sources.py` — `POST`/`GET`/`DELETE` `/api/v1/tenant/{slug}/ingest-sources`
+## Task 27: `blueprints/v1/ingest_sources.py` — `POST`/`GET`/`DELETE` `/api/v1/tenant/{slug}/ingest-sources` (R52: penguin-dal)
 
-**Depends on:** Task 26 (`ingest_source_service.{create_source, list_sources, delete_source}`).
+**Depends on:** Task 26 (`ingest_source_service.{create_source, list_sources, delete_source}`, all `install_dal`-only per R52), Task 4 (`install_dal` wired into `app.config`).
 
 **Files:**
 - Create: `hub_api/blueprints/v1/ingest_sources.py`
@@ -7093,7 +7320,7 @@ EOF
 
 **Interfaces:**
 - Produces: `POST /api/v1/tenant/{slug}/ingest-sources` (scope `tenant:admin`, body `{"communityId": int|null, "platform": str, "sourceId": str, "label": str, "mapping": dict|null}`) → `201 {secret: <shown once>}`; `GET .../ingest-sources` (`tenant_middleware`) → list, secret never included; `DELETE .../ingest-sources/{sourceId}` (scope `tenant:admin`).
-- Consumes: `services.ingest_source_service.{create_source, list_sources, delete_source}` (Task 26).
+- Consumes: `services.ingest_source_service.{create_source, list_sources, delete_source}` (Task 26), `current_app.config["install_dal"]` (Task 4).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -7118,10 +7345,11 @@ def _key_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def app(bundle_install_db: Any) -> Quart:
+def app(bundle_install_db: Any, install_dal: Any) -> Quart:
     app = Quart(__name__)
     app.config["async_dal"] = bundle_install_db
     app.config["dal"] = bundle_install_db.dal
+    app.config["install_dal"] = install_dal
     for bp in BLUEPRINTS:
         app.register_blueprint(bp)
     return app
@@ -7190,7 +7418,14 @@ Expected: `ModuleNotFoundError: No module named 'blueprints.v1.ingest_sources'`
 
 ```python
 # hub_api/blueprints/v1/ingest_sources.py
-"""v1 `ingest_sources` group -- per-tenant ingest source registry (spec Sec5.2, Sec10.3)."""
+"""v1 `ingest_sources` group -- per-tenant ingest source registry (spec Sec5.2, Sec10.3).
+
+R52: reads `current_app.config["install_dal"]` (the penguin-dal AsyncDB,
+Task 4) -- `ingest_sources` is one of this plan's own new tables, so
+this blueprint never touches the pre-existing pydal `async_dal`/`dal`
+pair (tenant/community resolution below uses `get_tenant_context()`,
+which reads claims off the validated JWT, not the database).
+"""
 
 from __future__ import annotations
 
@@ -7200,6 +7435,7 @@ from typing import Any, cast
 from flask_core.api_utils import error_response
 from flask_core.authz import require_scope
 from flask_core.tenancy import get_tenant_context, tenant_middleware
+from penguin_dal import AsyncDB
 from quart import Blueprint, current_app, request
 from quart_schema import validate_request, validate_response
 
@@ -7212,8 +7448,8 @@ ingest_sources_bp = Blueprint(
 )
 
 
-def _dal() -> tuple[Any, Any]:
-    return current_app.config["async_dal"], current_app.config["dal"]
+def _install_dal() -> AsyncDB:
+    return cast(AsyncDB, current_app.config["install_dal"])
 
 
 def _err(exc: ApiError) -> tuple[dict[str, object], int]:
@@ -7279,11 +7515,11 @@ class MessageResponse:
 @validate_request(CreateSourceRequest)
 async def create_source(data: CreateSourceRequest, tenant_slug: str) -> tuple[dict[str, object], int]:
     """Register a new ingest source. The response's `secret` field is shown exactly once."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     try:
         tenant_id = _tenant_id(tenant_slug)
         _, secret = await svc.create_source(
-            async_dal, dal, tenant_id=tenant_id, community_id=data.communityId,
+            install_dal, tenant_id=tenant_id, community_id=data.communityId,
             platform=data.platform, source_id=data.sourceId, label=data.label, mapping=data.mapping,
         )
     except ApiError as exc:
@@ -7296,12 +7532,12 @@ async def create_source(data: CreateSourceRequest, tenant_slug: str) -> tuple[di
 @validate_response(SourceListResponse)
 async def list_sources(tenant_slug: str) -> SourceListResponse | tuple[dict[str, object], int]:
     """List every ingest source for this tenant. Never includes a secret field."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     try:
         tenant_id = _tenant_id(tenant_slug)
     except ApiError as exc:
         return _err(exc)
-    rows = await svc.list_sources(async_dal, dal, tenant_id=tenant_id)
+    rows = await svc.list_sources(install_dal, tenant_id=tenant_id)
     return SourceListResponse(
         success=True,
         sources=[
@@ -7320,10 +7556,10 @@ async def list_sources(tenant_slug: str) -> SourceListResponse | tuple[dict[str,
 @validate_response(MessageResponse)
 async def delete_source(tenant_slug: str, source_id: str) -> MessageResponse | tuple[dict[str, object], int]:
     """Remove an ingest source."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     try:
         tenant_id = _tenant_id(tenant_slug)
-        await svc.delete_source(async_dal, dal, tenant_id=tenant_id, source_id=source_id)
+        await svc.delete_source(install_dal, tenant_id=tenant_id, source_id=source_id)
     except ApiError as exc:
         return _err(exc)
     return MessageResponse(success=True, message=f"ingest source {source_id} removed")
@@ -7351,17 +7587,17 @@ Append to `hub_api/pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]`:
 git add hub_api/blueprints/v1/ingest_sources.py hub_api/tests/test_ingest_sources_blueprint.py \
         hub_api/pyproject.toml
 git commit -m "$(cat <<'EOF'
-feat(hub-api): POST/GET/DELETE /api/v1/tenant/{slug}/ingest-sources (spec Sec5.2, Sec10.3)
+feat(hub-api): POST/GET/DELETE /api/v1/tenant/{slug}/ingest-sources (spec Sec5.2, Sec10.3, R52)
 
 The secret is returned exactly once, at creation; every subsequent
-read omits it entirely.
+read omits it entirely. Reads install_dal (penguin-dal) from app
+config, not the pre-existing pydal dal.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
 ## Task 28: `valkey_admin_client.py` — consumer-group lifecycle (spec Sec5.2, Sec9.5)
@@ -7525,16 +7761,16 @@ EOF
 
 ---
 
-## Task 29: `stream_grant_service.py` — `consumes` resolution into `app_stream_grants`
+## Task 29: `stream_grant_service.py` — `consumes` resolution into `app_stream_grants` (R52: penguin-dal)
 
-**Depends on:** Task 3 (`app_stream_grants` DDL), Task 4 (bound tables + fixture), Task 7 (`ConsumeRule`), Task 26 (`ingest_sources` rows resolution expands against), Task 28 (`ensure_group`, `destroy_group`).
+**Depends on:** Task 3 (`app_stream_grants` DDL), Task 4 (`install_dal` penguin-dal wiring + `bundle_install_db`/`install_dal` fixtures), Task 7 (`ConsumeRule`), Task 26 (`ingest_sources` rows resolution expands against, `install_dal`-only per R52), Task 28 (`ensure_group`, `destroy_group`).
 
 **Files:**
 - Create: `hub_api/services/stream_grant_service.py`
 - Test: `hub_api/tests/test_stream_grant_service.py`
 
 **Interfaces:**
-- Produces: `def render_stream_key(tenant_slug: str, community_slug: str | None, platform: str, source_id: str) -> str` (`waddles:t:{tenant}:c:{community|_tenant}:src:{platform}:{source_id}:events`, spec §5.1); `async def resolve_grants_for_scope(async_dal, dal, valkey_client, *, tenant_id: int, tenant_slug: str, community_id: int | None, community_slug: str | None, app_id: str, consumes: tuple[ConsumeRule, ...], granted_by: int | None) -> list[Any]` (idempotent — expands every rule against enabled `ingest_sources`, inserts missing grants, `ensure_group`s each, returns the full current active-grant list; never duplicates on a second call); `async def revoke_grant(async_dal, dal, valkey_client, *, app_id: str, grant_id: int, actor_id: int) -> None` (destroys the Valkey group, sets `revoked_at`, writes an `audit_log` entry — 404 if the grant doesn't exist or is already revoked); `async def revoke_all_grants_for_scope(async_dal, dal, valkey_client, *, app_id: str, tenant_id: int, community_id: int | None) -> None` (deactivation teardown); `async def list_grants(async_dal, dal, *, app_id: str, tenant_id: int, community_id: int | None) -> list[Any]` (active only).
+- Produces: `def render_stream_key(tenant_slug: str, community_slug: str | None, platform: str, source_id: str) -> str` (`waddles:t:{tenant}:c:{community|_tenant}:src:{platform}:{source_id}:events`, spec §5.1); `async def resolve_grants_for_scope(install_dal, valkey_client, *, tenant_id: int, tenant_slug: str, community_id: int | None, community_slug: str | None, app_id: str, consumes: tuple[ConsumeRule, ...], granted_by: int | None) -> list[Any]` (idempotent — expands every rule against enabled `ingest_sources`, inserts missing grants, `ensure_group`s each, returns the full current active-grant list; never duplicates on a second call); `async def revoke_grant(install_dal, valkey_client, *, app_id: str, grant_id: int, actor_id: int) -> None` (destroys the Valkey group, sets `revoked_at`, writes a best-effort `audit_log` entry — 404 if the grant doesn't exist or is already revoked); `async def revoke_all_grants_for_scope(install_dal, valkey_client, *, app_id: str, tenant_id: int, community_id: int | None) -> None` (deactivation teardown); `async def list_grants(install_dal, *, app_id: str, tenant_id: int, community_id: int | None) -> list[Any]` (active only). `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `ingest_sources`/`app_stream_grants` are this plan's own new tables (R52); the `audit_log` write in `revoke_grant` is a separate, best-effort write through the same `install_dal` (Decision #18 — matching this codebase's existing "never block the main flow on a logging failure" convention).
 - Consumes: `services.bundle_manifest_v2.ConsumeRule` (Task 7); `services.valkey_admin_client.{ensure_group, destroy_group}` (Task 28).
 
 - [ ] **Step 1: Write the failing test**
@@ -7550,6 +7786,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from services.bundle_install_dal import raw_sql_rows
 from services.bundle_manifest_v2 import ConsumeRule
 from services.errors import ApiError
 from services.stream_grant_service import (
@@ -7571,22 +7808,19 @@ def test_render_stream_key_community_scoped() -> None:
     assert key == "waddles:t:acme:c:main:src:twitch:tw-channelA:events"
 
 
-async def _seed_source(dal: Any, *, platform: str, source_id: str, label: str) -> None:
-    dal.ingest_sources.insert(
+async def _seed_source(install_dal: Any, *, platform: str, source_id: str, label: str) -> None:
+    await install_dal.ingest_sources.async_insert(
         tenant_id=1, community_id=None, platform=platform, source_id=source_id, label=label, enabled=True,
     )
-    dal.commit()
 
 
-async def test_resolve_exact_source_id_rule(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await _seed_source(dal, platform="twitch", source_id="tw-channelA", label="Twitch #channelA")
-    await _seed_source(dal, platform="twitch", source_id="tw-channelB", label="Twitch #channelB")
+async def test_resolve_exact_source_id_rule(install_dal: Any) -> None:
+    await _seed_source(install_dal, platform="twitch", source_id="tw-channelA", label="Twitch #channelA")
+    await _seed_source(install_dal, platform="twitch", source_id="tw-channelB", label="Twitch #channelB")
     mock_valkey = AsyncMock()
 
     grants = await resolve_grants_for_scope(
-        async_dal, dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
+        install_dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
         app_id="waddles.socials.music.default",
         consumes=(ConsumeRule(platform="twitch", source_id="tw-channelA", event_types=("chat.message",), filters={}),),
         granted_by=1,
@@ -7596,16 +7830,14 @@ async def test_resolve_exact_source_id_rule(bundle_install_db: Any) -> None:
     mock_valkey.xgroup_create.assert_called_once()
 
 
-async def test_resolve_platform_wide_rule_grants_every_matching_source(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await _seed_source(dal, platform="twitch", source_id="tw-channelA", label="Twitch #channelA")
-    await _seed_source(dal, platform="twitch", source_id="tw-channelB", label="Twitch #channelB")
-    await _seed_source(dal, platform="discord", source_id="dg-guildX", label="Discord guild X")
+async def test_resolve_platform_wide_rule_grants_every_matching_source(install_dal: Any) -> None:
+    await _seed_source(install_dal, platform="twitch", source_id="tw-channelA", label="Twitch #channelA")
+    await _seed_source(install_dal, platform="twitch", source_id="tw-channelB", label="Twitch #channelB")
+    await _seed_source(install_dal, platform="discord", source_id="dg-guildX", label="Discord guild X")
     mock_valkey = AsyncMock()
 
     grants = await resolve_grants_for_scope(
-        async_dal, dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
+        install_dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
         app_id="waddles.socials.music.default",
         consumes=(ConsumeRule(platform="twitch", source_id=None, event_types=("chat.message",), filters={}),),
         granted_by=1,
@@ -7613,69 +7845,63 @@ async def test_resolve_platform_wide_rule_grants_every_matching_source(bundle_in
     assert {g.source_id for g in grants} == {"tw-channelA", "tw-channelB"}
 
 
-async def test_resolution_is_idempotent(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await _seed_source(dal, platform="twitch", source_id="tw-channelA", label="Twitch #channelA")
+async def test_resolution_is_idempotent(install_dal: Any) -> None:
+    await _seed_source(install_dal, platform="twitch", source_id="tw-channelA", label="Twitch #channelA")
     mock_valkey = AsyncMock()
     consumes = (ConsumeRule(platform="twitch", source_id="tw-channelA", event_types=("chat.message",), filters={}),)
 
     await resolve_grants_for_scope(
-        async_dal, dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
+        install_dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
         app_id="waddles.socials.music.default", consumes=consumes, granted_by=1,
     )
     grants = await resolve_grants_for_scope(
-        async_dal, dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
+        install_dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
         app_id="waddles.socials.music.default", consumes=consumes, granted_by=1,
     )
     assert len(grants) == 1  # not duplicated on a second call
 
 
-async def test_revoke_grant_destroys_group_and_audits(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await _seed_source(dal, platform="twitch", source_id="tw-channelA", label="Twitch #channelA")
+async def test_revoke_grant_destroys_group_and_audits(install_dal: Any) -> None:
+    await _seed_source(install_dal, platform="twitch", source_id="tw-channelA", label="Twitch #channelA")
     mock_valkey = AsyncMock()
     grants = await resolve_grants_for_scope(
-        async_dal, dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
+        install_dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
         app_id="waddles.socials.music.default",
         consumes=(ConsumeRule(platform="twitch", source_id="tw-channelA", event_types=("chat.message",), filters={}),),
         granted_by=1,
     )
-    await revoke_grant(async_dal, dal, mock_valkey, app_id="waddles.socials.music.default", grant_id=grants[0].id, actor_id=1)
+    await revoke_grant(install_dal, mock_valkey, app_id="waddles.socials.music.default", grant_id=grants[0].id, actor_id=1)
 
     mock_valkey.xgroup_destroy.assert_called_once()
-    remaining = await list_grants(async_dal, dal, app_id="waddles.socials.music.default", tenant_id=1, community_id=None)
+    remaining = await list_grants(install_dal, app_id="waddles.socials.music.default", tenant_id=1, community_id=None)
     assert remaining == []
-    audit_row = dal(dal.audit_log.action == "app_stream_grant_revoked").select().first()
-    assert audit_row is not None
+    audit_rows = await raw_sql_rows(
+        install_dal, "SELECT id FROM audit_log WHERE action = :a", {"a": "app_stream_grant_revoked"}
+    )
+    assert audit_rows.first() is not None
 
 
-async def test_revoke_already_revoked_grant_raises_404(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await _seed_source(dal, platform="twitch", source_id="tw-channelA", label="Twitch #channelA")
+async def test_revoke_already_revoked_grant_raises_404(install_dal: Any) -> None:
+    await _seed_source(install_dal, platform="twitch", source_id="tw-channelA", label="Twitch #channelA")
     mock_valkey = AsyncMock()
     grants = await resolve_grants_for_scope(
-        async_dal, dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
+        install_dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
         app_id="waddles.socials.music.default",
         consumes=(ConsumeRule(platform="twitch", source_id="tw-channelA", event_types=("chat.message",), filters={}),),
         granted_by=1,
     )
-    await revoke_grant(async_dal, dal, mock_valkey, app_id="waddles.socials.music.default", grant_id=grants[0].id, actor_id=1)
+    await revoke_grant(install_dal, mock_valkey, app_id="waddles.socials.music.default", grant_id=grants[0].id, actor_id=1)
     with pytest.raises(ApiError) as exc:
-        await revoke_grant(async_dal, dal, mock_valkey, app_id="waddles.socials.music.default", grant_id=grants[0].id, actor_id=1)
+        await revoke_grant(install_dal, mock_valkey, app_id="waddles.socials.music.default", grant_id=grants[0].id, actor_id=1)
     assert exc.value.status_code == 404
 
 
-async def test_revoke_all_grants_for_scope_tears_down_everything(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    await _seed_source(dal, platform="twitch", source_id="tw-channelA", label="x")
-    await _seed_source(dal, platform="discord", source_id="dg-guildX", label="y")
+async def test_revoke_all_grants_for_scope_tears_down_everything(install_dal: Any) -> None:
+    await _seed_source(install_dal, platform="twitch", source_id="tw-channelA", label="x")
+    await _seed_source(install_dal, platform="discord", source_id="dg-guildX", label="y")
     mock_valkey = AsyncMock()
     await resolve_grants_for_scope(
-        async_dal, dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
+        install_dal, mock_valkey, tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
         app_id="waddles.socials.music.default",
         consumes=(
             ConsumeRule(platform="twitch", source_id=None, event_types=("chat.message",), filters={}),
@@ -7684,9 +7910,9 @@ async def test_revoke_all_grants_for_scope_tears_down_everything(bundle_install_
         granted_by=1,
     )
     await revoke_all_grants_for_scope(
-        async_dal, dal, mock_valkey, app_id="waddles.socials.music.default", tenant_id=1, community_id=None
+        install_dal, mock_valkey, app_id="waddles.socials.music.default", tenant_id=1, community_id=None
     )
-    remaining = await list_grants(async_dal, dal, app_id="waddles.socials.music.default", tenant_id=1, community_id=None)
+    remaining = await list_grants(install_dal, app_id="waddles.socials.music.default", tenant_id=1, community_id=None)
     assert remaining == []
     assert mock_valkey.xgroup_destroy.call_count == 2
 ```
@@ -7700,12 +7926,23 @@ Expected: `ModuleNotFoundError: No module named 'services.stream_grant_service'`
 
 ```python
 # hub_api/services/stream_grant_service.py
-"""Resolve `consumes` rules into `app_stream_grants` + Valkey consumer-group lifecycle (spec Sec5.2)."""
+"""Resolve `consumes` rules into `app_stream_grants` + Valkey consumer-group lifecycle (spec Sec5.2).
+
+R52: `ingest_sources`/`app_stream_grants` are this plan's own new
+tables, queried through the penguin-dal `install_dal: AsyncDB` (Task
+4). `revoke_grant`'s `audit_log` write is a separate, best-effort write
+through the same `install_dal` (Decision #18) -- wrapped in
+`try`/`except`, matching this codebase's existing convention for every
+audit-log call site, so a logging failure never blocks the revocation
+that already succeeded.
+"""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
+
+from penguin_dal import AsyncDB
 
 from services.bundle_manifest_v2 import ConsumeRule
 from services.errors import ApiError, not_found
@@ -7727,8 +7964,7 @@ def _rule_matches_source(rule: ConsumeRule, source: Any) -> bool:
 
 
 async def resolve_grants_for_scope(
-    async_dal: Any,
-    dal: Any,
+    install_dal: AsyncDB,
     valkey_client: Any,
     *,
     tenant_id: int,
@@ -7740,22 +7976,18 @@ async def resolve_grants_for_scope(
     granted_by: int | None,
 ) -> list[Any]:
     """Expand `consumes` against enabled `ingest_sources`, insert missing grants, ensure each group. Idempotent."""
-    sources = await async_dal.select_async(
-        dal(
-            (dal.ingest_sources.tenant_id == tenant_id)
-            & (dal.ingest_sources.enabled == True)  # noqa: E712 -- pydal query operator
-        )
-    )
+    sources = await install_dal(
+        (install_dal.ingest_sources.tenant_id == tenant_id)
+        & (install_dal.ingest_sources.enabled == True)  # noqa: E712 -- penguin-dal query operator
+    ).select()
     matched_sources = [s for s in sources if any(_rule_matches_source(rule, s) for rule in consumes)]
 
-    existing_rows = await async_dal.select_async(
-        dal(
-            (dal.app_stream_grants.app_id == app_id)
-            & (dal.app_stream_grants.tenant_id == tenant_id)
-            & (dal.app_stream_grants.community_id == community_id)
-            & (dal.app_stream_grants.revoked_at == None)  # noqa: E711 -- pydal query operator
-        )
-    )
+    existing_rows = await install_dal(
+        (install_dal.app_stream_grants.app_id == app_id)
+        & (install_dal.app_stream_grants.tenant_id == tenant_id)
+        & (install_dal.app_stream_grants.community_id == community_id)
+        & (install_dal.app_stream_grants.revoked_at == None)  # noqa: E711 -- penguin-dal query operator
+    ).select()
     existing_stream_keys = {row.stream_key for row in existing_rows}
 
     now = datetime.now(UTC)
@@ -7763,73 +7995,67 @@ async def resolve_grants_for_scope(
         stream_key = render_stream_key(tenant_slug, community_slug, source.platform, source.source_id)
         await ensure_group(valkey_client, stream=stream_key, group=app_id)
         if stream_key not in existing_stream_keys:
-            await async_dal.insert_async(
-                dal.app_stream_grants,
+            await install_dal.app_stream_grants.async_insert(
                 tenant_id=tenant_id, community_id=community_id, app_id=app_id, stream_key=stream_key,
                 platform=source.platform, source_id=source.source_id, label=source.label,
                 granted_by=granted_by, granted_at=now,
             )
-    async_dal.dal.commit()
 
-    return await list_grants(async_dal, dal, app_id=app_id, tenant_id=tenant_id, community_id=community_id)
+    return await list_grants(install_dal, app_id=app_id, tenant_id=tenant_id, community_id=community_id)
 
 
-async def revoke_grant(async_dal: Any, dal: Any, valkey_client: Any, *, app_id: str, grant_id: int, actor_id: int) -> None:
-    """Destroy the Valkey group, mark the grant revoked, audit-log the action. 404 if already revoked/absent."""
-    rows = await async_dal.select_async(
-        dal(
-            (dal.app_stream_grants.id == grant_id)
-            & (dal.app_stream_grants.app_id == app_id)
-            & (dal.app_stream_grants.revoked_at == None)  # noqa: E711
-        )
-    )
-    if not rows:
+async def revoke_grant(
+    install_dal: AsyncDB, valkey_client: Any, *, app_id: str, grant_id: int, actor_id: int
+) -> None:
+    """Destroy the Valkey group, mark the grant revoked, best-effort audit-log the action. 404 if already revoked/absent."""
+    rows = await install_dal(
+        (install_dal.app_stream_grants.id == grant_id)
+        & (install_dal.app_stream_grants.app_id == app_id)
+        & (install_dal.app_stream_grants.revoked_at == None)  # noqa: E711
+    ).select()
+    grant = rows.first()
+    if grant is None:
         raise not_found(f"grant {grant_id} not found or already revoked")
-    grant = rows[0]
 
     await destroy_group(valkey_client, stream=grant.stream_key, group=app_id)
     now = datetime.now(UTC)
-    await async_dal.update_async(dal.app_stream_grants.id == grant_id, revoked_at=now)
+    await install_dal(install_dal.app_stream_grants.id == grant_id).update(revoked_at=now)
     try:
-        await async_dal.insert_async(
-            dal.audit_log, user_id=actor_id, action="app_stream_grant_revoked",
+        await install_dal.audit_log.async_insert(
+            user_id=actor_id, action="app_stream_grant_revoked",
             target_type="app_stream_grant", target_id=str(grant_id),
             details={"app_id": app_id, "stream_key": grant.stream_key}, created_at=now,
         )
     except Exception:  # noqa: BLE001, S110 -- audit logging failure must not break the main flow
         pass
-    async_dal.dal.commit()
 
 
 async def revoke_all_grants_for_scope(
-    async_dal: Any, dal: Any, valkey_client: Any, *, app_id: str, tenant_id: int, community_id: int | None
+    install_dal: AsyncDB, valkey_client: Any, *, app_id: str, tenant_id: int, community_id: int | None
 ) -> None:
     """Deactivation teardown -- destroys every active group and marks every grant revoked for this scope."""
-    rows = await async_dal.select_async(
-        dal(
-            (dal.app_stream_grants.app_id == app_id)
-            & (dal.app_stream_grants.tenant_id == tenant_id)
-            & (dal.app_stream_grants.community_id == community_id)
-            & (dal.app_stream_grants.revoked_at == None)  # noqa: E711
-        )
-    )
+    rows = await install_dal(
+        (install_dal.app_stream_grants.app_id == app_id)
+        & (install_dal.app_stream_grants.tenant_id == tenant_id)
+        & (install_dal.app_stream_grants.community_id == community_id)
+        & (install_dal.app_stream_grants.revoked_at == None)  # noqa: E711
+    ).select()
     now = datetime.now(UTC)
     for row in rows:
         await destroy_group(valkey_client, stream=row.stream_key, group=app_id)
-        await async_dal.update_async(dal.app_stream_grants.id == row.id, revoked_at=now)
-    async_dal.dal.commit()
+        await install_dal(install_dal.app_stream_grants.id == row.id).update(revoked_at=now)
 
 
-async def list_grants(async_dal: Any, dal: Any, *, app_id: str, tenant_id: int, community_id: int | None) -> list[Any]:
+async def list_grants(
+    install_dal: AsyncDB, *, app_id: str, tenant_id: int, community_id: int | None
+) -> list[Any]:
     """Every currently-active grant for `(app_id, tenant_id, community_id)`."""
-    rows = await async_dal.select_async(
-        dal(
-            (dal.app_stream_grants.app_id == app_id)
-            & (dal.app_stream_grants.tenant_id == tenant_id)
-            & (dal.app_stream_grants.community_id == community_id)
-            & (dal.app_stream_grants.revoked_at == None)  # noqa: E711
-        )
-    )
+    rows = await install_dal(
+        (install_dal.app_stream_grants.app_id == app_id)
+        & (install_dal.app_stream_grants.tenant_id == tenant_id)
+        & (install_dal.app_stream_grants.community_id == community_id)
+        & (install_dal.app_stream_grants.revoked_at == None)  # noqa: E711
+    ).select()
     return list(rows)
 ```
 
@@ -7843,23 +8069,26 @@ Expected: `8 passed`
 ```bash
 git add hub_api/services/stream_grant_service.py hub_api/tests/test_stream_grant_service.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): stream_grant_service -- consumes resolution into app_stream_grants (spec Sec5.2)
+feat(hub-api): stream_grant_service -- consumes resolution into app_stream_grants (spec Sec5.2, R52)
 
 Idempotent expand-against-configured-sources, ensure_group per grant,
-revoke_grant destroys the group + marks revoked_at + audit-logs,
-revoke_all_grants_for_scope is the deactivation teardown.
+revoke_grant destroys the group + marks revoked_at + best-effort
+audit-logs, revoke_all_grants_for_scope is the deactivation teardown.
+Queries the new ingest_sources/app_stream_grants tables through
+penguin-dal's install_dal.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 30: Wire approval-gating + grant resolution into `activate_bundle()`/`deactivate_bundle()`
+## Task 30: Wire approval-gating + grant resolution into `activate_bundle()`/`deactivate_bundle()` (R52: penguin-dal)
 
-**Depends on:** Task 16 (`get_active_version`), Task 19 (`app_install_approvals` rows the gate requires), Task 29 (`resolve_grants_for_scope`, `revoke_all_grants_for_scope`).
+**Depends on:** Task 16 (`get_active_version`, `install_dal`-only per R52), Task 19 (`app_install_approvals` rows the gate requires, `install_dal`-only per R52), Task 29 (`resolve_grants_for_scope`, `revoke_all_grants_for_scope`, `install_dal`-only per R52).
+
+**R52 note:** `marketplace_lifecycle_service.py` is a **pre-existing** hub-api module — `activate_bundle`/`deactivate_bundle`'s existing bodies (`app_activations` queries via `async_dal`/`dal`, `check_activation_insert_allowed`, `ensure_registered`, `detect_conflict`, `_guarded_upsert_activation_sync`/`_guarded_set_deactivated_sync`) are **not rewritten** — `app_activations` is an existing table, untouched. Only the new M2b gating/grant-resolution block this task adds is new code, and it queries exclusively new tables (`app_active_versions`, `app_install_approvals`, `app_version_uploads`, `ingest_sources`, `app_stream_grants`) — so that block, and only that block, takes a new `install_dal: AsyncDB | None = None` parameter alongside `valkey_client`. Both new tables the wiring needs are new-plan tables and both go through `install_dal`, never through the pre-existing `async_dal`/`dal` pair. This is this plan's clearest example of one function holding both DAL handles side by side.
 
 **Files:**
 - Modify: `hub_api/services/stream_grant_service.py` (add `consumes_from_version`)
@@ -7867,7 +8096,7 @@ EOF
 - Test: `hub_api/tests/test_marketplace_lifecycle_grants.py`
 
 **Interfaces:**
-- Produces: `stream_grant_service.consumes_from_version(async_dal, dal, *, app_id: str, version: str) -> tuple[ConsumeRule, ...]`; `marketplace_lifecycle_service.activate_bundle(..., valkey_client: Any | None = None, tenant_slug: str | None = None, community_slug: str | None = None)` — **new keyword-only params, all defaulting to `None`, so every existing call site and every existing test in `test_v1_marketplace_lifecycle_blueprint.py`/`test_marketplace_lifecycle_concurrency.py` keeps passing unmodified.** When `valkey_client` is `None` (the pre-M2b default), activation behaves exactly as it does today. When given, activation additionally: (a) looks up `app_active_versions` for this `(app_id, tenant_id, community_id)` — if no row exists, the bundle never went through the version/consent flow (a legacy `is_default` builtin) and gating is skipped entirely; (b) if a row exists, requires a current `app_install_approvals` row for that exact version at this scope, else `403 bundle_not_approved`; (c) resolves `consumes` into `app_stream_grants` via `stream_grant_service.resolve_grants_for_scope`. `deactivate_bundle(..., valkey_client: Any | None = None)` similarly calls `revoke_all_grants_for_scope` only when `valkey_client` is given.
+- Produces: `stream_grant_service.consumes_from_version(install_dal, *, app_id: str, version: str) -> tuple[ConsumeRule, ...]` (`install_dal`-only per R52 — reads the new `app_version_uploads` table); `marketplace_lifecycle_service.activate_bundle(..., valkey_client: Any | None = None, install_dal: AsyncDB | None = None, tenant_slug: str | None = None, community_slug: str | None = None)` — **new keyword-only params, all defaulting to `None`, so every existing call site and every existing test in `test_v1_marketplace_lifecycle_blueprint.py`/`test_marketplace_lifecycle_concurrency.py` keeps passing unmodified.** When `valkey_client`/`install_dal` are `None` (the pre-M2b default), activation behaves exactly as it does today. When both are given, activation additionally: (a) looks up `app_active_versions` (via `install_dal`) for this `(app_id, tenant_id, community_id)` — if no row exists, the bundle never went through the version/consent flow (a legacy `is_default` builtin) and gating is skipped entirely; (b) if a row exists, requires a current `app_install_approvals` row (via `install_dal`) for that exact version at this scope, else `403 bundle_not_approved`; (c) resolves `consumes` into `app_stream_grants` via `stream_grant_service.resolve_grants_for_scope` (`install_dal`). `deactivate_bundle(..., valkey_client: Any | None = None, install_dal: AsyncDB | None = None)` similarly calls `revoke_all_grants_for_scope` only when both are given.
 - Consumes: `services.stream_grant_service.{resolve_grants_for_scope, revoke_all_grants_for_scope}` (Task 29); `services.bundle_activation_service.get_active_version` (Task 16).
 
 - [ ] **Step 1: Write the failing test**
@@ -7878,6 +8107,7 @@ EOF
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -7896,23 +8126,23 @@ _MANIFEST = {
 }
 
 
-async def _seed_approved_version(dal: Any, async_dal: Any) -> None:
-    version_id = dal.app_versions.insert(
+async def _seed_approved_version(install_dal: Any) -> None:
+    now = datetime.now(UTC)
+    version_id = await install_dal.app_versions.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", artifact_digest="sha256:" + "a" * 64,
         language="python", artifact_kind="source", scan_status="scanned",
     )
-    dal.app_version_uploads.insert(
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
         artifact_kind="source", language="python", status="PUBLISHED",
-        manifest_json=_MANIFEST, app_version_id=version_id,
+        manifest_json=_MANIFEST, app_version_id=version_id, created_at=now, updated_at=now,
     )
-    dal.commit()
     await activate_version(
-        async_dal, dal, tenant_id=1, community_id=1, app_id="waddles.socials.music.default",
+        install_dal, tenant_id=1, community_id=1, app_id="waddles.socials.music.default",
         version="3.0.1", activated_by=1,
     )
     await approve_version(
-        async_dal, dal, app_id="waddles.socials.music.default", version="3.0.1",
+        install_dal, app_id="waddles.socials.music.default", version="3.0.1",
         tenant_id=1, community_id=1, approved_by=1,
     )
 
@@ -7928,79 +8158,88 @@ async def test_activate_bundle_without_valkey_client_behaves_exactly_as_before(b
     assert row is not None
 
 
-async def test_activate_bundle_with_no_active_version_skips_gating(bundle_install_db: Any) -> None:
-    """A legacy bundle with no app_active_versions row activates unimpeded even with valkey_client given."""
+async def test_activate_bundle_with_no_active_version_skips_gating(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
+    """A legacy bundle with no app_active_versions row activates unimpeded even with valkey_client/install_dal given."""
     async_dal = bundle_install_db
     dal = async_dal.dal
     mock_valkey = AsyncMock()
     row = await activate_bundle(
         async_dal, dal, community_id=1, tenant_id=1, app_id="waddles.socials.music.default",
-        config=None, activated_by=1, valkey_client=mock_valkey, tenant_slug="acme-corp", community_slug="acme-community",
+        config=None, activated_by=1, valkey_client=mock_valkey, install_dal=install_dal,
+        tenant_slug="acme-corp", community_slug="acme-community",
     )
     assert row is not None
     mock_valkey.xgroup_create.assert_not_called()
 
 
-async def test_activate_bundle_refuses_when_active_version_is_unapproved(bundle_install_db: Any) -> None:
+async def test_activate_bundle_refuses_when_active_version_is_unapproved(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     async_dal = bundle_install_db
     dal = async_dal.dal
-    version_id = dal.app_versions.insert(
+    now = datetime.now(UTC)
+    version_id = await install_dal.app_versions.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", artifact_digest="sha256:" + "a" * 64,
         language="python", artifact_kind="source", scan_status="scanned",
     )
-    dal.app_version_uploads.insert(
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
         artifact_kind="source", language="python", status="PUBLISHED",
-        manifest_json=_MANIFEST, app_version_id=version_id,
+        manifest_json=_MANIFEST, app_version_id=version_id, created_at=now, updated_at=now,
     )
-    dal.commit()
     await activate_version(
-        async_dal, dal, tenant_id=1, community_id=1, app_id="waddles.socials.music.default",
+        install_dal, tenant_id=1, community_id=1, app_id="waddles.socials.music.default",
         version="3.0.1", activated_by=1,
     )
     mock_valkey = AsyncMock()
     with pytest.raises(ApiError) as exc:
         await activate_bundle(
             async_dal, dal, community_id=1, tenant_id=1, app_id="waddles.socials.music.default",
-            config=None, activated_by=1, valkey_client=mock_valkey, tenant_slug="acme-corp", community_slug="acme-community",
+            config=None, activated_by=1, valkey_client=mock_valkey, install_dal=install_dal,
+            tenant_slug="acme-corp", community_slug="acme-community",
         )
     assert exc.value.status_code == 403
     assert exc.value.code == "bundle_not_approved"
 
 
-async def test_activate_bundle_resolves_grants_when_approved(bundle_install_db: Any) -> None:
+async def test_activate_bundle_resolves_grants_when_approved(bundle_install_db: Any, install_dal: Any) -> None:
     async_dal = bundle_install_db
     dal = async_dal.dal
-    await _seed_approved_version(dal, async_dal)
-    dal.ingest_sources.insert(
+    await _seed_approved_version(install_dal)
+    await install_dal.ingest_sources.async_insert(
         tenant_id=1, community_id=None, platform="twitch", source_id="tw-channelA",
         label="Twitch #channelA", enabled=True,
     )
-    dal.commit()
     mock_valkey = AsyncMock()
     await activate_bundle(
         async_dal, dal, community_id=1, tenant_id=1, app_id="waddles.socials.music.default",
-        config=None, activated_by=1, valkey_client=mock_valkey, tenant_slug="acme-corp", community_slug="acme-community",
+        config=None, activated_by=1, valkey_client=mock_valkey, install_dal=install_dal,
+        tenant_slug="acme-corp", community_slug="acme-community",
     )
     mock_valkey.xgroup_create.assert_called_once()
 
 
-async def test_deactivate_bundle_revokes_grants_when_valkey_client_given(bundle_install_db: Any) -> None:
+async def test_deactivate_bundle_revokes_grants_when_valkey_client_given(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     async_dal = bundle_install_db
     dal = async_dal.dal
-    await _seed_approved_version(dal, async_dal)
-    dal.ingest_sources.insert(
+    await _seed_approved_version(install_dal)
+    await install_dal.ingest_sources.async_insert(
         tenant_id=1, community_id=None, platform="twitch", source_id="tw-channelA",
         label="Twitch #channelA", enabled=True,
     )
-    dal.commit()
     mock_valkey = AsyncMock()
     await activate_bundle(
         async_dal, dal, community_id=1, tenant_id=1, app_id="waddles.socials.music.default",
-        config=None, activated_by=1, valkey_client=mock_valkey, tenant_slug="acme-corp", community_slug="acme-community",
+        config=None, activated_by=1, valkey_client=mock_valkey, install_dal=install_dal,
+        tenant_slug="acme-corp", community_slug="acme-community",
     )
     await deactivate_bundle(
-        async_dal, dal, community_id=1, app_id="waddles.socials.music.default", valkey_client=mock_valkey
+        async_dal, dal, community_id=1, app_id="waddles.socials.music.default",
+        valkey_client=mock_valkey, install_dal=install_dal,
     )
     mock_valkey.xgroup_destroy.assert_called_once()
 ```
@@ -8015,14 +8254,16 @@ Expected: `TypeError: activate_bundle() got an unexpected keyword argument 'valk
 Append to `hub_api/services/stream_grant_service.py`:
 
 ```python
-async def consumes_from_version(async_dal: Any, dal: Any, *, app_id: str, version: str) -> tuple[ConsumeRule, ...]:
+async def consumes_from_version(install_dal: AsyncDB, *, app_id: str, version: str) -> tuple[ConsumeRule, ...]:
     """Read the process stage's `consumes` rules out of the stored, already-validated `manifest_json`."""
-    rows = await async_dal.select_async(
-        dal((dal.app_version_uploads.app_id == app_id) & (dal.app_version_uploads.version == version))
-    )
-    if not rows or not rows[0].manifest_json:
+    rows = await install_dal(
+        (install_dal.app_version_uploads.app_id == app_id)
+        & (install_dal.app_version_uploads.version == version)
+    ).select()
+    upload = rows.first()
+    if upload is None or not upload.manifest_json:
         return ()
-    process_stage = (rows[0].manifest_json.get("stages") or {}).get("process") or {}
+    process_stage = (upload.manifest_json.get("stages") or {}).get("process") or {}
     return tuple(
         ConsumeRule(
             platform=rule["platform"], source_id=rule.get("source_id"),
@@ -8034,14 +8275,19 @@ async def consumes_from_version(async_dal: Any, dal: Any, *, app_id: str, versio
 
 - [ ] **Step 4: Extend `activate_bundle`/`deactivate_bundle` in `marketplace_lifecycle_service.py`**
 
-Add the import:
+Add the imports (`AsyncDB` is type-only, for the new parameter's annotation):
 
 ```python
+from typing import TYPE_CHECKING
+
 from services.bundle_activation_service import get_active_version
 from services.stream_grant_service import consumes_from_version, resolve_grants_for_scope, revoke_all_grants_for_scope
+
+if TYPE_CHECKING:
+    from penguin_dal import AsyncDB
 ```
 
-Replace `activate_bundle`'s signature and add the gating call right after the existing conflict check, before the `return await loop.run_in_executor(...)` line:
+Replace `activate_bundle`'s signature and add the gating call right after the existing conflict check, before the `return await loop.run_in_executor(...)` line. Everything above the new M2b block (`check_activation_insert_allowed`, `ensure_registered`, the `app_activations` conflict query, `detect_conflict`) is **existing pydal code via `async_dal`/`dal`, unchanged** — only the new block uses `install_dal`:
 
 ```python
 async def activate_bundle(
@@ -8055,6 +8301,7 @@ async def activate_bundle(
     activated_by: int,
     registry: AppRegistry | None = None,
     valkey_client: Any | None = None,
+    install_dal: "AsyncDB | None" = None,
     tenant_slug: str | None = None,
     community_slug: str | None = None,
 ) -> Any:
@@ -8065,18 +8312,22 @@ async def activate_bundle(
     (`flask_core.app_binding.detect_conflict`, design doc Sec7.3) against
     every OTHER currently-enabled activation for this community -- 409
     naming the conflicting `app_id` if `candidate` cannot coexist with an
-    already-active App.
+    already-active App. All of the above is existing, pre-M2b logic
+    against the existing `app_activations` table (`async_dal`/`dal`,
+    unchanged by R52).
 
-    M2b addition (spec Sec9.7.3, Sec5.2): when `valkey_client` is given
-    AND this `app_id` has an `app_active_versions` row for this scope
-    (i.e. it went through the version/consent flow), activation ALSO
-    requires a current `app_install_approvals` row for that exact
-    version -- 403 `bundle_not_approved` otherwise -- and resolves
-    `consumes` into `app_stream_grants`. A bundle with no
-    `app_active_versions` row (a legacy `is_default` builtin registered
-    through the v1 install path) skips this entirely; `valkey_client=None`
-    (the default) preserves the pre-M2b behavior exactly, for every
-    existing caller and test.
+    M2b addition (spec Sec9.7.3, Sec5.2, R52): when `valkey_client` AND
+    `install_dal` are both given AND this `app_id` has an
+    `app_active_versions` row for this scope (i.e. it went through the
+    version/consent flow), activation ALSO requires a current
+    `app_install_approvals` row for that exact version -- 403
+    `bundle_not_approved` otherwise -- and resolves `consumes` into
+    `app_stream_grants`. All three of those tables are this plan's own
+    new tables, queried exclusively through `install_dal`. A bundle
+    with no `app_active_versions` row (a legacy `is_default` builtin
+    registered through the v1 install path) skips this entirely;
+    `valkey_client=None`/`install_dal=None` (the defaults) preserve the
+    pre-M2b behavior exactly, for every existing caller and test.
     """
     try:
         await check_activation_insert_allowed(dal, tenant_id, app_id)
@@ -8100,28 +8351,26 @@ async def activate_bundle(
     if conflicting is not None:
         raise conflict(f"Bundle {app_id!r} conflicts with already-active bundle {conflicting!r}")
 
-    if valkey_client is not None:
+    if valkey_client is not None and install_dal is not None:
         active_version = await get_active_version(
-            async_dal, dal, tenant_id=tenant_id, community_id=community_id, app_id=app_id
+            install_dal, tenant_id=tenant_id, community_id=community_id, app_id=app_id
         )
         if active_version is not None:
-            approval_rows = await async_dal.select_async(
-                dal(
-                    (dal.app_install_approvals.app_id == app_id)
-                    & (dal.app_install_approvals.version == active_version.version)
-                    & (dal.app_install_approvals.tenant_id == tenant_id)
-                    & (dal.app_install_approvals.community_id == community_id)
-                    & (dal.app_install_approvals.superseded_by == None)  # noqa: E711
-                )
-            )
+            approval_rows = await install_dal(
+                (install_dal.app_install_approvals.app_id == app_id)
+                & (install_dal.app_install_approvals.version == active_version.version)
+                & (install_dal.app_install_approvals.tenant_id == tenant_id)
+                & (install_dal.app_install_approvals.community_id == community_id)
+                & (install_dal.app_install_approvals.superseded_by == None)  # noqa: E711
+            ).select()
             if not approval_rows:
                 raise ApiError(
                     f"{app_id} version {active_version.version} is not approved for this community",
                     403, "bundle_not_approved",
                 )
-            consumes = await consumes_from_version(async_dal, dal, app_id=app_id, version=active_version.version)
+            consumes = await consumes_from_version(install_dal, app_id=app_id, version=active_version.version)
             await resolve_grants_for_scope(
-                async_dal, dal, valkey_client, tenant_id=tenant_id, tenant_slug=tenant_slug or "",
+                install_dal, valkey_client, tenant_id=tenant_id, tenant_slug=tenant_slug or "",
                 community_id=community_id, community_slug=community_slug, app_id=app_id,
                 consumes=consumes, granted_by=activated_by,
             )
@@ -8148,15 +8397,23 @@ Extend `deactivate_bundle`:
 
 ```python
 async def deactivate_bundle(
-    async_dal: Any, dal: Any, *, community_id: int, app_id: str, valkey_client: Any | None = None
+    async_dal: Any,
+    dal: Any,
+    *,
+    community_id: int,
+    app_id: str,
+    valkey_client: Any | None = None,
+    install_dal: "AsyncDB | None" = None,
 ) -> None:
     """Soft-disable: set `app_activations.enabled = False`. Raises 404 if no such row.
 
-    M2b addition: when `valkey_client` is given, also tears down every
-    active `app_stream_grants` row for this `(app_id, community_id)`'s
-    tenant scope via `revoke_all_grants_for_scope` (spec Sec9.5:
-    "Deactivation destroys those groups and marks the rows revoked").
-    `valkey_client=None` preserves the pre-M2b behavior exactly.
+    M2b addition (R52): when `valkey_client` AND `install_dal` are both
+    given, also tears down every active `app_stream_grants` row for
+    this `(app_id, community_id)`'s tenant scope via
+    `revoke_all_grants_for_scope` (spec Sec9.5: "Deactivation destroys
+    those groups and marks the rows revoked") -- `app_stream_grants` is
+    a new table, queried through `install_dal`. Neither given (the
+    defaults) preserves the pre-M2b behavior exactly.
     """
     existing_query = (dal.app_activations.community_id == community_id) & (
         dal.app_activations.app_id == app_id
@@ -8165,10 +8422,10 @@ async def deactivate_bundle(
     if existing == 0:
         raise not_found(f"Bundle {app_id!r} is not activated for this community")
 
-    if valkey_client is not None:
+    if valkey_client is not None and install_dal is not None:
         activation_row = (await async_dal.select_async(dal(existing_query)))[0]
         await revoke_all_grants_for_scope(
-            async_dal, dal, valkey_client, app_id=app_id,
+            install_dal, valkey_client, app_id=app_id,
             tenant_id=activation_row.tenant_id, community_id=community_id,
         )
 
@@ -8187,7 +8444,7 @@ Expected: `5 passed`
 - [ ] **Step 6: Run the FULL existing marketplace-lifecycle suite to confirm zero regression**
 
 Run: `cd hub_api && python3 -m pytest tests/test_v1_marketplace_lifecycle_blueprint.py tests/test_marketplace_lifecycle_concurrency.py -v`
-Expected: every test that passed before this task still passes — these tests never pass `valkey_client`, so they exercise the exact pre-M2b code path.
+Expected: every test that passed before this task still passes — these tests never pass `valkey_client`/`install_dal`, so they exercise the exact pre-M2b code path.
 
 - [ ] **Step 7: Commit**
 
@@ -8195,26 +8452,30 @@ Expected: every test that passed before this task still passes — these tests n
 git add hub_api/services/stream_grant_service.py hub_api/services/marketplace_lifecycle_service.py \
         hub_api/tests/test_marketplace_lifecycle_grants.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): approval-gating + grant resolution wired into activate_bundle()/deactivate_bundle()
+feat(hub-api): approval-gating + grant resolution wired into activate_bundle()/deactivate_bundle() (R52)
 
-New keyword-only params (valkey_client, tenant_slug, community_slug),
-all defaulting to None -- every existing call site and test keeps the
-exact pre-M2b behavior unmodified. A bundle with no app_active_versions
-row (legacy is_default builtin) skips gating entirely; one with an
-active version requires a current app_install_approvals row for that
-exact version, else 403 bundle_not_approved (spec Sec9.7.3).
+New keyword-only params (valkey_client, install_dal, tenant_slug,
+community_slug), all defaulting to None -- every existing call site
+and test keeps the exact pre-M2b behavior unmodified. A bundle with no
+app_active_versions row (legacy is_default builtin) skips gating
+entirely; one with an active version requires a current
+app_install_approvals row for that exact version, else 403
+bundle_not_approved (spec Sec9.7.3). The new gating/grant-resolution
+block queries app_active_versions/app_install_approvals/
+app_version_uploads/ingest_sources/app_stream_grants through
+penguin-dal's install_dal; the pre-existing app_activations logic is
+untouched, still on the pydal async_dal/dal pair.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 31: `blueprints/v1/bundle_grants.py` — `GET grants`, `POST resolve`, `DELETE grant`
+## Task 31: `blueprints/v1/bundle_grants.py` — `GET grants`, `POST resolve`, `DELETE grant` (R52: penguin-dal)
 
-**Depends on:** Task 16 (`get_active_version`), Task 28 (`build_client`), Tasks 29-30 (`list_grants`, `resolve_grants_for_scope`, `revoke_grant`, `consumes_from_version`).
+**Depends on:** Task 16 (`get_active_version`, `install_dal`-only per R52), Task 28 (`build_client`), Tasks 29-30 (`list_grants`, `resolve_grants_for_scope`, `revoke_grant`, `consumes_from_version`, all `install_dal`-only per R52).
 
 **Files:**
 - Create: `hub_api/blueprints/v1/bundle_grants.py`
@@ -8222,7 +8483,7 @@ EOF
 
 **Interfaces:**
 - Produces: `GET /api/v1/apps/{app_id}/grants?communityId=` (scope `tenant:admin`) → the labeled grant list; `POST /api/v1/apps/{app_id}/grants/resolve` (scope `tenant:admin`, body `{"communityId": int|null}`) → re-runs resolution idempotently; `DELETE /api/v1/apps/{app_id}/grants/{grantId}` (scope `tenant:admin`) → revokes one grant. All three derive `tenant_id`/`tenant_slug` from the caller's own JWT (`get_tenant_context`), never a path/body param (security.md tenant isolation) — matching the spec's literal path shape (no `tenant_slug` segment) while still enforcing tenant-from-JWT-only.
-- Consumes: `services.stream_grant_service.{list_grants, resolve_grants_for_scope, revoke_grant, consumes_from_version}` (Tasks 29-30); `services.bundle_activation_service.get_active_version` (Task 16); `services.valkey_admin_client.build_client` (Task 28).
+- Consumes: `services.stream_grant_service.{list_grants, resolve_grants_for_scope, revoke_grant, consumes_from_version}` (Tasks 29-30); `services.bundle_activation_service.get_active_version` (Task 16); `services.valkey_admin_client.build_client` (Task 28); `current_app.config["install_dal"]` (Task 4).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -8232,6 +8493,7 @@ EOF
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -8250,25 +8512,23 @@ _MANIFEST = {
 
 
 @pytest.fixture
-def app(bundle_install_db: Any) -> Quart:
-    dal = bundle_install_db.dal
-    dal.ingest_sources.insert(
+async def app(install_dal: Any) -> Quart:
+    now = datetime.now(UTC)
+    await install_dal.ingest_sources.async_insert(
         tenant_id=1, community_id=None, platform="twitch", source_id="tw-channelA",
         label="Twitch #channelA", enabled=True,
     )
-    version_id = dal.app_versions.insert(
+    version_id = await install_dal.app_versions.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", artifact_digest="sha256:" + "a" * 64,
         language="python", artifact_kind="source", scan_status="scanned",
     )
-    dal.app_version_uploads.insert(
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
         artifact_kind="source", language="python", status="PUBLISHED",
-        manifest_json=_MANIFEST, app_version_id=version_id,
+        manifest_json=_MANIFEST, app_version_id=version_id, created_at=now, updated_at=now,
     )
-    dal.commit()
     app = Quart(__name__)
-    app.config["async_dal"] = bundle_install_db
-    app.config["dal"] = dal
+    app.config["install_dal"] = install_dal
     for bp in BLUEPRINTS:
         app.register_blueprint(bp)
     return app
@@ -8285,12 +8545,11 @@ async def test_resolve_requires_tenant_admin(app: Quart) -> None:
 
 
 async def test_resolve_and_list_round_trip(app: Quart) -> None:
-    async_dal = app.config["async_dal"]
-    dal = app.config["dal"]
+    install_dal = app.config["install_dal"]
     from services.bundle_activation_service import activate_version
 
     await activate_version(
-        async_dal, dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default",
+        install_dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default",
         version="3.0.1", activated_by=1,
     )
     token = make_token(scope="tenant:admin", tenant=TENANT_SLUG)
@@ -8313,12 +8572,11 @@ async def test_resolve_and_list_round_trip(app: Quart) -> None:
 
 
 async def test_delete_grant_revokes_it(app: Quart) -> None:
-    async_dal = app.config["async_dal"]
-    dal = app.config["dal"]
+    install_dal = app.config["install_dal"]
     from services.bundle_activation_service import activate_version
 
     await activate_version(
-        async_dal, dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default",
+        install_dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default",
         version="3.0.1", activated_by=1,
     )
     token = make_token(scope="tenant:admin", tenant=TENANT_SLUG)
@@ -8350,7 +8608,12 @@ Expected: `ModuleNotFoundError: No module named 'blueprints.v1.bundle_grants'`
 
 ```python
 # hub_api/blueprints/v1/bundle_grants.py
-"""v1 `bundle_grants` group -- GET/POST resolve/DELETE grant (spec Sec9.6). Tenant strictly from the JWT."""
+"""v1 `bundle_grants` group -- GET/POST resolve/DELETE grant (spec Sec9.6). Tenant strictly from the JWT.
+
+R52: every handler reads `current_app.config["install_dal"]` --
+`app_versions`/`app_version_uploads`/`ingest_sources`/`app_stream_grants`
+are this plan's own new tables.
+"""
 
 from __future__ import annotations
 
@@ -8360,6 +8623,7 @@ from typing import Any, cast
 from flask_core.api_utils import error_response
 from flask_core.authz import require_scope
 from flask_core.tenancy import get_tenant_context, tenant_middleware
+from penguin_dal import AsyncDB
 from quart import Blueprint, current_app, request
 from quart_schema import validate_request, validate_response
 
@@ -8377,8 +8641,8 @@ from services.valkey_admin_client import build_client
 bundle_grants_bp = Blueprint("v1_bundle_grants", __name__, url_prefix="/api/v1/apps")
 
 
-def _dal() -> tuple[Any, Any]:
-    return current_app.config["async_dal"], current_app.config["dal"]
+def _install_dal() -> AsyncDB:
+    return cast(AsyncDB, current_app.config["install_dal"])
 
 
 def _err(exc: ApiError) -> tuple[dict[str, object], int]:
@@ -8434,14 +8698,14 @@ class MessageResponse:
 @validate_response(GrantListResponse)
 async def get_grants(app_id: str) -> GrantListResponse | tuple[dict[str, object], int]:
     """The bundle's current, active stream grants for the caller's tenant/community."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     ctx = get_tenant_context(request)
     assert ctx is not None  # nosec B101
     try:
         community_id = _parse_community_id(request.args.get("communityId"))
     except ApiError as exc:
         return _err(exc)
-    rows = await list_grants(async_dal, dal, app_id=app_id, tenant_id=ctx.tenant_id, community_id=community_id)
+    rows = await list_grants(install_dal, app_id=app_id, tenant_id=ctx.tenant_id, community_id=community_id)
     return GrantListResponse(
         success=True,
         grants=[
@@ -8457,20 +8721,20 @@ async def get_grants(app_id: str) -> GrantListResponse | tuple[dict[str, object]
 @validate_request(ResolveRequest)
 async def post_resolve(data: ResolveRequest, app_id: str) -> tuple[dict[str, object], int]:
     """Re-run grant resolution for this scope. Idempotent, callable any time (e.g. after a new ingest source)."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     ctx = get_tenant_context(request)
     assert ctx is not None  # nosec B101
     caller_id = get_current_user_id(request)
 
     active_version = await get_active_version(
-        async_dal, dal, tenant_id=ctx.tenant_id, community_id=data.communityId, app_id=app_id
+        install_dal, tenant_id=ctx.tenant_id, community_id=data.communityId, app_id=app_id
     )
     if active_version is None:
         return _err(bad_request(f"{app_id} has no active version for this scope"))
-    consumes = await consumes_from_version(async_dal, dal, app_id=app_id, version=active_version.version)
+    consumes = await consumes_from_version(install_dal, app_id=app_id, version=active_version.version)
 
     grants = await resolve_grants_for_scope(
-        async_dal, dal, build_client(), tenant_id=ctx.tenant_id, tenant_slug=ctx.tenant_slug,
+        install_dal, build_client(), tenant_id=ctx.tenant_id, tenant_slug=ctx.tenant_slug,
         community_id=data.communityId, community_slug=None, app_id=app_id, consumes=consumes, granted_by=caller_id,
     )
     return {"success": True, "grantCount": len(grants)}, 200
@@ -8482,10 +8746,10 @@ async def post_resolve(data: ResolveRequest, app_id: str) -> tuple[dict[str, obj
 @validate_response(MessageResponse)
 async def delete_grant(app_id: str, grant_id: int) -> MessageResponse | tuple[dict[str, object], int]:
     """Revoke one grant without uninstalling or deactivating the bundle."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     caller_id = get_current_user_id(request)
     try:
-        await revoke_grant(async_dal, dal, build_client(), app_id=app_id, grant_id=grant_id, actor_id=caller_id)
+        await revoke_grant(install_dal, build_client(), app_id=app_id, grant_id=grant_id, actor_id=caller_id)
     except ApiError as exc:
         return _err(exc)
     return MessageResponse(success=True, message=f"grant {grant_id} revoked")
@@ -8513,32 +8777,34 @@ Append to `hub_api/pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]`:
 git add hub_api/blueprints/v1/bundle_grants.py hub_api/tests/test_bundle_grants_blueprint.py \
         hub_api/pyproject.toml
 git commit -m "$(cat <<'EOF'
-feat(hub-api): GET grants, POST resolve, DELETE grant (spec Sec9.6)
+feat(hub-api): GET grants, POST resolve, DELETE grant (spec Sec9.6, R52)
 
 Tenant strictly from the JWT, never a path segment, matching the
-spec's literal /api/v1/apps/{app_id}/grants path shape.
+spec's literal /api/v1/apps/{app_id}/grants path shape. Reads
+install_dal (penguin-dal) from app config.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 32: `distribution_service.py` extension — the new distribution-API fields (spec §6.7)
+## Task 32: `distribution_service.py` extension — the new distribution-API fields (spec §6.7) (R52: penguin-dal)
 
-**Depends on:** Task 16 (`get_active_version`), Task 29 (`list_grants`), Task 10 (`app_version_uploads.manifest_json`, the source of the `manifest` subset).
+**Depends on:** Task 16 (`get_active_version`, `install_dal`-only per R52), Task 29 (`list_grants`, `install_dal`-only per R52), Task 10 (`app_version_uploads.manifest_json`, the source of the `manifest` subset, `install_dal`-only per R52).
+
+**R52 note:** `distribution_service.py` is a **pre-existing** hub-api module. `list_bundles_for_stage`'s existing body (`app_activations`/`app_tenant_availability`/`app_catalog` queries via `async_dal`/`dal`) is **not rewritten** — those are existing tables, untouched. The new enrichment this task adds (`app_active_versions`/`app_versions`/`app_version_uploads`/`app_stream_grants`) queries exclusively new tables, so it takes a new, **optional** `install_dal: AsyncDB | None = None` keyword parameter, defaulting to `None` — when absent, enrichment is skipped (every new field stays `None`/`{}`/`[]`, exactly as if this task had never landed). This is deliberate, not a shortcut: Decision #12 requires the pre-existing v1 distribution blueprint's `GET /api/v1/distribution/bundles` route to stay **byte-identical**, including its own call site into this function, which is not touched until M6 — an `install_dal` parameter with no default would break that call site outright (`TypeError`, missing argument) the moment this task lands. Task 33's new v2 route is the only caller that passes a real `install_dal`.
 
 **Files:**
 - Modify: `hub_api/services/distribution_service.py`
 - Test: `hub_api/tests/test_distribution_service_versions.py`
 
 **Interfaces:**
-- Produces: `BundleDistributionRow` gains `artifact_version: str | None`, `artifact_digest: str | None`, `artifact_kind: str | None`, `language: str | None`, `scan_status: str | None`, `manifest: dict[str, Any]` (all default to `None`/`{}`, so every existing construction/test keeps working), `grants: list[GrantInfo]` (`stage="process"` rows only); new dataclass `GrantInfo(grant_id: int, stream: str, platform: str, source_id: str, label: str)`.
+- Produces: `BundleDistributionRow` gains `artifact_version: str | None`, `artifact_digest: str | None`, `artifact_kind: str | None`, `language: str | None`, `scan_status: str | None`, `manifest: dict[str, Any]` (all default to `None`/`{}`, so every existing construction/test keeps working), `grants: list[GrantInfo]` (`stage="process"` rows only); new dataclass `GrantInfo(grant_id: int, stream: str, platform: str, source_id: str, label: str)`. `list_bundles_for_stage(async_dal, dal, *, tenant_id, community_id, stage, install_dal: AsyncDB | None = None)` — the new keyword-only `install_dal` parameter (Task 4's penguin-dal `AsyncDB`) drives the new-table enrichment; omitted or `None`, the function's observable behavior is byte-identical to before this task.
 - Consumes: `services.bundle_activation_service.get_active_version` (Task 16); `services.stream_grant_service.list_grants` (Task 29).
 
-A row whose `artifact_digest` is `None` (no `app_active_versions` row for this scope yet — spec §6.7: "A row whose `artifactDigest` is `null`... is skipped by the stage") is still returned by this service; the **blueprint** (Task 33) is where the null-digest fields collapse into the wire shape the Rust stages expect.
+A row whose `artifact_digest` is `None` (no `app_active_versions` row for this scope yet, or `install_dal` not given — spec §6.7: "A row whose `artifactDigest` is `null`... is skipped by the stage") is still returned by this service; the **blueprint** (Task 33) is where the null-digest fields collapse into the wire shape the Rust stages expect.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -8548,6 +8814,7 @@ A row whose `artifact_digest` is `None` (no `app_active_versions` row for this s
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -8566,42 +8833,44 @@ _MANIFEST = {
 }
 
 
-async def _seed_active(dal: Any, async_dal: Any) -> None:
-    version_id = dal.app_versions.insert(
+async def _seed_active(dal: Any, install_dal: Any) -> None:
+    now = datetime.now(UTC)
+    version_id = await install_dal.app_versions.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", artifact_digest="sha256:" + "a" * 64,
         language="python", artifact_kind="source", scan_status="scanned",
     )
-    dal.app_version_uploads.insert(
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
         artifact_kind="source", language="python", status="PUBLISHED",
-        manifest_json=_MANIFEST, app_version_id=version_id,
+        manifest_json=_MANIFEST, app_version_id=version_id, created_at=now, updated_at=now,
     )
     dal.app_tenant_availability.insert(tenant_id=1, app_id="waddles.socials.music.default", available=True)
     dal.commit()
     await activate_version(
-        async_dal, dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default",
+        install_dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default",
         version="3.0.1", activated_by=1,
     )
 
 
-async def test_process_row_includes_digest_and_grants_when_active(bundle_install_db: Any) -> None:
+async def test_process_row_includes_digest_and_grants_when_active(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     async_dal = bundle_install_db
     dal = async_dal.dal
-    await _seed_active(dal, async_dal)
-    dal.ingest_sources.insert(
+    await _seed_active(dal, install_dal)
+    await install_dal.ingest_sources.async_insert(
         tenant_id=1, community_id=None, platform="twitch", source_id="tw-channelA",
         label="Twitch #channelA", enabled=True,
     )
-    dal.commit()
     await resolve_grants_for_scope(
-        async_dal, dal, AsyncMock(), tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
+        install_dal, AsyncMock(), tenant_id=1, tenant_slug="acme", community_id=None, community_slug=None,
         app_id="waddles.socials.music.default",
         consumes=(ConsumeRule(platform="twitch", source_id=None, event_types=("chat.message",), filters={}),),
         granted_by=1,
     )
 
     rows = await list_bundles_for_stage(
-        async_dal, dal, tenant_id=1, community_id=None, stage="process"
+        async_dal, dal, tenant_id=1, community_id=None, stage="process", install_dal=install_dal
     )
     row = next(r for r in rows if r.app_id == "waddles.socials.music.default")
     assert row.artifact_digest == "sha256:" + "a" * 64
@@ -8616,22 +8885,24 @@ async def test_process_row_includes_digest_and_grants_when_active(bundle_install
     assert row.manifest["data"] == {"tables": []}
 
 
-async def test_action_stage_row_has_no_grants_field_populated(bundle_install_db: Any) -> None:
+async def test_action_stage_row_has_no_grants_field_populated(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     async_dal = bundle_install_db
     dal = async_dal.dal
     action_manifest = {**_MANIFEST, "stages": {"action": {"entry": "x:y"}}}
-    version_id = dal.app_versions.insert(
+    now = datetime.now(UTC)
+    version_id = await install_dal.app_versions.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", artifact_digest="sha256:" + "b" * 64,
         language="python", artifact_kind="source", scan_status="scanned",
     )
-    dal.app_version_uploads.insert(
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
         artifact_kind="source", language="python", status="PUBLISHED",
-        manifest_json=action_manifest, app_version_id=version_id,
+        manifest_json=action_manifest, app_version_id=version_id, created_at=now, updated_at=now,
     )
-    dal.commit()
     await activate_version(
-        async_dal, dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default",
+        install_dal, tenant_id=1, community_id=None, app_id="waddles.socials.music.default",
         version="3.0.1", activated_by=1,
     )
     dal(dal.app_catalog.app_id == "waddles.socials.music.default").update(
@@ -8640,13 +8911,32 @@ async def test_action_stage_row_has_no_grants_field_populated(bundle_install_db:
     dal.app_tenant_availability.insert(tenant_id=1, app_id="waddles.socials.music.default", available=True)
     dal.commit()
 
-    rows = await list_bundles_for_stage(async_dal, dal, tenant_id=1, community_id=None, stage="action")
+    rows = await list_bundles_for_stage(
+        async_dal, dal, tenant_id=1, community_id=None, stage="action", install_dal=install_dal
+    )
     row = next(r for r in rows if r.app_id == "waddles.socials.music.default")
     assert row.grants == []
     assert row.artifact_digest == "sha256:" + "b" * 64
 
 
-async def test_no_active_version_leaves_digest_fields_none(bundle_install_db: Any) -> None:
+async def test_no_active_version_leaves_digest_fields_none(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
+    async_dal = bundle_install_db
+    dal = async_dal.dal
+    dal.app_tenant_availability.insert(tenant_id=1, app_id="waddles.socials.music.default", available=True)
+    dal.commit()
+
+    rows = await list_bundles_for_stage(
+        async_dal, dal, tenant_id=1, community_id=None, stage="process", install_dal=install_dal
+    )
+    row = next((r for r in rows if r.app_id == "waddles.socials.music.default"), None)
+    if row is not None:  # the seed app_catalog row has no "process" stage data, may legitimately be absent
+        assert row.artifact_digest is None
+
+
+async def test_omitting_install_dal_skips_enrichment_entirely(bundle_install_db: Any) -> None:
+    """Decision #12/R52: the pre-existing v1 blueprint call site passes no install_dal at all."""
     async_dal = bundle_install_db
     dal = async_dal.dal
     dal.app_tenant_availability.insert(tenant_id=1, app_id="waddles.socials.music.default", available=True)
@@ -8654,8 +8944,10 @@ async def test_no_active_version_leaves_digest_fields_none(bundle_install_db: An
 
     rows = await list_bundles_for_stage(async_dal, dal, tenant_id=1, community_id=None, stage="process")
     row = next((r for r in rows if r.app_id == "waddles.socials.music.default"), None)
-    if row is not None:  # the seed app_catalog row has no "process" stage data, may legitimately be absent
+    if row is not None:
         assert row.artifact_digest is None
+        assert row.grants == []
+        assert row.manifest == {}
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -8665,7 +8957,7 @@ Expected: `AttributeError: 'BundleDistributionRow' object has no attribute 'arti
 
 - [ ] **Step 3: Write the implementation**
 
-Replace `hub_api/services/distribution_service.py`'s `BundleDistributionRow` dataclass and `list_bundles_for_stage` function with the versions below (every other function/constant in the file is unchanged):
+Replace `hub_api/services/distribution_service.py`'s `BundleDistributionRow` dataclass and `list_bundles_for_stage` function with the versions below (every other function/constant in the file is unchanged). Add `from penguin_dal import AsyncDB` to this module's `TYPE_CHECKING`-guarded imports (type-only, matching this file's existing lightweight-import style) if not already present:
 
 ```python
 @dataclass(slots=True, frozen=True)
@@ -8689,11 +8981,11 @@ class BundleDistributionRow:
     `app_activations.config`) -- override wins, same precedence
     `DBInstallationLookup`'s docstring establishes for narrower-scope-wins.
 
-    M2b additions (spec Sec6.7): `artifact_version`/`artifact_digest`/
+    M2b additions (spec Sec6.7, R52): `artifact_version`/`artifact_digest`/
     `artifact_kind`/`language`/`scan_status` are populated from the
-    scope's `app_active_versions` -> `app_versions` join, all `None`
-    when no active version exists for this scope yet -- the stage skips
-    such a row (`waddles_bundle_skipped_total{reason="no_artifact"}`).
+    scope's `app_active_versions` -> `app_versions` join (queried
+    through the new `install_dal` parameter -- `None` when the caller
+    doesn't pass one, i.e. the pre-existing v1 blueprint call site).
     `grants` is populated only for `stage="process"` rows. `manifest`
     is the capability-bearing subset of the bundle's `bundle.yaml` v2
     the stage must enforce (`egress`, `data.tables`, `limits`, and --
@@ -8719,19 +9011,22 @@ class BundleDistributionRow:
 DEFAULT_LIMITS: dict[str, int] = {"timeout_ms": 2000, "memory_mb": 64, "egress_rps": 10}
 
 
-async def _manifest_subset(async_dal: Any, dal: Any, *, app_id: str, version: str, stage: str) -> dict[str, Any]:
+async def _manifest_subset(install_dal: "AsyncDB", *, app_id: str, version: str, stage: str) -> dict[str, Any]:
     """The capability-bearing `bundle.yaml` slice the stage enforces (spec Sec6.7's `manifest`).
 
     Exactly four keys -- `egress`, `data`, `limits` and (process rows
     only) `consumes` -- read out of the `app_version_uploads.manifest_json`
-    stored at upload time. Manifest defaults are applied here, not left
-    to the stage, so a bundle that omitted `limits` still advertises the
-    numbers the executor will actually enforce.
+    stored at upload time (R52: through `install_dal`). Manifest
+    defaults are applied here, not left to the stage, so a bundle that
+    omitted `limits` still advertises the numbers the executor will
+    actually enforce.
     """
-    rows = await async_dal.select_async(
-        dal((dal.app_version_uploads.app_id == app_id) & (dal.app_version_uploads.version == version))
-    )
-    raw: dict[str, Any] = dict(rows[0].manifest_json or {}) if rows else {}
+    rows = await install_dal(
+        (install_dal.app_version_uploads.app_id == app_id)
+        & (install_dal.app_version_uploads.version == version)
+    ).select()
+    upload = rows.first()
+    raw: dict[str, Any] = dict(upload.manifest_json or {}) if upload is not None else {}
     limits = {**DEFAULT_LIMITS, **(raw.get("limits") or {})}
     subset: dict[str, Any] = {
         "egress": list(raw.get("egress") or []),
@@ -8745,28 +9040,39 @@ async def _manifest_subset(async_dal: Any, dal: Any, *, app_id: str, version: st
 
 
 async def _enrich_with_active_version(
-    async_dal: Any, dal: Any, *, tenant_id: int, community_id: int | None, app_id: str, stage: str
+    install_dal: "AsyncDB | None",
+    *,
+    tenant_id: int,
+    community_id: int | None,
+    app_id: str,
+    stage: str,
 ) -> tuple[str | None, str | None, str | None, str | None, str | None, dict[str, Any], list[GrantInfo]]:
-    """`(version, digest, kind, language, scan_status, manifest, grants)` for one bundle."""
+    """`(version, digest, kind, language, scan_status, manifest, grants)` for one bundle.
+
+    R52: `install_dal=None` (the pre-existing v1 call site) skips this
+    entirely and returns the all-empty tuple -- Decision #12's
+    byte-identical-v1 guarantee.
+    """
+    if install_dal is None:
+        return None, None, None, None, None, {}, []
+
     from services.bundle_activation_service import get_active_version
     from services.stream_grant_service import list_grants
 
     active_version = await get_active_version(
-        async_dal, dal, tenant_id=tenant_id, community_id=community_id, app_id=app_id
+        install_dal, tenant_id=tenant_id, community_id=community_id, app_id=app_id
     )
     if active_version is None:
         return None, None, None, None, None, {}, []
 
     grants: list[GrantInfo] = []
     if stage == "process":
-        grant_rows = await list_grants(async_dal, dal, app_id=app_id, tenant_id=tenant_id, community_id=community_id)
+        grant_rows = await list_grants(install_dal, app_id=app_id, tenant_id=tenant_id, community_id=community_id)
         grants = [
             GrantInfo(grant_id=g.id, stream=g.stream_key, platform=g.platform, source_id=g.source_id, label=g.label)
             for g in grant_rows
         ]
-    manifest = await _manifest_subset(
-        async_dal, dal, app_id=app_id, version=active_version.version, stage=stage
-    )
+    manifest = await _manifest_subset(install_dal, app_id=app_id, version=active_version.version, stage=stage)
     return (
         active_version.version, active_version.artifact_digest, active_version.artifact_kind,
         active_version.language, active_version.scan_status, manifest, grants,
@@ -8780,6 +9086,7 @@ async def list_bundles_for_stage(
     tenant_id: int,
     community_id: int | None,
     stage: str,
+    install_dal: "AsyncDB | None" = None,
 ) -> Sequence[BundleDistributionRow]:
     """Every enabled, activated bundle implementing `stage` at (`tenant_id`, `community_id`).
 
@@ -8787,7 +9094,17 @@ async def list_bundles_for_stage(
     come first, then tenant-wide `app_tenant_availability` rows -- same
     ordering as `DBInstallationLookup.find()`, deduped by `app_id` (first
     occurrence wins) so a bundle available at both scopes is returned once,
-    with the narrower (community) config winning.
+    with the narrower (community) config winning. `app_activations`/
+    `app_tenant_availability`/`app_catalog` are all pre-existing tables,
+    queried through the pre-existing pydal `async_dal`/`dal` pair,
+    unchanged by R52.
+
+    `install_dal` (R52, Task 4's penguin-dal `AsyncDB`) is optional and
+    keyword-only: when given, each row is additionally enriched with its
+    active-version digest, manifest subset and (process-stage only)
+    grants (spec Sec6.7); when omitted (the pre-existing v1 blueprint's
+    call site, Decision #12), those fields stay `None`/`{}`/`[]` and
+    this function's behavior is byte-identical to before this task.
 
     Raises `InvalidStageError` for any `stage` outside `BUNDLE_STAGES` --
     caught by the blueprint and turned into a 400, never a silently-empty
@@ -8824,7 +9141,7 @@ async def list_bundles_for_stage(
             merged_config = {**stage_data.get("config", {}), **(row.app_activations.config or {})}
             (artifact_version, artifact_digest, artifact_kind, language, scan_status, manifest, grants) = (
                 await _enrich_with_active_version(
-                    async_dal, dal, tenant_id=tenant_id, community_id=community_id, app_id=app_id, stage=stage
+                    install_dal, tenant_id=tenant_id, community_id=community_id, app_id=app_id, stage=stage
                 )
             )
             rows.append(
@@ -8866,7 +9183,7 @@ async def list_bundles_for_stage(
         }
         (artifact_version, artifact_digest, artifact_kind, language, scan_status, manifest, grants) = (
             await _enrich_with_active_version(
-                async_dal, dal, tenant_id=tenant_id, community_id=None, app_id=app_id, stage=stage
+                install_dal, tenant_id=tenant_id, community_id=None, app_id=app_id, stage=stage
             )
         )
         rows.append(
@@ -8888,38 +9205,42 @@ async def list_bundles_for_stage(
 - [ ] **Step 4: Run to verify all pass**
 
 Run: `cd hub_api && python3 -m pytest tests/test_distribution_service_versions.py -v`
-Expected: `3 passed`
+Expected: `4 passed`
 
 - [ ] **Step 5: Run the existing distribution-service tests to confirm zero regression**
 
 Run: `cd hub_api && python3 -m pytest tests/test_distribution_service.py tests/test_v1_distribution_blueprint.py -v`
-Expected: every previously-passing test still passes — the new fields all default to `None`/`{}`/`[]`, and every existing test constructs/asserts against the pre-existing fields only.
+Expected: every previously-passing test still passes — these call sites pass no `install_dal` at all, so the new fields all stay `None`/`{}`/`[]` and every existing test constructs/asserts against the pre-existing fields only.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add hub_api/services/distribution_service.py hub_api/tests/test_distribution_service_versions.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): distribution_service -- artifactVersion/Digest/Kind/language/scanStatus/manifest/grants (spec Sec6.7)
+feat(hub-api): distribution_service -- artifactVersion/Digest/Kind/language/scanStatus/manifest/grants (spec Sec6.7, R52)
 
-Joins app_active_versions -> app_versions for the scope, reads the
-capability-bearing manifest slice (egress/data.tables/limits/consumes)
-out of app_version_uploads.manifest_json, and app_stream_grants for
-stage=process rows. A row with no active version
-yet returns all-None digest fields -- the blueprint (Task 33) is where
-that collapses into the wire null the Rust stages skip on.
+Joins app_active_versions -> app_versions for the scope (through the
+new, optional install_dal parameter), reads the capability-bearing
+manifest slice (egress/data.tables/limits/consumes) out of
+app_version_uploads.manifest_json, and app_stream_grants for
+stage=process rows -- all three new tables via penguin-dal. install_dal
+defaults to None so the pre-existing v1 blueprint's call site (Decision
+#12, untouched until M6) stays byte-identical. A row with no active
+version yet returns all-None digest fields -- the blueprint (Task 33)
+is where that collapses into the wire null the Rust stages skip on.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 33: `blueprints/v1/distribution.py` — distribution API v2 bundles route + ETag
+## Task 33: `blueprints/v1/distribution.py` — distribution API v2 bundles route + ETag (R52: penguin-dal)
 
-**Depends on:** Task 32 (`distribution_service` returns the §6.7 fields), Task 29 (`stream_grant_service.list_grants`), Task 16 (`bundle_activation_service.get_active_version`), Task 4 (`bind_bundle_install_tables`), Task 18 (`permission_summary_service.canonical_json`).
+**Depends on:** Task 32 (`distribution_service` returns the §6.7 fields via the new, optional `install_dal` parameter), Task 29 (`stream_grant_service.list_grants`), Task 16 (`bundle_activation_service.get_active_version`), Task 4 (`install_dal` wired into `app.config`), Task 18 (`permission_summary_service.canonical_json`).
+
+**R52 note:** the pre-existing `_ensure_tables`/`bind_app_bundle_tables` machinery in this file is for **pre-existing** pydal tables (`app_catalog`, `app_activations`, `app_tenant_availability`) and is **untouched** by this task — there is no `bind_bundle_install_tables` to call anymore (Task 4 removed that pydal binder entirely; `app_active_versions`/`app_versions`/`app_version_uploads`/`app_stream_grants` are reachable through `install_dal`, which was already fully reflected once at hub-api startup, Task 4 — no per-request/per-connection binding is needed for it, unlike pydal's per-`DAL`-instance `define_table()` model). This task's only change to `_ensure_tables` is: none.
 
 **Files:**
 - Modify: `hub_api/blueprints/v1/distribution.py`
@@ -8930,10 +9251,10 @@ EOF
 | Method | Path | Auth | Query params | Success |
 |---|---|---|---|---|
 | `GET` | `/api/v1/distribution/v2/bundles` | `tenant_middleware` + `require_scope("distribution:read")` | `stage` (required, one of `ingest`/`process`/`action`), `communityId` (optional int) | `200` + `ETag`, or `304` when `If-None-Match` matches |
-| `GET` | `/api/v1/distribution/bundles` | unchanged | unchanged | **unchanged — this task does not touch the v1 route** |
+| `GET` | `/api/v1/distribution/bundles` | unchanged | unchanged | **unchanged — this task does not touch the v1 route, and its call site passes no `install_dal`, matching Task 32's Decision #12 default** |
 
 - Produces: `DistributionGrantDTO(grantId: int, stream: str, platform: str, sourceId: str, label: str)`; `DistributionBundleV2DTO(appId, communityId, entrypoint, spec, config, artifactVersion, artifactDigest, artifactKind, language, scanStatus, manifest, grants)`; `DistributionBundlesV2Response(success, stage, bundles, meta)`; `def bundles_etag(stage: str, bundles: list[DistributionBundleV2DTO]) -> str`.
-- Consumes: `services.distribution_service.{list_bundles_for_stage, BUNDLE_STAGES, InvalidStageError}` (Task 32); `services.permission_summary_service.canonical_json` (Task 18); `services.schema.bind_bundle_install_tables` (Task 4).
+- Consumes: `services.distribution_service.{list_bundles_for_stage, BUNDLE_STAGES, InvalidStageError}` (Task 32); `services.permission_summary_service.canonical_json` (Task 18); `current_app.config["install_dal"]` (Task 4) — the v2 route is the first caller to pass a real `install_dal` into `list_bundles_for_stage`.
 
 Two facts this task depends on and must not re-derive:
 
@@ -8948,6 +9269,7 @@ Two facts this task depends on and must not re-derive:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -8979,44 +9301,45 @@ _MANIFEST = {
 
 
 @pytest.fixture
-def app(bundle_install_db: Any) -> Quart:
+async def app(bundle_install_db: Any, install_dal: Any) -> Quart:
     dal = bundle_install_db.dal
     dal(dal.app_catalog.app_id == "waddles.socials.music.default").update(
         stages={"process": {"entrypoint": "bundles.social_music_process:transform",
                             "config": {"command_prefix": "!"}, "spec": {"required_config": []}}}
     )
     dal.app_tenant_availability.insert(tenant_id=1, app_id="waddles.socials.music.default", available=True)
-    dal.ingest_sources.insert(
+    dal.commit()
+    now = datetime.now(UTC)
+    await install_dal.ingest_sources.async_insert(
         tenant_id=1, community_id=None, platform="twitch", source_id="tw-channelA",
         label="Twitch #channelA", enabled=True,
     )
-    version_id = dal.app_versions.insert(
+    version_id = await install_dal.app_versions.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", artifact_digest="sha256:" + "a" * 64,
         language="python", artifact_kind="source", scan_status="scanned",
     )
-    dal.app_version_uploads.insert(
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
         artifact_kind="source", language="python", status="PUBLISHED",
-        manifest_json=_MANIFEST, app_version_id=version_id,
+        manifest_json=_MANIFEST, app_version_id=version_id, created_at=now, updated_at=now,
     )
-    dal.commit()
     quart_app = Quart(__name__)
     quart_app.config["async_dal"] = bundle_install_db
     quart_app.config["dal"] = dal
+    quart_app.config["install_dal"] = install_dal
     for bp in BLUEPRINTS:
         quart_app.register_blueprint(bp)
     return quart_app
 
 
 async def _activate_and_grant(app: Quart) -> None:
-    async_dal = app.config["async_dal"]
-    dal = app.config["dal"]
+    install_dal = app.config["install_dal"]
     await activate_version(
-        async_dal, dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         app_id="waddles.socials.music.default", version="3.0.1", activated_by=1,
     )
     await resolve_grants_for_scope(
-        async_dal, dal, AsyncMock(), tenant_id=1, tenant_slug=TENANT_SLUG, community_id=None,
+        install_dal, AsyncMock(), tenant_id=1, tenant_slug=TENANT_SLUG, community_id=None,
         community_slug=None, app_id="waddles.socials.music.default",
         consumes=(ConsumeRule(platform="twitch", source_id=None, event_types=("chat.message",), filters={}),),
         granted_by=1,
@@ -9104,18 +9427,15 @@ async def test_v2_etag_is_stable_across_calls_despite_the_meta_timestamp(app: Qu
 
 async def test_v2_etag_changes_when_a_grant_is_revoked(app: Quart) -> None:
     await _activate_and_grant(app)
-    dal = app.config["dal"]
+    install_dal = app.config["install_dal"]
     token = make_token(scope="distribution:read", tenant=TENANT_SLUG)
     client = app.test_client()
     before = await client.get(
         "/api/v1/distribution/v2/bundles?stage=process", headers={"Authorization": f"Bearer {token}"}
     )
-    from datetime import UTC, datetime
-
-    dal(dal.app_stream_grants.app_id == "waddles.socials.music.default").update(
+    await install_dal(install_dal.app_stream_grants.app_id == "waddles.socials.music.default").update(
         revoked_at=datetime.now(UTC)
     )
-    dal.commit()
     after = await client.get(
         "/api/v1/distribution/v2/bundles?stage=process", headers={"Authorization": f"Bearer {token}"}
     )
@@ -9187,7 +9507,7 @@ Expected: every test fails with `404 != 200` / `404 != 403` — the `/v2/bundles
 
 - [ ] **Step 3: Write the implementation**
 
-Make exactly four edits to `hub_api/blueprints/v1/distribution.py`. Nothing else in the file changes.
+Make exactly four edits to `hub_api/blueprints/v1/distribution.py`. `_ensure_tables` (the pre-existing `bind_app_bundle_tables` binder for `app_catalog`/`app_activations`/`app_tenant_availability`) is **not** among them — it stays exactly as it is today; R52's new tables need no per-request binding (`install_dal.reflect()` ran once at hub-api startup, Task 4).
 
 **3a.** Replace the existing import block's `from dataclasses import ...` line and add the new imports, so the top of the file reads:
 
@@ -9202,33 +9522,22 @@ from typing import Any, cast
 from flask_core.api_utils import error_response
 from flask_core.authz import require_scope
 from flask_core.tenancy import get_tenant_context, tenant_middleware
+from penguin_dal import AsyncDB
 from quart import Blueprint, Response, current_app, jsonify, request
 from quart_schema import validate_response
 
 from services import distribution_service as svc
 from services.errors import ApiError
 from services.permission_summary_service import canonical_json
-from services.schema import bind_app_bundle_tables, bind_bundle_install_tables
 ```
 
-**3b.** Replace the body of `_ensure_tables` so the M2b tables are bound on whichever connection the route queries:
+(`services.schema.bind_bundle_install_tables` is **not** imported — it no longer exists; R52 replaced it with `install_dal.reflect()` at startup, Task 4.)
+
+**3b.** Add a new `_install_dal()` helper next to the file's existing `_dal()` helper (`_dal()` itself is untouched):
 
 ```python
-def _ensure_tables(dal: Any) -> None:
-    """Idempotently bind the app-bundle and M2b bundle-install tables on `dal`.
-
-    `app.py` is frozen for this port (`hub_api/PORTING.md`'s
-    auto-discovery contract) -- same lazy-bind pattern as
-    `data_privacy.py`/`cookie_consent.py`'s own `before_request` hooks.
-    Runs on BOTH the primary (`async_dal.dal`, always) and the
-    read-replica connection (`async_dal.read_dal`, when configured) so
-    `_dal()`'s read_dal branch always has bound tables to query against.
-    `bind_bundle_install_tables` is what makes `app_active_versions`,
-    `app_versions`, `app_version_uploads` and `app_stream_grants`
-    queryable from the v2 route -- both binders are idempotent.
-    """
-    bind_app_bundle_tables(dal)
-    bind_bundle_install_tables(dal)
+def _install_dal() -> AsyncDB:
+    return cast(AsyncDB, current_app.config["install_dal"])
 ```
 
 **3c.** Append these DTOs and the ETag helper directly after the existing `DistributionBundlesResponse` dataclass:
@@ -9325,7 +9634,9 @@ async def list_distribution_bundles_v2() -> Response | tuple[dict[str, object], 
     The v1 route above is untouched and keeps serving its five-field
     body until the M6 cut-over, so today's Python
     `flask_core.stage_runner.BundlePoller` keeps working while the Rust
-    stages move to this route.
+    stages move to this route. R52: this is the first caller to pass a
+    real `install_dal` into `list_bundles_for_stage` -- the v1 route's
+    own call site below is unmodified and still passes none.
     """
     stage = request.args.get("stage", "")
     if stage not in svc.BUNDLE_STAGES:
@@ -9339,8 +9650,10 @@ async def list_distribution_bundles_v2() -> Response | tuple[dict[str, object], 
     assert ctx is not None  # nosec B101 - tenant_middleware always publishes this on the success path
 
     async_dal, read_dal = _dal()
+    install_dal = _install_dal()
     rows = await svc.list_bundles_for_stage(
-        async_dal, read_dal, tenant_id=ctx.tenant_id, community_id=community_id, stage=stage
+        async_dal, read_dal, tenant_id=ctx.tenant_id, community_id=community_id, stage=stage,
+        install_dal=install_dal,
     )
     bundles = [
         DistributionBundleV2DTO(
@@ -9401,28 +9714,31 @@ Expected: every previously-passing test still passes — the v1 route, its DTOs 
 git add hub_api/blueprints/v1/distribution.py hub_api/tests/test_distribution_v2_blueprint.py \
         hub_api/pyproject.toml
 git commit -m "$(cat <<'EOF'
-feat(hub-api): distribution API v2 -- GET /api/v1/distribution/v2/bundles with ETag (spec Sec6.7)
+feat(hub-api): distribution API v2 -- GET /api/v1/distribution/v2/bundles with ETag (spec Sec6.7, R52)
 
 Serves artifactVersion/artifactDigest/artifactKind/language/scanStatus,
 the capability-bearing manifest slice, and the resolved stream grants
-for stage=process rows. Strong ETag over {stage, bundles} only -- never
-over meta.timestamp -- so a poll that changes nothing is a 304 rather
-than a fresh body every 5 s.
+for stage=process rows, sourced through penguin-dal's install_dal.
+Strong ETag over {stage, bundles} only -- never over meta.timestamp --
+so a poll that changes nothing is a 304 rather than a fresh body every
+5 s.
 
-The v1 /bundles route is untouched and keeps its byte-identical
-five-field body until the M6 cut-over.
+The v1 /bundles route is untouched (its call site passes no
+install_dal) and keeps its byte-identical five-field body until the M6
+cut-over.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 34: `GET /api/v1/distribution/sources` — the ingest-source registry the Rust svc-ingest polls
+## Task 34: `GET /api/v1/distribution/sources` — the ingest-source registry the Rust svc-ingest polls (R52: penguin-dal)
 
-**Depends on:** Task 33 (`_conditional`, `DistributionMetaDTO`, the bound M2b tables on the distribution blueprint), Task 26 (`ingest_source_service`), Task 29 (`render_stream_key`).
+**Depends on:** Task 33 (`_conditional`, `DistributionMetaDTO`, `_install_dal()` on the distribution blueprint), Task 26 (`ingest_source_service`, `install_dal`-only per R52), Task 29 (`render_stream_key`).
+
+**R52 note:** `ingest_sources` is this plan's own new table (`install_dal`); `communities` (read here only for a community's `slug`) is a **pre-existing** table, read through the existing pydal `async_dal`/`dal` pair. `list_sources_for_distribution` is this plan's second function (after Task 30's `activate_bundle`) holding both DAL handles side by side.
 
 **Files:**
 - Modify: `hub_api/services/ingest_source_service.py`
@@ -9435,7 +9751,7 @@ EOF
 |---|---|---|---|---|
 | `GET` | `/api/v1/distribution/sources` | `tenant_middleware` + `require_scope("distribution:read")` | `communityId` (optional int), `platform` (optional exact match), `enabled` (optional, exactly `true` or `false`) | `200` + `ETag`, or `304` when `If-None-Match` matches |
 
-- Produces: `@dataclass(slots=True, frozen=True) DistributionSource(source_id: str, platform: str, label: str, community_id: int | None, community_slug: str | None, enabled: bool, has_secret: bool, mapping: dict[str, Any], stream_key: str)`; `async def list_sources_for_distribution(async_dal, dal, *, tenant_id: int, tenant_slug: str, community_id: int | None = None, platform: str | None = None, enabled: bool | None = None) -> list[DistributionSource]`; blueprint DTOs `DistributionSourceDTO(sourceId, platform, label, communityId, enabled, hasSecret, mapping, streamKey)` and `DistributionSourcesResponse(success, sources, meta)`.
+- Produces: `@dataclass(slots=True, frozen=True) DistributionSource(source_id: str, platform: str, label: str, community_id: int | None, community_slug: str | None, enabled: bool, has_secret: bool, mapping: dict[str, Any], stream_key: str)`; `async def list_sources_for_distribution(install_dal, async_dal, dal, *, tenant_id: int, tenant_slug: str, community_id: int | None = None, platform: str | None = None, enabled: bool | None = None) -> list[DistributionSource]` (`install_dal` for the new `ingest_sources` table, `async_dal`/`dal` for the pre-existing `communities` table's slug lookup); blueprint DTOs `DistributionSourceDTO(sourceId, platform, label, communityId, enabled, hasSecret, mapping, streamKey)` and `DistributionSourcesResponse(success, sources, meta)`.
 - Consumes: `services.stream_grant_service.render_stream_key` (Task 29); `services.permission_summary_service.canonical_json` (Task 18, via Task 33's `_conditional`).
 
 Three semantics fixed here and not re-derived anywhere else:
@@ -9462,24 +9778,23 @@ from tests.conftest import TENANT_SLUG, make_token
 
 
 @pytest.fixture
-def app(bundle_install_db: Any) -> Quart:
-    dal = bundle_install_db.dal
-    dal.ingest_sources.insert(
+async def app(bundle_install_db: Any, install_dal: Any) -> Quart:
+    await install_dal.ingest_sources.async_insert(
         tenant_id=1, community_id=None, platform="twitch", source_id="tw-channelA",
         label="Twitch #channelA", enabled=True, secret_ciphertext=b"xx", secret_iv=b"yy", mapping=None,
     )
-    dal.ingest_sources.insert(
+    await install_dal.ingest_sources.async_insert(
         tenant_id=1, community_id=1, platform="discord", source_id="dg-guildX",
         label="Discord guild X", enabled=True, mapping={"text": "/content"},
     )
-    dal.ingest_sources.insert(
+    await install_dal.ingest_sources.async_insert(
         tenant_id=1, community_id=None, platform="custom:acme", source_id="wh-1",
         label="Acme webhook", enabled=False, mapping={"text": "/body/message"},
     )
-    dal.commit()
     quart_app = Quart(__name__)
     quart_app.config["async_dal"] = bundle_install_db
-    quart_app.config["dal"] = dal
+    quart_app.config["dal"] = bundle_install_db.dal
+    quart_app.config["install_dal"] = install_dal
     for bp in BLUEPRINTS:
         quart_app.register_blueprint(bp)
     return quart_app
@@ -9585,23 +9900,23 @@ async def test_sources_etag_round_trip_returns_304(app: Quart) -> None:
 
 
 async def test_sources_etag_changes_when_a_source_is_disabled(app: Quart) -> None:
-    dal = app.config["dal"]
+    install_dal = app.config["install_dal"]
     client = app.test_client()
     before = await client.get("/api/v1/distribution/sources", headers={"Authorization": f"Bearer {_token()}"})
-    dal(dal.ingest_sources.source_id == "tw-channelA").update(enabled=False)
-    dal.commit()
+    await install_dal(install_dal.ingest_sources.source_id == "tw-channelA").update(enabled=False)
     after = await client.get("/api/v1/distribution/sources", headers={"Authorization": f"Bearer {_token()}"})
     assert before.headers["ETag"] != after.headers["ETag"]
 
 
 async def test_sources_of_another_tenant_are_never_returned(app: Quart) -> None:
     dal = app.config["dal"]
+    install_dal = app.config["install_dal"]
     other_tenant_id = dal.tenants.insert(slug="other-corp", display_name="Other", is_active=True)
-    dal.ingest_sources.insert(
+    dal.commit()
+    await install_dal.ingest_sources.async_insert(
         tenant_id=other_tenant_id, community_id=None, platform="twitch", source_id="tw-otherchannel",
         label="Other tenant channel", enabled=True,
     )
-    dal.commit()
     client = app.test_client()
     response = await client.get("/api/v1/distribution/sources", headers={"Authorization": f"Bearer {_token()}"})
     assert "tw-otherchannel" not in {s["sourceId"] for s in (await response.get_json())["sources"]}
@@ -9618,7 +9933,6 @@ Append these imports to the module's existing import block and this dataclass + 
 
 ```python
 from dataclasses import dataclass  # noqa: E402 -- appended import, top of file in the real edit
-from typing import Any  # noqa: E402
 
 from services.stream_grant_service import render_stream_key  # noqa: E402
 
@@ -9645,6 +9959,7 @@ class DistributionSource:
 
 
 async def list_sources_for_distribution(
+    install_dal: AsyncDB,
     async_dal: Any,
     dal: Any,
     *,
@@ -9656,6 +9971,12 @@ async def list_sources_for_distribution(
 ) -> list[DistributionSource]:
     """The tenant's ingest sources, filtered, each with its rendered Valkey stream key.
 
+    R52: `ingest_sources` is queried through `install_dal` (this plan's
+    own new table); `communities` (read only for a community's `slug`)
+    is a pre-existing table, read through the existing pydal
+    `async_dal`/`dal` pair -- this function holds both handles side by
+    side.
+
     `community_id` widens rather than narrows: a value returns that
     community's sources **plus** the tenant-wide (`community_id IS
     NULL`) ones, because a tenant-wide source feeds every community --
@@ -9663,16 +9984,16 @@ async def list_sources_for_distribution(
     applies. `platform` is an exact match; `enabled` is a tri-state
     (`None` = no filter).
     """
-    query = dal.ingest_sources.tenant_id == tenant_id
+    query = install_dal.ingest_sources.tenant_id == tenant_id
     if community_id is not None:
-        query &= (dal.ingest_sources.community_id == community_id) | (
-            dal.ingest_sources.community_id == None  # noqa: E711 - pydal IS NULL operator
+        query &= (install_dal.ingest_sources.community_id == community_id) | (
+            install_dal.ingest_sources.community_id == None  # noqa: E711 - penguin-dal IS NULL operator
         )
     if platform is not None:
-        query &= dal.ingest_sources.platform == platform
+        query &= install_dal.ingest_sources.platform == platform
     if enabled is not None:
-        query &= dal.ingest_sources.enabled == enabled
-    rows = await async_dal.select_async(dal(query), orderby=dal.ingest_sources.source_id)
+        query &= install_dal.ingest_sources.enabled == enabled
+    rows = await install_dal(query).select(orderby=install_dal.ingest_sources.source_id)
 
     slug_cache: dict[int, str | None] = {}
     results: list[DistributionSource] = []
@@ -9698,6 +10019,8 @@ async def list_sources_for_distribution(
         )
     return results
 ```
+
+Add `from penguin_dal import AsyncDB` to this module's imports if not already present (Task 26 already imports it for `create_source`/etc.).
 
 - [ ] **Step 4: Add the route to `blueprints/v1/distribution.py`**
 
@@ -9758,8 +10081,9 @@ async def list_distribution_sources() -> Response | tuple[dict[str, object], int
     assert ctx is not None  # nosec B101 - tenant_middleware always publishes this on the success path
 
     async_dal, read_dal = _dal()
+    install_dal = _install_dal()
     sources = await list_sources_for_distribution(
-        async_dal, read_dal, tenant_id=ctx.tenant_id, tenant_slug=ctx.tenant_slug,
+        install_dal, async_dal, read_dal, tenant_id=ctx.tenant_id, tenant_slug=ctx.tenant_slug,
         community_id=community_id, platform=platform, enabled=enabled,
     )
     dtos = [
@@ -9801,24 +10125,26 @@ Expected: every previously-passing test still passes — `list_sources_for_distr
 git add hub_api/services/ingest_source_service.py hub_api/blueprints/v1/distribution.py \
         hub_api/tests/test_distribution_sources_blueprint.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): GET /api/v1/distribution/sources -- the ingest-source registry with stream keys
+feat(hub-api): GET /api/v1/distribution/sources -- the ingest-source registry with stream keys (R52)
 
 Returns every configured ingest source for the caller's tenant with its
 rendered Valkey stream key, filterable by communityId/platform/enabled,
 behind the same ETag/304 treatment as v2/bundles. hasSecret is a
-boolean -- the HMAC secret itself is never on this wire.
+boolean -- the HMAC secret itself is never on this wire. Queries the
+new ingest_sources table through penguin-dal's install_dal; the
+pre-existing communities table (for a community's slug) stays on the
+pydal async_dal/dal pair.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 35: `bundle_trip_reenable_service.py` + `POST .../trip-reenable` — clearing a sandbox trip (Q1)
+## Task 35: `bundle_trip_reenable_service.py` + `POST .../trip-reenable` — clearing a sandbox trip (Q1) (R52: penguin-dal)
 
-**Depends on:** Task 16 (`bundle_activation_service.{activate_version, get_active_version}`), Task 19 (`app_install_approvals` rows written by `approve_version`), Task 11/17 (`blueprints/v1/bundle_versions.py` and its `bundle_versions_bp`).
+**Depends on:** Task 16 (`bundle_activation_service.{activate_version, get_active_version}`, `install_dal`-only per R52), Task 19 (`app_install_approvals` rows written by `approve_version`, `install_dal`-only per R52), Task 11/17 (`blueprints/v1/bundle_versions.py` and its `bundle_versions_bp`, `_install_dal()` helper).
 
 **Files:**
 - Create: `hub_api/services/bundle_trip_reenable_service.py`
@@ -9831,7 +10157,7 @@ EOF
 |---|---|---|---|---|
 | `POST` | `/api/v1/apps/{app_id}/trip-reenable` | `tenant_middleware` + `require_scope("tenant:admin")` | `{"version": str, "communityId": int \| null}` | `200 {"success": true, "previousDigest": str \| null, "artifactDigest": str}` |
 
-- Produces: `async def trip_reenable(async_dal, dal, *, tenant_id: int, community_id: int | None, app_id: str, version: str, actor_id: int) -> tuple[str | None, str]` returning `(previous_digest, new_digest)`. Raises `ApiError`: `404` `version_not_found` (no `app_versions` row for `(app_id, version)`), `409` `digest_not_verified` (row exists, `artifact_digest` is NULL), `409` `same_digest_no_reenable` (target digest equals the digest currently advertised for this scope), `403` `bundle_not_approved` (no current `app_install_approvals` row for `(app_id, version, tenant_id, community_id)`).
+- Produces: `async def trip_reenable(install_dal, *, tenant_id: int, community_id: int | None, app_id: str, version: str, actor_id: int) -> tuple[str | None, str]` returning `(previous_digest, new_digest)`. Raises `ApiError`: `404` `version_not_found` (no `app_versions` row for `(app_id, version)`), `409` `digest_not_verified` (row exists, `artifact_digest` is NULL), `409` `same_digest_no_reenable` (target digest equals the digest currently advertised for this scope), `403` `bundle_not_approved` (no current `app_install_approvals` row for `(app_id, version, tenant_id, community_id)`). `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `app_versions`/`app_active_versions`/`app_install_approvals` are this plan's own new tables (R52); the `audit_log` write is a separate, best-effort write through the same `install_dal` (Decision #18).
 - Consumes: `services.bundle_activation_service.{activate_version, get_active_version}` (Task 16).
 
 **Why this endpoint exists and what it deliberately is not** (this plan's Decision #10): a trip-disabled bundle is disabled *inside a Rust executor pod*, per `(app_id, digest)`, and clears only when that pod observes a **new** `artifactDigest` from the distribution API or restarts (spec §7.5, assumption A7). hub-api has no way to reach into a pod and never gains one. This endpoint is the admin-side half: it re-points `app_active_versions` at a **different, already-published, already-approved** version so the distribution API starts advertising a new digest, which is what actually clears the trip on the next poll. Pointing at the same digest cannot clear anything, so it is refused with `409 same_digest_no_reenable` and a message telling the operator to publish a new version or restart the stage pods. No pod-, deployment- or cluster-scoped runtime toggle is added anywhere in this plan.
@@ -9844,6 +10170,7 @@ EOF
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -9851,6 +10178,7 @@ from quart import Quart
 
 from blueprints.v1.bundle_versions import BLUEPRINTS
 from services.bundle_activation_service import activate_version
+from services.bundle_install_dal import raw_sql_rows
 from services.bundle_trip_reenable_service import trip_reenable
 from services.errors import ApiError
 from tests.conftest import TENANT_SLUG, make_user_token
@@ -9860,132 +10188,127 @@ _DIGEST_A = "sha256:" + "a" * 64
 _DIGEST_B = "sha256:" + "b" * 64
 
 
-def _seed_version(dal: Any, version: str, digest: str) -> int:
-    version_id: int = dal.app_versions.insert(
+async def _seed_version(install_dal: Any, version: str, digest: str | None) -> int:
+    now = datetime.now(UTC)
+    version_id: int = await install_dal.app_versions.async_insert(
         app_id=_APP, version=version, artifact_digest=digest,
         language="python", artifact_kind="source", scan_status="scanned",
     )
-    dal.app_version_uploads.insert(
+    await install_dal.app_version_uploads.async_insert(
         app_id=_APP, version=version, tenant_id=1, artifact_kind="source", language="python",
         status="PUBLISHED", manifest_json={"schema_version": 2, "app_id": _APP, "version": version},
-        app_version_id=version_id,
+        app_version_id=version_id, created_at=now, updated_at=now,
     )
     return version_id
 
 
-def _seed_approval(dal: Any, version: str) -> None:
-    dal.app_install_approvals.insert(
+async def _seed_approval(install_dal: Any, version: str) -> None:
+    now = datetime.now(UTC)
+    await install_dal.app_install_approvals.async_insert(
         tenant_id=1, community_id=None, app_id=_APP, version=version,
-        permission_hash="sha256:" + "c" * 64, summary_json={}, approved_by=1,
+        permission_hash="sha256:" + "c" * 64, summary_json={}, approved_by=1, approved_at=now,
     )
 
 
-async def test_reenable_requires_a_published_version(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_reenable_requires_a_published_version(install_dal: Any) -> None:
     with pytest.raises(ApiError) as excinfo:
         await trip_reenable(
-            async_dal, async_dal.dal, tenant_id=1, community_id=None, app_id=_APP,
+            install_dal, tenant_id=1, community_id=None, app_id=_APP,
             version="9.9.9", actor_id=1,
         )
     assert excinfo.value.status_code == 404
     assert excinfo.value.code == "version_not_found"
 
 
-async def test_reenable_refuses_a_digest_hub_api_never_verified(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    dal.app_versions.insert(app_id=_APP, version="3.0.2", artifact_digest=None,
-                            language="python", artifact_kind="source", scan_status="scanned")
-    dal.commit()
+async def test_reenable_refuses_a_digest_hub_api_never_verified(install_dal: Any) -> None:
+    await install_dal.app_versions.async_insert(
+        app_id=_APP, version="3.0.2", artifact_digest=None,
+        language="python", artifact_kind="source", scan_status="scanned",
+    )
     with pytest.raises(ApiError) as excinfo:
-        await trip_reenable(async_dal, dal, tenant_id=1, community_id=None, app_id=_APP,
+        await trip_reenable(install_dal, tenant_id=1, community_id=None, app_id=_APP,
                             version="3.0.2", actor_id=1)
     assert excinfo.value.status_code == 409
     assert excinfo.value.code == "digest_not_verified"
 
 
-async def test_reenable_refuses_the_same_digest(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    _seed_version(dal, "3.0.1", _DIGEST_A)
-    _seed_approval(dal, "3.0.1")
-    dal.commit()
-    await activate_version(async_dal, dal, tenant_id=1, community_id=None, app_id=_APP,
+async def test_reenable_refuses_the_same_digest(install_dal: Any) -> None:
+    await _seed_version(install_dal, "3.0.1", _DIGEST_A)
+    await _seed_approval(install_dal, "3.0.1")
+    await activate_version(install_dal, tenant_id=1, community_id=None, app_id=_APP,
                            version="3.0.1", activated_by=1)
     with pytest.raises(ApiError) as excinfo:
-        await trip_reenable(async_dal, dal, tenant_id=1, community_id=None, app_id=_APP,
+        await trip_reenable(install_dal, tenant_id=1, community_id=None, app_id=_APP,
                             version="3.0.1", actor_id=1)
     assert excinfo.value.status_code == 409
     assert excinfo.value.code == "same_digest_no_reenable"
 
 
-async def test_reenable_refuses_an_unapproved_version(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    _seed_version(dal, "3.0.1", _DIGEST_A)
-    _seed_approval(dal, "3.0.1")
-    _seed_version(dal, "3.0.2", _DIGEST_B)  # published, never approved
-    dal.commit()
-    await activate_version(async_dal, dal, tenant_id=1, community_id=None, app_id=_APP,
+async def test_reenable_refuses_an_unapproved_version(install_dal: Any) -> None:
+    await _seed_version(install_dal, "3.0.1", _DIGEST_A)
+    await _seed_approval(install_dal, "3.0.1")
+    await _seed_version(install_dal, "3.0.2", _DIGEST_B)  # published, never approved
+    await activate_version(install_dal, tenant_id=1, community_id=None, app_id=_APP,
                            version="3.0.1", activated_by=1)
     with pytest.raises(ApiError) as excinfo:
-        await trip_reenable(async_dal, dal, tenant_id=1, community_id=None, app_id=_APP,
+        await trip_reenable(install_dal, tenant_id=1, community_id=None, app_id=_APP,
                             version="3.0.2", actor_id=1)
     assert excinfo.value.status_code == 403
     assert excinfo.value.code == "bundle_not_approved"
 
 
-async def test_reenable_repoints_to_a_new_digest_and_audits(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    _seed_version(dal, "3.0.1", _DIGEST_A)
-    _seed_approval(dal, "3.0.1")
-    _seed_version(dal, "3.0.2", _DIGEST_B)
-    _seed_approval(dal, "3.0.2")
-    dal.commit()
-    await activate_version(async_dal, dal, tenant_id=1, community_id=None, app_id=_APP,
+async def test_reenable_repoints_to_a_new_digest_and_audits(install_dal: Any) -> None:
+    await _seed_version(install_dal, "3.0.1", _DIGEST_A)
+    await _seed_approval(install_dal, "3.0.1")
+    await _seed_version(install_dal, "3.0.2", _DIGEST_B)
+    await _seed_approval(install_dal, "3.0.2")
+    await activate_version(install_dal, tenant_id=1, community_id=None, app_id=_APP,
                            version="3.0.1", activated_by=1)
 
-    previous, new = await trip_reenable(async_dal, dal, tenant_id=1, community_id=None,
+    previous, new = await trip_reenable(install_dal, tenant_id=1, community_id=None,
                                         app_id=_APP, version="3.0.2", actor_id=1)
     assert previous == _DIGEST_A
     assert new == _DIGEST_B
 
     from services.bundle_activation_service import get_active_version
 
-    active = await get_active_version(async_dal, dal, tenant_id=1, community_id=None, app_id=_APP)
+    active = await get_active_version(install_dal, tenant_id=1, community_id=None, app_id=_APP)
     assert active is not None
     assert active.artifact_digest == _DIGEST_B
 
-    audit_row = dal(dal.audit_log.action == "bundle_trip_reenabled").select().first()
+    audit_rows = await raw_sql_rows(
+        install_dal, "SELECT details FROM audit_log WHERE action = :a", {"a": "bundle_trip_reenabled"}
+    )
+    audit_row = audit_rows.first()
     assert audit_row is not None
-    assert audit_row.details["old_digest"] == _DIGEST_A
-    assert audit_row.details["new_digest"] == _DIGEST_B
+    import json
+
+    details = audit_row["details"]
+    if isinstance(details, str):
+        details = json.loads(details)
+    assert details["old_digest"] == _DIGEST_A
+    assert details["new_digest"] == _DIGEST_B
 
 
-async def test_reenable_on_a_scope_with_nothing_active_is_allowed(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    _seed_version(dal, "3.0.2", _DIGEST_B)
-    _seed_approval(dal, "3.0.2")
-    dal.commit()
-    previous, new = await trip_reenable(async_dal, dal, tenant_id=1, community_id=None,
+async def test_reenable_on_a_scope_with_nothing_active_is_allowed(install_dal: Any) -> None:
+    await _seed_version(install_dal, "3.0.2", _DIGEST_B)
+    await _seed_approval(install_dal, "3.0.2")
+    previous, new = await trip_reenable(install_dal, tenant_id=1, community_id=None,
                                         app_id=_APP, version="3.0.2", actor_id=1)
     assert previous is None
     assert new == _DIGEST_B
 
 
 @pytest.fixture
-def app(bundle_install_db: Any) -> Quart:
-    dal = bundle_install_db.dal
-    _seed_version(dal, "3.0.1", _DIGEST_A)
-    _seed_approval(dal, "3.0.1")
-    _seed_version(dal, "3.0.2", _DIGEST_B)
-    _seed_approval(dal, "3.0.2")
-    dal.commit()
+async def app(bundle_install_db: Any, install_dal: Any) -> Quart:
+    await _seed_version(install_dal, "3.0.1", _DIGEST_A)
+    await _seed_approval(install_dal, "3.0.1")
+    await _seed_version(install_dal, "3.0.2", _DIGEST_B)
+    await _seed_approval(install_dal, "3.0.2")
     quart_app = Quart(__name__)
     quart_app.config["async_dal"] = bundle_install_db
-    quart_app.config["dal"] = dal
+    quart_app.config["dal"] = bundle_install_db.dal
+    quart_app.config["install_dal"] = install_dal
     for bp in BLUEPRINTS:
         quart_app.register_blueprint(bp)
     return quart_app
@@ -10002,9 +10325,8 @@ async def test_endpoint_requires_tenant_admin(app: Quart) -> None:
 
 
 async def test_endpoint_happy_path(app: Quart) -> None:
-    async_dal = app.config["async_dal"]
-    dal = app.config["dal"]
-    await activate_version(async_dal, dal, tenant_id=1, community_id=None, app_id=_APP,
+    install_dal = app.config["install_dal"]
+    await activate_version(install_dal, tenant_id=1, community_id=None, app_id=_APP,
                            version="3.0.1", activated_by=1)
     token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
     client = app.test_client()
@@ -10020,9 +10342,8 @@ async def test_endpoint_happy_path(app: Quart) -> None:
 
 
 async def test_endpoint_surfaces_same_digest_as_409(app: Quart) -> None:
-    async_dal = app.config["async_dal"]
-    dal = app.config["dal"]
-    await activate_version(async_dal, dal, tenant_id=1, community_id=None, app_id=_APP,
+    install_dal = app.config["install_dal"]
+    await activate_version(install_dal, tenant_id=1, community_id=None, app_id=_APP,
                            version="3.0.1", activated_by=1)
     token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
     client = app.test_client()
@@ -10057,20 +10378,27 @@ makes the distribution API advertise a new digest on the next poll.
 Pointing at the same digest clears nothing, so it is refused
 (`same_digest_no_reenable`) rather than silently succeeding and leaving
 the operator believing the trip was cleared.
+
+R52: `app_versions`/`app_active_versions`/`app_install_approvals` are
+this plan's own new tables, queried through the penguin-dal
+`install_dal: AsyncDB` (Task 4). The `audit_log` write is a separate,
+best-effort write through the same `install_dal` (Decision #18) --
+wrapped in `try`/`except`, matching this codebase's existing convention
+for every audit-log call site.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+
+from penguin_dal import AsyncDB
 
 from services.bundle_activation_service import activate_version, get_active_version
 from services.errors import ApiError, forbidden, not_found
 
 
 async def trip_reenable(
-    async_dal: Any,
-    dal: Any,
+    install_dal: AsyncDB,
     *,
     tenant_id: int,
     community_id: int | None,
@@ -10083,12 +10411,12 @@ async def trip_reenable(
     Returns `(previous_digest, new_digest)`. `previous_digest` is
     `None` when nothing was active for the scope yet.
     """
-    target_rows = await async_dal.select_async(
-        dal((dal.app_versions.app_id == app_id) & (dal.app_versions.version == version))
-    )
-    if not target_rows:
+    target_rows = await install_dal(
+        (install_dal.app_versions.app_id == app_id) & (install_dal.app_versions.version == version)
+    ).select()
+    target = target_rows.first()
+    if target is None:
         raise not_found(f"version {version} of {app_id} has never been published")
-    target = target_rows[0]
     if not target.artifact_digest:
         raise ApiError(
             f"version {version} of {app_id} has no verified artifact digest",
@@ -10097,7 +10425,7 @@ async def trip_reenable(
         )
 
     active = await get_active_version(
-        async_dal, dal, tenant_id=tenant_id, community_id=community_id, app_id=app_id
+        install_dal, tenant_id=tenant_id, community_id=community_id, app_id=app_id
     )
     previous_digest: str | None = active.artifact_digest if active is not None else None
     if previous_digest == target.artifact_digest:
@@ -10108,27 +10436,25 @@ async def trip_reenable(
             "same_digest_no_reenable",
         )
 
-    approvals = await async_dal.select_async(
-        dal(
-            (dal.app_install_approvals.app_id == app_id)
-            & (dal.app_install_approvals.version == version)
-            & (dal.app_install_approvals.tenant_id == tenant_id)
-            & (dal.app_install_approvals.community_id == community_id)
-            & (dal.app_install_approvals.superseded_by == None)  # noqa: E711 - pydal IS NULL operator
-        )
-    )
+    approvals = await install_dal(
+        (install_dal.app_install_approvals.app_id == app_id)
+        & (install_dal.app_install_approvals.version == version)
+        & (install_dal.app_install_approvals.tenant_id == tenant_id)
+        & (install_dal.app_install_approvals.community_id == community_id)
+        & (install_dal.app_install_approvals.superseded_by == None)  # noqa: E711 - penguin-dal IS NULL operator
+    ).select()
     if not approvals:
         raise forbidden(f"version {version} of {app_id} has not been approved for this scope")
 
     await activate_version(
-        async_dal, dal, tenant_id=tenant_id, community_id=community_id,
+        install_dal, tenant_id=tenant_id, community_id=community_id,
         app_id=app_id, version=version, activated_by=actor_id,
     )
 
     now = datetime.now(UTC)
     try:
-        await async_dal.insert_async(
-            dal.audit_log, user_id=actor_id, action="bundle_trip_reenabled",
+        await install_dal.audit_log.async_insert(
+            user_id=actor_id, action="bundle_trip_reenabled",
             target_type="app_active_versions", target_id=app_id,
             details={
                 "app_id": app_id, "version": version, "tenant_id": tenant_id,
@@ -10139,7 +10465,6 @@ async def trip_reenable(
         )
     except Exception:  # noqa: BLE001, S110 -- audit logging failure must not break the main flow
         pass
-    async_dal.dal.commit()
     return previous_digest, str(target.artifact_digest)
 ```
 
@@ -10171,13 +10496,13 @@ async def post_trip_reenable(data: TripReenableRequest, app_id: str) -> tuple[di
     observing a new `artifactDigest` (spec Sec7.5/A7). This endpoint
     only makes such a digest exist for the scope.
     """
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     ctx = get_tenant_context(request)
     assert ctx is not None  # nosec B101 - tenant_middleware always publishes this on the success path
     actor_id = get_current_user_id(request)
     try:
         previous, new = await trip_reenable(
-            async_dal, dal, tenant_id=ctx.tenant_id, community_id=data.communityId,
+            install_dal, tenant_id=ctx.tenant_id, community_id=data.communityId,
             app_id=app_id, version=data.version, actor_id=actor_id,
         )
     except ApiError as exc:
@@ -10203,7 +10528,7 @@ Expected: every previously-passing test still passes — this task only appends 
 git add hub_api/services/bundle_trip_reenable_service.py hub_api/blueprints/v1/bundle_versions.py \
         hub_api/tests/test_bundle_trip_reenable.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): POST /api/v1/apps/{app_id}/trip-reenable -- admin action plus a new digest (spec Sec19 Q1)
+feat(hub-api): POST /api/v1/apps/{app_id}/trip-reenable -- admin action plus a new digest (spec Sec19 Q1, R52)
 
 Re-points app_active_versions at a different, already-published,
 already-approved version so the distribution API advertises a new
@@ -10212,19 +10537,21 @@ executor pod. Refuses 409 same_digest_no_reenable when the target
 digest equals the one already advertised, 403 bundle_not_approved when
 the version was never approved for the scope, and 409
 digest_not_verified for a digest hub-api never verified. No runtime
-re-enable switch is added anywhere (spec Sec7.5/A7 unchanged).
+re-enable switch is added anywhere (spec Sec7.5/A7 unchanged). Queries
+the new tables through penguin-dal's install_dal.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 36: per-bundle role drop at uninstall + the 168 h orphan sweeper + its CronJob (Q3)
+## Task 36: per-bundle role drop at uninstall + the 168 h orphan sweeper + its CronJob (Q3) (R52: penguin-dal)
 
-**Depends on:** Task 20 (`bundle_db_role_service.{bundle_role_name, drop_bundle_role}`), Task 21 (role created inside `approve_version`), Task 4 (`bundle_install_db` fixture), Task 12 (the Helm chart's `bundles.*` values block).
+**Depends on:** Task 20 (`bundle_db_role_service.{bundle_role_name, drop_bundle_role}`), Task 21 (role created inside `approve_version`), Task 4 (`install_dal` penguin-dal wiring + `bundle_install_db`/`install_dal` fixtures), Task 12 (the Helm chart's `bundles.*` values block).
+
+**R52 note:** `uninstall_bundle` touches only `app_catalog` — a **pre-existing** table — so it needs **zero changes** for R52 (confirmed, not skipped: see Step 3). The orphan sweeper is different: it reads `app_catalog` (existing, via `async_dal`/`dal`) **and** `app_active_versions`/`app_install_approvals` (this plan's own new tables, via `install_dal`) in the same pass, so `sweep_orphan_bundle_roles` and the CronJob's own standalone connection-building both hold both handles side by side.
 
 **Files:**
 - Modify: `hub_api/services/marketplace_lifecycle_service.py`
@@ -10234,8 +10561,8 @@ EOF
 - Test: `hub_api/tests/test_bundle_role_cleanup_job.py`
 
 **Interfaces:**
-- Produces: `marketplace_lifecycle_service.uninstall_bundle(dal, *, app_id: str, db_engine: Any | None = None)` — **new keyword-only param defaulting to `None`, so every existing call site and every existing test keeps passing unmodified**; when an engine is given, `drop_bundle_role(db_engine, app_id=app_id)` runs after the catalog row is retired. `BUNDLE_ROLE_GRACE_H = 168`; `@dataclass(slots=True, frozen=True) SweepResult(examined: int, dropped: tuple[str, ...], retained: int)`; `async def sweep_orphan_bundle_roles(async_dal, dal, engine, *, now: datetime | None = None, grace_hours: int = BUNDLE_ROLE_GRACE_H) -> SweepResult`; `async def main() -> int` (the CronJob entrypoint, `python -m services.bundle_role_cleanup_job`).
-- Consumes: `services.bundle_db_role_service.{bundle_role_name, drop_bundle_role}` (Task 20).
+- Produces: `marketplace_lifecycle_service.uninstall_bundle(dal, *, app_id: str, db_engine: Any | None = None)` — **new keyword-only param defaulting to `None`, so every existing call site and every existing test keeps passing unmodified**; when an engine is given, `drop_bundle_role(db_engine, app_id=app_id)` runs after the catalog row is retired. `BUNDLE_ROLE_GRACE_H = 168`; `@dataclass(slots=True, frozen=True) SweepResult(examined: int, dropped: tuple[str, ...], retained: int)`; `async def sweep_orphan_bundle_roles(async_dal, dal, install_dal, engine, *, now: datetime | None = None, grace_hours: int = BUNDLE_ROLE_GRACE_H) -> SweepResult` (`async_dal`/`dal` for the pre-existing `app_catalog`, `install_dal` for the new `app_active_versions`/`app_install_approvals`); `async def main() -> int` (the CronJob entrypoint, `python -m services.bundle_role_cleanup_job`, builds all three connections plus the privileged `engine`).
+- Consumes: `services.bundle_db_role_service.{bundle_role_name, drop_bundle_role}` (Task 20); `services.bundle_install_dal.build_install_dal` (Task 4).
 
 **The rule this task implements** (this plan's Decision #10b): uninstall is the drop trigger. The sweeper exists only for roles whose uninstall never ran — a catalog row deleted out from under the role, an uninstall that predates this plan, or a crash between the catalog write and the `DROP ROLE`. A bundle is swept when it has **no** `app_active_versions` row at all **and** its newest non-superseded `app_install_approvals.approved_at` is older than `grace_hours` (or it has no approval at all). A role whose bundle is still activated anywhere is never dropped, regardless of age.
 
@@ -10293,62 +10620,69 @@ async def test_uninstall_without_an_engine_never_touches_roles(bundle_install_db
     mock_drop.assert_not_awaited()
 
 
-async def test_sweep_retains_a_role_whose_bundle_is_still_activated(bundle_install_db: Any) -> None:
+async def test_sweep_retains_a_role_whose_bundle_is_still_activated(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     async_dal = bundle_install_db
     dal = async_dal.dal
-    version_id = dal.app_versions.insert(
+    version_id = await install_dal.app_versions.async_insert(
         app_id=_APP, version="3.0.1", artifact_digest="sha256:" + "a" * 64,
         language="python", artifact_kind="source", scan_status="scanned",
     )
-    dal.app_active_versions.insert(app_id=_APP, tenant_id=1, community_id=0, version_id=version_id,
-                                   activated_by=1, activated_at=datetime.now(UTC))
-    dal.commit()
+    await install_dal.app_active_versions.async_insert(
+        app_id=_APP, tenant_id=1, community_id=0, version_id=version_id,
+        activated_by=1, activated_at=datetime.now(UTC),
+    )
     with patch("services.bundle_role_cleanup_job.drop_bundle_role", new_callable=AsyncMock) as mock_drop:
-        result = await sweep_orphan_bundle_roles(async_dal, dal, object())
+        result = await sweep_orphan_bundle_roles(async_dal, dal, install_dal, object())
     assert result.examined == 1
     assert result.dropped == ()
     assert result.retained == 1
     mock_drop.assert_not_awaited()
 
 
-async def test_sweep_retains_a_role_inside_the_grace_window(bundle_install_db: Any) -> None:
+async def test_sweep_retains_a_role_inside_the_grace_window(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     async_dal = bundle_install_db
     dal = async_dal.dal
-    dal.app_install_approvals.insert(
+    await install_dal.app_install_approvals.async_insert(
         tenant_id=1, community_id=None, app_id=_APP, version="3.0.1",
         permission_hash="sha256:" + "c" * 64, summary_json={}, approved_by=1,
         approved_at=datetime.now(UTC) - timedelta(hours=BUNDLE_ROLE_GRACE_H - 1),
     )
-    dal.commit()
     with patch("services.bundle_role_cleanup_job.drop_bundle_role", new_callable=AsyncMock) as mock_drop:
-        result = await sweep_orphan_bundle_roles(async_dal, dal, object())
+        result = await sweep_orphan_bundle_roles(async_dal, dal, install_dal, object())
     assert result.dropped == ()
     mock_drop.assert_not_awaited()
 
 
-async def test_sweep_drops_a_role_past_the_grace_window(bundle_install_db: Any) -> None:
+async def test_sweep_drops_a_role_past_the_grace_window(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     async_dal = bundle_install_db
     dal = async_dal.dal
-    dal.app_install_approvals.insert(
+    await install_dal.app_install_approvals.async_insert(
         tenant_id=1, community_id=None, app_id=_APP, version="3.0.1",
         permission_hash="sha256:" + "c" * 64, summary_json={}, approved_by=1,
         approved_at=datetime.now(UTC) - timedelta(hours=BUNDLE_ROLE_GRACE_H + 1),
     )
-    dal.commit()
     with patch("services.bundle_role_cleanup_job.drop_bundle_role", new_callable=AsyncMock) as mock_drop:
-        result = await sweep_orphan_bundle_roles(async_dal, dal, object())
+        result = await sweep_orphan_bundle_roles(async_dal, dal, install_dal, object())
     assert result.dropped == ("bundle_waddles_socials_music_default",)
     assert result.retained == 0
     mock_drop.assert_awaited_once()
 
 
-async def test_sweep_drops_a_bundle_that_was_never_approved_or_activated(bundle_install_db: Any) -> None:
+async def test_sweep_drops_a_bundle_that_was_never_approved_or_activated(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     async_dal = bundle_install_db
     dal = async_dal.dal
     _seed_second_app(dal, "waddles.socials.second.default")
     dal.commit()
     with patch("services.bundle_role_cleanup_job.drop_bundle_role", new_callable=AsyncMock) as mock_drop:
-        result = await sweep_orphan_bundle_roles(async_dal, dal, object())
+        result = await sweep_orphan_bundle_roles(async_dal, dal, install_dal, object())
     assert result.examined == 2
     assert set(result.dropped) == {
         "bundle_waddles_socials_music_default", "bundle_waddles_socials_second_default",
@@ -10356,34 +10690,37 @@ async def test_sweep_drops_a_bundle_that_was_never_approved_or_activated(bundle_
     assert mock_drop.await_count == 2
 
 
-async def test_sweep_honours_a_custom_grace_window(bundle_install_db: Any) -> None:
+async def test_sweep_honours_a_custom_grace_window(bundle_install_db: Any, install_dal: Any) -> None:
     async_dal = bundle_install_db
     dal = async_dal.dal
-    dal.app_install_approvals.insert(
+    await install_dal.app_install_approvals.async_insert(
         tenant_id=1, community_id=None, app_id=_APP, version="3.0.1",
         permission_hash="sha256:" + "c" * 64, summary_json={}, approved_by=1,
         approved_at=datetime.now(UTC) - timedelta(hours=2),
     )
-    dal.commit()
     with patch("services.bundle_role_cleanup_job.drop_bundle_role", new_callable=AsyncMock):
-        kept = await sweep_orphan_bundle_roles(async_dal, dal, object(), grace_hours=24)
-        dropped = await sweep_orphan_bundle_roles(async_dal, dal, object(), grace_hours=1)
+        kept = await sweep_orphan_bundle_roles(async_dal, dal, install_dal, object(), grace_hours=24)
+        dropped = await sweep_orphan_bundle_roles(async_dal, dal, install_dal, object(), grace_hours=1)
     assert kept.dropped == ()
     assert dropped.dropped == ("bundle_waddles_socials_music_default",)
 
 
-async def test_sweep_with_zero_catalog_rows_reports_zero_examined(bundle_install_db: Any) -> None:
+async def test_sweep_with_zero_catalog_rows_reports_zero_examined(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     async_dal = bundle_install_db
     dal = async_dal.dal
     dal(dal.app_catalog.id > 0).delete()
     dal.commit()
     with patch("services.bundle_role_cleanup_job.drop_bundle_role", new_callable=AsyncMock):
-        result = await sweep_orphan_bundle_roles(async_dal, dal, object())
+        result = await sweep_orphan_bundle_roles(async_dal, dal, install_dal, object())
     assert result.examined == 0
     assert result.dropped == ()
 
 
-async def test_main_exits_nonzero_when_nothing_was_examined(bundle_install_db: Any) -> None:
+async def test_main_exits_nonzero_when_nothing_was_examined(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     from services import bundle_role_cleanup_job as job
 
     dal = bundle_install_db.dal
@@ -10391,6 +10728,7 @@ async def test_main_exits_nonzero_when_nothing_was_examined(bundle_install_db: A
     dal.commit()
     with (
         patch.object(job, "_build_dals", return_value=(bundle_install_db, dal)),
+        patch.object(job, "_build_install_dal", new_callable=AsyncMock, return_value=install_dal),
         patch.object(job, "_build_engine", return_value=object()),
         patch.object(job, "drop_bundle_role", new_callable=AsyncMock),
     ):
@@ -10398,12 +10736,13 @@ async def test_main_exits_nonzero_when_nothing_was_examined(bundle_install_db: A
     assert exit_code == 1
 
 
-async def test_main_exits_zero_on_a_real_sweep(bundle_install_db: Any) -> None:
+async def test_main_exits_zero_on_a_real_sweep(bundle_install_db: Any, install_dal: Any) -> None:
     from services import bundle_role_cleanup_job as job
 
     dal = bundle_install_db.dal
     with (
         patch.object(job, "_build_dals", return_value=(bundle_install_db, dal)),
+        patch.object(job, "_build_install_dal", new_callable=AsyncMock, return_value=install_dal),
         patch.object(job, "_build_engine", return_value=object()),
         patch.object(job, "drop_bundle_role", new_callable=AsyncMock),
     ):
@@ -10416,9 +10755,9 @@ async def test_main_exits_zero_on_a_real_sweep(bundle_install_db: Any) -> None:
 Run: `cd hub_api && python3 -m pytest tests/test_bundle_role_cleanup_job.py -v`
 Expected: `ModuleNotFoundError: No module named 'services.bundle_role_cleanup_job'`
 
-- [ ] **Step 3: Extend `uninstall_bundle`**
+- [ ] **Step 3: `uninstall_bundle` — confirmed unaffected by R52, extend as originally planned**
 
-In `hub_api/services/marketplace_lifecycle_service.py`, add the import and replace `uninstall_bundle` with this version. Nothing else in the file changes:
+`app_catalog` is a pre-existing table; this function needs no DAL-client change. In `hub_api/services/marketplace_lifecycle_service.py`, add the import and replace `uninstall_bundle` with this version. Nothing else in the file changes:
 
 ```python
 from services.bundle_db_role_service import drop_bundle_role
@@ -10435,7 +10774,8 @@ async def uninstall_bundle(dal: Any, *, app_id: str, db_engine: Any | None = Non
     role created at approval (this plan's Decision #10b, spec Sec19
     Q3). The drop is idempotent, so a bundle that never had a `db`
     capability -- and therefore never had a role -- is a harmless
-    no-op rather than a special case.
+    no-op rather than a special case. R52 does not touch this function:
+    `app_catalog` is a pre-existing table.
     """
     dal(dal.app_catalog.app_id == app_id).update(status="retired")
     dal.commit()
@@ -10461,6 +10801,15 @@ approved_at` is older than `grace_hours` (or it has no approval at
 all). A bundle still activated anywhere is never swept, whatever its
 age.
 
+R52: `app_catalog` is a pre-existing table, read through the existing
+pydal `async_dal`/`dal` pair; `app_active_versions`/
+`app_install_approvals` are this plan's own new tables, read through
+the penguin-dal `install_dal`. This standalone CronJob process builds
+all three connections itself (`_build_dals`/`_build_install_dal`) plus
+the privileged role-admin engine (`_build_engine`), since it runs
+outside the main hub-api Quart process and has no `app.config` to read
+them from.
+
 Runs as a Kubernetes CronJob (`k8s/helm/waddlebot/templates/
 bundle-role-cleanup-cronjob.yaml`), entrypoint `python -m
 services.bundle_role_cleanup_job`.
@@ -10476,9 +10825,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from flask_core.database import AsyncDAL
+from penguin_dal import AsyncDB
 
 from services.bundle_db_role_service import bundle_role_name, drop_bundle_role
-from services.schema import bind_app_bundle_tables, bind_bundle_install_tables
+from services.bundle_install_dal import build_install_dal
+from services.schema import bind_app_bundle_tables
 
 BUNDLE_ROLE_GRACE_H = 168
 
@@ -10495,12 +10846,18 @@ class SweepResult:
 async def sweep_orphan_bundle_roles(
     async_dal: Any,
     dal: Any,
+    install_dal: AsyncDB,
     engine: Any,
     *,
     now: datetime | None = None,
     grace_hours: int = BUNDLE_ROLE_GRACE_H,
 ) -> SweepResult:
-    """Drop every per-bundle role whose bundle has been inactive past `grace_hours`."""
+    """Drop every per-bundle role whose bundle has been inactive past `grace_hours`.
+
+    `app_catalog` (existing table) via `async_dal`/`dal`;
+    `app_active_versions`/`app_install_approvals` (new tables) via
+    `install_dal`.
+    """
     moment = now or datetime.now(UTC)
     cutoff = moment - timedelta(hours=grace_hours)
 
@@ -10510,18 +10867,15 @@ async def sweep_orphan_bundle_roles(
     dropped: list[str] = []
     retained = 0
     for app_id in app_ids:
-        active = await async_dal.select_async(dal(dal.app_active_versions.app_id == app_id))
+        active = await install_dal(install_dal.app_active_versions.app_id == app_id).select()
         if active:
             retained += 1
             continue
-        approvals = await async_dal.select_async(
-            dal(
-                (dal.app_install_approvals.app_id == app_id)
-                & (dal.app_install_approvals.superseded_by == None)  # noqa: E711 - pydal IS NULL operator
-            ),
-            orderby=~dal.app_install_approvals.approved_at,
-        )
-        newest = approvals[0].approved_at if approvals else None
+        approvals = await install_dal(
+            (install_dal.app_install_approvals.app_id == app_id)
+            & (install_dal.app_install_approvals.superseded_by == None)  # noqa: E711 - penguin-dal IS NULL operator
+        ).select(orderby=~install_dal.app_install_approvals.approved_at)
+        newest = approvals.first().approved_at if approvals else None
         if newest is not None:
             if newest.tzinfo is None:
                 newest = newest.replace(tzinfo=UTC)
@@ -10535,12 +10889,16 @@ async def sweep_orphan_bundle_roles(
 
 
 def _build_dals() -> tuple[Any, Any]:
-    """Open the job's own DAL connection from `DATABASE_URL` and bind the tables it reads."""
+    """Open the job's own pydal connection from `DATABASE_URL` and bind the pre-existing tables it reads."""
     async_dal = AsyncDAL(os.environ["DATABASE_URL"], pool_size=1)
     dal = async_dal.dal
     bind_app_bundle_tables(dal)
-    bind_bundle_install_tables(dal)
     return async_dal, dal
+
+
+async def _build_install_dal() -> AsyncDB:
+    """Open the job's own penguin-dal connection from `DATABASE_URL` (R52) -- same DSN, separate pool."""
+    return await build_install_dal(os.environ["DATABASE_URL"], pool_size=1)
 
 
 def _build_engine() -> Any:
@@ -10553,8 +10911,9 @@ def _build_engine() -> Any:
 async def main() -> int:
     """CronJob entrypoint. Prints the denominator; a zero-examined sweep is a failure, not a pass."""
     async_dal, dal = _build_dals()
+    install_dal = await _build_install_dal()
     engine = _build_engine()
-    result = await sweep_orphan_bundle_roles(async_dal, dal, engine)
+    result = await sweep_orphan_bundle_roles(async_dal, dal, install_dal, engine)
     print(
         f"bundle role sweep: examined={result.examined} retained={result.retained} "
         f"dropped={len(result.dropped)} roles={list(result.dropped)}"
@@ -10699,23 +11058,25 @@ git add hub_api/services/marketplace_lifecycle_service.py hub_api/services/bundl
         hub_api/tests/test_bundle_role_cleanup_job.py \
         k8s/helm/waddlebot/templates/bundle-role-cleanup-cronjob.yaml k8s/helm/waddlebot/values.yaml
 git commit -m "$(cat <<'EOF'
-feat(hub-api): drop the per-bundle Postgres role at uninstall, sweep orphans after 168 h (spec Sec19 Q3)
+feat(hub-api): drop the per-bundle Postgres role at uninstall, sweep orphans after 168 h (spec Sec19 Q3, R52)
 
 uninstall_bundle gains an optional db_engine keyword (defaulting to
 None, so every existing call site is unchanged) and drops the bundle's
-data.tables role when one is given. bundle_role_cleanup_job is the
-CronJob behind it, for roles whose uninstall never ran: a bundle with
-no app_active_versions row and no approval newer than the grace window
-is dropped. The sweep reports how many bundles it examined and exits
-non-zero on a zero-examined run, so a job pointed at the wrong database
-fails loudly instead of printing "0 dropped" forever.
+data.tables role when one is given -- unaffected by R52 (app_catalog is
+a pre-existing table). bundle_role_cleanup_job is the CronJob behind
+it, for roles whose uninstall never ran: a bundle with no
+app_active_versions row and no approval newer than the grace window is
+dropped, both new tables read through penguin-dal's install_dal
+(a standalone connection this CronJob process builds itself). The
+sweep reports how many bundles it examined and exits non-zero on a
+zero-examined run, so a job pointed at the wrong database fails loudly
+instead of printing "0 dropped" forever.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
 ## Task 37: `bundle_feature_gate.py` — the PostHog flag gate on every M2b write surface
@@ -11031,9 +11392,11 @@ In `hub_api/blueprints/v1/bundle_versions.py`'s `post_version` handler, the valu
 
 ```python
     allow_prebuilt = await get_platform_setting_bool(
-        async_dal, dal, key=SETTING_ALLOW_PREBUILT, default=True
+        install_dal, key=SETTING_ALLOW_PREBUILT, default=True
     ) and await flags_enabled(FLAG_PREBUILT_BUNDLES, tenant=ctx.tenant_slug)
 ```
+
+(`get_platform_setting_bool` takes `install_dal` only, per R52/Task 23 — `platform_settings` is one of this plan's own new tables. `install_dal` is already in scope in `post_version` via Task 11's `_install_dal()` call.)
 
 Add to the same file's imports:
 ```python
@@ -11511,7 +11874,7 @@ Wrap the entire existing body of `create_version` in:
     async with bundle_span("hub.bundle.create_version", app_id=app_id, tenant_id=tenant_id):
         ...  # the existing body, indented one level
 ```
-and immediately after the `parse_bundle_manifest_v2` `except ManifestV2Error as exc:` block's `raise`, add a `record_version_upload(result=exc.reason, language="unknown", artifact_kind="unknown")` call **before** the `raise`. After the final `rows = await async_dal.select_async(...)` line, add:
+and immediately after the `parse_bundle_manifest_v2` `except ManifestV2Error as exc:` block's `raise`, add a `record_version_upload(result=exc.reason, language="unknown", artifact_kind="unknown")` call **before** the `raise`. After the final `rows = await install_dal(install_dal.app_version_uploads.id == upload_id).select()` line, add:
 ```python
         record_version_upload(result="accepted", language=manifest.language, artifact_kind=manifest.artifact)
 ```
@@ -11597,20 +11960,20 @@ EOF
 
 ---
 
-## Task 39: migration 0022 + `ingest_source_auth.py` — the per-source auth config and its validation
+## Task 39: migration 0022 + `ingest_source_auth.py` — the per-source auth config and its validation (R52: penguin-dal)
 
-**Depends on:** Task 3 (migration 0021 created `ingest_sources`), Task 4 (`bind_bundle_install_tables`), Task 6 (`bundle_secret_crypto.{encrypt, decrypt}`), Task 26 (`ingest_source_service`).
+**Depends on:** Task 3 (migration 0021 created `ingest_sources`), Task 4 (`install_dal` penguin-dal wiring + `_create_bundle_install_tables()` fixture), Task 6 (`bundle_secret_crypto.{encrypt, decrypt}`), Task 26 (`ingest_source_service`, all `install_dal`-only per R52).
 
 **Files:**
 - Create: `alembic/versions/0022_ingest_source_auth.py`
 - Create: `hub_api/services/ingest_source_auth.py`
-- Modify: `hub_api/services/schema.py` (three new fields on the `ingest_sources` binder)
+- Modify: `hub_api/tests/conftest.py` (three new columns on the `ingest_sources` table in `_create_bundle_install_tables()`)
 - Modify: `hub_api/services/ingest_source_service.py`
 - Test: `hub_api/tests/test_ingest_source_auth.py`
 
 **Interfaces:**
 - Produces, in `services/ingest_source_auth.py`: `MODE_HMAC = "hmac"`, `MODE_IP_ALLOWLIST = "ip_allowlist"`, `MODE_BEARER = "bearer"`, `MODE_BASIC = "basic"`; `SECOND_FACTOR_MODES = frozenset({MODE_IP_ALLOWLIST, MODE_BEARER, MODE_BASIC})`; `DEFAULT_ORIGIN_SUFFIXES: dict[str, tuple[str, ...]] = {"twitch": ("twitch.tv",), "kick": ("kick.com",)}`; `WEBHOOK_PLATFORM = "webhook"`; `class AuthConfigError(ValueError)` with a machine-checkable `.reason`; `def is_generic_webhook(platform: str) -> bool`; `def build_auth_config(platform: str, raw: dict[str, Any] | None, *, secret_ref: str) -> tuple[dict[str, Any], str | None]` returning `(canonical_auth_config, plaintext_secret_to_encrypt_or_None)`.
-- Produces, in `services/ingest_source_service.py`: `create_source(..., auth: dict[str, Any] | None = None)`; `async def update_source_auth(async_dal, dal, *, tenant_id: int, source_id: str, auth: dict[str, Any], actor_id: int) -> Any`; `async def resolve_auth_secret(async_dal, dal, *, tenant_id: int, source_id: str) -> str | None`.
+- Produces, in `services/ingest_source_service.py`: `create_source(..., auth: dict[str, Any] | None = None)` (signature otherwise unchanged from Task 26: `install_dal` only); `async def update_source_auth(install_dal, *, tenant_id: int, source_id: str, auth: dict[str, Any], actor_id: int) -> Any` (R52/Decision #18: the `ingest_sources.auth_*` update goes through `install_dal` (Pattern A); the `audit_log` insert is a separate, best-effort write through `install_dal.audit_log` — reachable since `install_dal.reflect()` (Task 4) sees `audit_log` too — wrapped in the same `try`/`except` this codebase already uses at every other audit-log call site, never blocking the auth-policy change on a logging failure); `async def resolve_auth_secret(install_dal, *, tenant_id: int, source_id: str) -> str | None`.
 - Consumes: `services.bundle_secret_crypto.{encrypt, decrypt}` (Task 6).
 
 **The canonical wire shape — must match plan M5, reproduced in full so no later task re-derives it:**
@@ -11648,6 +12011,7 @@ from typing import Any
 import pytest
 
 from services.bundle_secret_crypto import decrypt
+from services.bundle_install_dal import raw_sql_rows
 from services.errors import ApiError
 from services.ingest_source_auth import AuthConfigError, build_auth_config, is_generic_webhook
 from services.ingest_source_service import (
@@ -11784,26 +12148,23 @@ def test_a_malformed_origin_suffix_is_refused(bad: str) -> None:
     assert excinfo.value.reason == "invalid_origin_suffix"
 
 
-async def test_create_source_refuses_a_generic_source_with_no_second_factor(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_create_source_refuses_a_generic_source_with_no_second_factor(install_dal: Any) -> None:
     with pytest.raises(ApiError) as excinfo:
         await create_source(
-            async_dal, async_dal.dal, tenant_id=1, community_id=None, platform="custom:acme",
+            install_dal, tenant_id=1, community_id=None, platform="custom:acme",
             source_id="wh-1", label="Acme webhook", mapping=None, auth={"modes": ["hmac"]},
         )
     assert excinfo.value.status_code == 422
     assert excinfo.value.code == "auth_second_factor_required"
 
 
-async def test_create_source_stores_the_canonical_auth_and_encrypts_the_bearer(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
+async def test_create_source_stores_the_canonical_auth_and_encrypts_the_bearer(install_dal: Any) -> None:
     row, _hmac_secret = await create_source(
-        async_dal, dal, tenant_id=1, community_id=None, platform="custom:acme",
+        install_dal, tenant_id=1, community_id=None, platform="custom:acme",
         source_id="wh-1", label="Acme webhook", mapping=None,
         auth={"modes": ["bearer"], "bearer_token": "t" * 40},
     )
-    stored = dal(dal.ingest_sources.id == row.id).select().first()
+    stored = (await install_dal(install_dal.ingest_sources.id == row.id).select()).first()
     assert stored.auth["modes"] == ["hmac", "bearer"]
     assert stored.auth["secret_ref"] == "src:wh-1"
     assert "t" * 40 not in str(stored.auth)
@@ -11811,72 +12172,80 @@ async def test_create_source_stores_the_canonical_auth_and_encrypts_the_bearer(b
     assert decrypt(stored.auth_secret_ciphertext, stored.auth_secret_iv) == "t" * 40
 
 
-async def test_list_sources_never_echoes_the_bearer_token(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_list_sources_never_echoes_the_bearer_token(install_dal: Any) -> None:
     await create_source(
-        async_dal, async_dal.dal, tenant_id=1, community_id=None, platform="custom:acme",
+        install_dal, tenant_id=1, community_id=None, platform="custom:acme",
         source_id="wh-1", label="Acme webhook", mapping=None,
         auth={"modes": ["bearer"], "bearer_token": "t" * 40},
     )
-    rows = await list_sources(async_dal, async_dal.dal, tenant_id=1)
+    rows = await list_sources(install_dal, tenant_id=1)
     serialised = str([dict(r.as_dict()) for r in rows])
     assert "t" * 40 not in serialised
     assert "auth_secret_ciphertext" not in serialised or "t" * 40 not in serialised
 
 
-async def test_resolve_auth_secret_round_trips(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_resolve_auth_secret_round_trips(install_dal: Any) -> None:
     await create_source(
-        async_dal, async_dal.dal, tenant_id=1, community_id=None, platform="custom:acme",
+        install_dal, tenant_id=1, community_id=None, platform="custom:acme",
         source_id="wh-1", label="Acme webhook", mapping=None,
         auth={"modes": ["bearer"], "bearer_token": "t" * 40},
     )
-    assert await resolve_auth_secret(async_dal, async_dal.dal, tenant_id=1, source_id="wh-1") == "t" * 40
+    assert await resolve_auth_secret(install_dal, tenant_id=1, source_id="wh-1") == "t" * 40
 
 
-async def test_update_source_auth_rewrites_the_config_and_audits_the_mode_change(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
+async def test_update_source_auth_rewrites_the_config_and_audits_the_mode_change(install_dal: Any) -> None:
     await create_source(
-        async_dal, dal, tenant_id=1, community_id=None, platform="custom:acme",
+        install_dal, tenant_id=1, community_id=None, platform="custom:acme",
         source_id="wh-1", label="Acme webhook", mapping=None,
         auth={"modes": ["bearer"], "bearer_token": "t" * 40},
     )
     await update_source_auth(
-        async_dal, dal, tenant_id=1, source_id="wh-1",
+        install_dal, tenant_id=1, source_id="wh-1",
         auth={"modes": ["ip_allowlist"], "cidrs": ["203.0.113.0/24"]}, actor_id=1,
     )
-    stored = dal(dal.ingest_sources.source_id == "wh-1").select().first()
+    stored = (await install_dal(install_dal.ingest_sources.source_id == "wh-1").select()).first()
     assert stored.auth["modes"] == ["hmac", "ip_allowlist"]
     assert stored.auth_secret_ciphertext is None
 
-    audit_row = dal(dal.audit_log.action == "ingest_source_auth_changed").select().first()
+    audit_rows = await raw_sql_rows(
+        install_dal, "SELECT details FROM audit_log WHERE action = :a", {"a": "ingest_source_auth_changed"}
+    )
+    audit_row = audit_rows.first()
     assert audit_row is not None
-    assert audit_row.details["old_modes"] == ["hmac", "bearer"]
-    assert audit_row.details["new_modes"] == ["hmac", "ip_allowlist"]
-    assert "bearer_token" not in str(audit_row.details)
+    # install_dal.audit_log.async_insert() (Pattern A) serialised `details`
+    # as native JSON via SQLAlchemy's own type coercion, but a raw text()
+    # SELECT (raw_sql_rows) returns the driver's own JSON representation
+    # -- a JSON *string* on sqlite, an already-decoded dict on some
+    # Postgres driver configurations -- so this assertion normalises via
+    # json.loads() only when needed.
+    import json
+
+    details = audit_row["details"]
+    if isinstance(details, str):
+        details = json.loads(details)
+    assert details["old_modes"] == ["hmac", "bearer"]
+    assert details["new_modes"] == ["hmac", "ip_allowlist"]
+    assert "bearer_token" not in str(details)
 
 
-async def test_update_source_auth_refuses_removing_the_last_second_factor(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_update_source_auth_refuses_removing_the_last_second_factor(install_dal: Any) -> None:
     await create_source(
-        async_dal, async_dal.dal, tenant_id=1, community_id=None, platform="custom:acme",
+        install_dal, tenant_id=1, community_id=None, platform="custom:acme",
         source_id="wh-1", label="Acme webhook", mapping=None,
         auth={"modes": ["bearer"], "bearer_token": "t" * 40},
     )
     with pytest.raises(ApiError) as excinfo:
         await update_source_auth(
-            async_dal, async_dal.dal, tenant_id=1, source_id="wh-1", auth={"modes": ["hmac"]}, actor_id=1
+            install_dal, tenant_id=1, source_id="wh-1", auth={"modes": ["hmac"]}, actor_id=1
         )
     assert excinfo.value.status_code == 422
     assert excinfo.value.code == "auth_second_factor_required"
 
 
-async def test_update_source_auth_404s_for_an_unknown_source(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_update_source_auth_404s_for_an_unknown_source(install_dal: Any) -> None:
     with pytest.raises(ApiError) as excinfo:
         await update_source_auth(
-            async_dal, async_dal.dal, tenant_id=1, source_id="nope",
+            install_dal, tenant_id=1, source_id="nope",
             auth={"modes": ["ip_allowlist"], "cidrs": ["203.0.113.0/24"]}, actor_id=1,
         )
     assert excinfo.value.status_code == 404
@@ -11900,6 +12269,8 @@ origin policy (origin_suffixes + origin_cidrs) for Twitch and Kick.
 Bearer tokens and Basic password hashes live in
 auth_secret_ciphertext/auth_secret_iv, AES-256-GCM, same helper as
 every other secret in this service -- `auth` itself is safe to serve.
+This migration is unaffected by R52 (penguin-dal is a runtime-query
+library; DDL is Alembic/raw SQL either way, per Global Constraints).
 
 Existing rows are backfilled with the platform-appropriate default so
 no row is left with an empty policy: twitch -> {"twitch.tv"},
@@ -11970,14 +12341,51 @@ def downgrade() -> None:
     )
 ```
 
-- [ ] **Step 4: Extend the pydal binder**
+- [ ] **Step 4: Extend the `install_dal` test fixture's `ingest_sources` table**
 
-In `hub_api/services/schema.py`'s `bind_bundle_install_tables`, add these three `Field(...)` lines to the existing `dal.define_table("ingest_sources", ...)` call, immediately after the `Field("mapping", "json")` line:
+Task 4 defined `ingest_sources` inside `_create_bundle_install_tables()` in `hub_api/tests/conftest.py` ending with `Column("updated_at", DateTime),` immediately before its closing `)`:
 
 ```python
-        Field("auth", "json", default={}),
-        Field("auth_secret_ciphertext", "blob"),
-        Field("auth_secret_iv", "blob"),
+    Table(
+        "ingest_sources",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("tenant_id", Integer, nullable=False),
+        Column("community_id", Integer),
+        Column("platform", String(50), nullable=False),
+        Column("source_id", String(255), nullable=False),
+        Column("label", String(255), nullable=False),
+        Column("secret_ciphertext", LargeBinary),
+        Column("secret_iv", LargeBinary),
+        Column("mapping", JSON),
+        Column("enabled", Boolean, server_default=sa_true()),
+        Column("created_at", DateTime),
+        Column("updated_at", DateTime),
+    )
+```
+
+Replace it with (three new columns added before the closing parenthesis):
+
+```python
+    Table(
+        "ingest_sources",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("tenant_id", Integer, nullable=False),
+        Column("community_id", Integer),
+        Column("platform", String(50), nullable=False),
+        Column("source_id", String(255), nullable=False),
+        Column("label", String(255), nullable=False),
+        Column("secret_ciphertext", LargeBinary),
+        Column("secret_iv", LargeBinary),
+        Column("mapping", JSON),
+        Column("enabled", Boolean, server_default=sa_true()),
+        Column("created_at", DateTime),
+        Column("updated_at", DateTime),
+        Column("auth", JSON, server_default="{}"),
+        Column("auth_secret_ciphertext", LargeBinary),
+        Column("auth_secret_iv", LargeBinary),
+    )
 ```
 
 - [ ] **Step 5: Write `services/ingest_source_auth.py`**
@@ -11997,7 +12405,8 @@ This module produces the canonical `auth` dict stored on the row and
 published verbatim by `GET /api/v1/distribution/sources` (must match
 plan M5). It never stores or returns a secret: `build_auth_config`
 hands the plaintext back to its caller exactly once, for the caller to
-encrypt, and the dict it returns is safe to serve.
+encrypt, and the dict it returns is safe to serve. Pure validation
+logic -- no database access, unaffected by R52.
 """
 
 from __future__ import annotations
@@ -12157,7 +12566,7 @@ def build_auth_config(
 
 - [ ] **Step 6: Wire it into `services/ingest_source_service.py`**
 
-Add these imports:
+Add these imports (`AsyncDB` was already imported by Task 26):
 
 ```python
 from services.bundle_secret_crypto import decrypt, encrypt
@@ -12165,7 +12574,7 @@ from services.errors import ApiError, not_found
 from services.ingest_source_auth import AuthConfigError, build_auth_config
 ```
 
-Add an `auth: dict[str, Any] | None = None` keyword-only parameter to `create_source` and, immediately before the row insert, this block:
+Add an `auth: dict[str, Any] | None = None` keyword-only parameter to `create_source` (Task 26's version) and, immediately before the row insert, this block:
 
 ```python
     try:
@@ -12175,25 +12584,37 @@ Add an `auth: dict[str, Any] | None = None` keyword-only parameter to `create_so
     auth_ciphertext, auth_iv = encrypt(auth_plaintext) if auth_plaintext is not None else (None, None)
 ```
 
-then add `auth=auth_config, auth_secret_ciphertext=auth_ciphertext, auth_secret_iv=auth_iv,` to the existing `insert_async(dal.ingest_sources, ...)` call. Nothing else in `create_source` changes.
+then add `auth=auth_config, auth_secret_ciphertext=auth_ciphertext, auth_secret_iv=auth_iv,` to the existing `install_dal.ingest_sources.async_insert(...)` call. Nothing else in `create_source` changes.
 
 Append these two functions at the end of the module:
 
 ```python
 async def update_source_auth(
-    async_dal: Any, dal: Any, *, tenant_id: int, source_id: str, auth: dict[str, Any], actor_id: int
+    install_dal: AsyncDB, *, tenant_id: int, source_id: str, auth: dict[str, Any], actor_id: int
 ) -> Any:
     """Replace one source's auth policy, rotate its auth secret, and audit the mode change.
 
-    The audit row records the old and new `modes` lists and nothing
-    else -- never a token, never a password, never a hash.
+    R52: the `ingest_sources` update goes through `install_dal` (Pattern
+    A -- `AsyncQuerySet.update()` builds a real SQLAlchemy Core
+    statement against the reflected table, so the JSON `auth` column
+    serializes correctly on both the sqlite test fixture and real
+    Postgres `JSONB`). The `audit_log` insert is a **separate,
+    best-effort** write, wrapped in the same `try`/`except` this
+    codebase already uses at every other audit-log call site (Decision
+    #18) -- an audit-logging failure must never roll back or block the
+    auth-policy change that already succeeded. It still goes through
+    `install_dal` rather than the pre-existing pydal `dal`, since this
+    is a new call site this plan's own code adds (R52). The audit row
+    records the old and new `modes` lists and nothing else -- never a
+    token, never a password, never a hash.
     """
-    rows = await async_dal.select_async(
-        dal((dal.ingest_sources.tenant_id == tenant_id) & (dal.ingest_sources.source_id == source_id))
-    )
-    if not rows:
+    rows = await install_dal(
+        (install_dal.ingest_sources.tenant_id == tenant_id)
+        & (install_dal.ingest_sources.source_id == source_id)
+    ).select()
+    existing = rows.first()
+    if existing is None:
         raise not_found(f"ingest source {source_id!r} not found")
-    existing = rows[0]
 
     try:
         auth_config, auth_plaintext = build_auth_config(
@@ -12205,35 +12626,42 @@ async def update_source_auth(
 
     old_modes = list((existing.auth or {}).get("modes", []))
     now = datetime.now(UTC)
-    await async_dal.update_async(
-        dal.ingest_sources.id == existing.id,
-        auth=auth_config, auth_secret_ciphertext=ciphertext, auth_secret_iv=iv, updated_at=now,
+    await install_dal(install_dal.ingest_sources.id == existing.id).update(
+        auth=auth_config,
+        auth_secret_ciphertext=ciphertext,
+        auth_secret_iv=iv,
+        updated_at=now,
     )
     try:
-        await async_dal.insert_async(
-            dal.audit_log, user_id=actor_id, action="ingest_source_auth_changed",
-            target_type="ingest_source", target_id=source_id,
+        await install_dal.audit_log.async_insert(
+            user_id=actor_id,
+            action="ingest_source_auth_changed",
+            target_type="ingest_source",
+            target_id=source_id,
             details={
-                "tenant_id": tenant_id, "platform": existing.platform,
-                "old_modes": old_modes, "new_modes": auth_config["modes"],
+                "tenant_id": tenant_id,
+                "platform": existing.platform,
+                "old_modes": old_modes,
+                "new_modes": auth_config["modes"],
             },
             created_at=now,
         )
     except Exception:  # noqa: BLE001, S110 -- audit logging failure must not break the main flow
         pass
-    async_dal.dal.commit()
-    updated = await async_dal.select_async(dal(dal.ingest_sources.id == existing.id))
-    return updated[0]
+    updated = await install_dal(install_dal.ingest_sources.id == existing.id).select()
+    return updated.first()
 
 
-async def resolve_auth_secret(async_dal: Any, dal: Any, *, tenant_id: int, source_id: str) -> str | None:
+async def resolve_auth_secret(install_dal: AsyncDB, *, tenant_id: int, source_id: str) -> str | None:
     """Decrypt the source's bearer token or Basic password hash. `None` when no secret is set."""
-    rows = await async_dal.select_async(
-        dal((dal.ingest_sources.tenant_id == tenant_id) & (dal.ingest_sources.source_id == source_id))
-    )
-    if not rows or rows[0].auth_secret_ciphertext is None:
+    rows = await install_dal(
+        (install_dal.ingest_sources.tenant_id == tenant_id)
+        & (install_dal.ingest_sources.source_id == source_id)
+    ).select()
+    first = rows.first()
+    if first is None or first.auth_secret_ciphertext is None:
         return None
-    return decrypt(rows[0].auth_secret_ciphertext, rows[0].auth_secret_iv)
+    return decrypt(first.auth_secret_ciphertext, first.auth_secret_iv)
 ```
 
 If `datetime`/`UTC` are not already imported in this module, add `from datetime import UTC, datetime`.
@@ -12271,10 +12699,10 @@ Expected: every previously-passing test still passes. Non-generic sources (`twit
 
 ```bash
 git add alembic/versions/0022_ingest_source_auth.py hub_api/services/ingest_source_auth.py \
-        hub_api/services/schema.py hub_api/services/ingest_source_service.py \
+        hub_api/tests/conftest.py hub_api/services/ingest_source_service.py \
         hub_api/tests/test_ingest_source_auth.py
 git commit -m "$(cat <<'EOF'
-db(hub-api): per-source auth config on ingest_sources -- second factor, origin policy, encrypted secret
+db(hub-api): per-source auth config on ingest_sources -- second factor, origin policy, encrypted secret (R52)
 
 The HMAC secret authenticates the payload, not the caller. Generic
 webhook sources (custom:<name>, webhook) must now declare at least one
@@ -12288,7 +12716,10 @@ Bearer tokens and Basic password hashes are AES-256-GCM at rest in
 auth_secret_ciphertext/auth_secret_iv and never appear in the auth
 document, any response, or the audit row -- the wire carries secret_ref
 only. Every auth change writes audit_log ingest_source_auth_changed
-with the old and new mode lists.
+with the old and new mode lists, as a separate best-effort write
+through install_dal (Decision #18, R52) -- the same try/except-around-
+a-single-insert convention this codebase already uses at every other
+audit-log call site, so a logging failure never blocks the auth change.
 
 Migration 0022 backfills existing rows with the platform-appropriate
 default, so a deploy never silently breaks a running webhook source.
@@ -12298,12 +12729,11 @@ Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 40: publish `auth` — distribution `/sources`, the tenant config view, the consent view, and the auth `PUT`
+## Task 40: publish `auth` — distribution `/sources`, the tenant config view, the consent view, and the auth `PUT` (R52: penguin-dal)
 
-**Depends on:** Task 39 (`ingest_source_auth`, `update_source_auth`, the `auth` column), Task 34 (`list_sources_for_distribution` + `GET /api/v1/distribution/sources`), Task 27 (`blueprints/v1/ingest_sources.py`), Task 22 (`blueprints/v1/bundle_approvals.py`), Task 37 (`require_flags`).
+**Depends on:** Task 39 (`ingest_source_auth`, `update_source_auth`, the `auth` column, `install_dal`-only per R52), Task 34 (`list_sources_for_distribution` + `GET /api/v1/distribution/sources`, `install_dal`+existing-`communities` per R52), Task 27 (`blueprints/v1/ingest_sources.py`, `_install_dal()` helper), Task 22 (`blueprints/v1/bundle_approvals.py`, `_install_dal()` helper), Task 37 (`require_flags`).
 
 **Files:**
 - Modify: `hub_api/services/ingest_source_service.py`
@@ -12322,7 +12752,7 @@ EOF
 | `PUT` | `/api/v1/tenant/{slug}/ingest-sources/{sourceId}/auth` | `tenant:admin` + `require_flags(FLAG_RUST_DATA_PLANE, FLAG_GENERIC_INTAKE)` | `{"auth": {...}}` | `200 {"success": true, "modes": [...]}` |
 | `GET` | `/api/v1/apps/{app_id}/versions/{version}/permissions` | `platform:admin` | new optional query param `communityId` (int) | response gains `sourceAuth` (the consent view) |
 
-- Produces: `DistributionSource.auth: dict[str, Any]`; `DistributionSourceDTO.auth`; `IngestSourceAuthRequest(auth: dict[str, Any])`; `PermissionSummaryResponse.sourceAuth: list[dict[str, Any]]`; `async def source_auth_for_consent(async_dal, dal, *, tenant_id: int, community_id: int | None, consumes_platforms: set[str]) -> list[dict[str, Any]]`.
+- Produces: `DistributionSource.auth: dict[str, Any]`; `DistributionSourceDTO.auth`; `IngestSourceAuthRequest(auth: dict[str, Any])`; `PermissionSummaryResponse.sourceAuth: list[dict[str, Any]]`; `async def source_auth_for_consent(install_dal, *, tenant_id: int, community_id: int | None, consumes_platforms: set[str]) -> list[dict[str, Any]]` (`install_dal`-only per R52 — `ingest_sources` is this plan's own new table).
 - Consumes: `services.ingest_source_service.{list_sources_for_distribution, update_source_auth}` (Tasks 34, 39); `services.bundle_feature_gate.{FLAG_GENERIC_INTAKE, FLAG_RUST_DATA_PLANE, require_flags}` (Task 37).
 
 **`sourceAuth` is deliberately outside the hashed summary.** `permission_hash` is computed over `summary` only (Task 18's `canonical_json(summary)`), and this task does not change that. Rotating a bearer token or widening a CIDR list must not silently invalidate every existing approval for every bundle that happens to read that platform — the operator sees the configured mode on the consent screen because it is a sibling field of `summary` in the response DTO, not a member of it. A test asserts the hash is byte-identical before and after an auth change.
@@ -12335,12 +12765,14 @@ EOF
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from quart import Quart
 
+from services.bundle_install_dal import raw_sql_rows
 from services.ingest_source_service import create_source
 from tests.conftest import TENANT_SLUG, make_user_token
 
@@ -12360,33 +12792,36 @@ def _flags_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("services.bundle_feature_gate.feature_enabled", _always_on)
 
 
-async def _seed(bundle_install_db: Any) -> None:
+async def _seed(install_dal: Any) -> None:
     await create_source(
-        bundle_install_db, bundle_install_db.dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         platform="custom:acme", source_id="wh-1", label="Acme webhook", mapping=None,
         auth={"modes": ["bearer"], "bearer_token": _BEARER},
     )
     await create_source(
-        bundle_install_db, bundle_install_db.dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         platform="twitch", source_id="tw-channelA", label="Twitch #channelA", mapping=None, auth=None,
     )
 
 
-def _app(bundle_install_db: Any, module_path: str) -> Quart:
+def _app(bundle_install_db: Any, install_dal: Any, module_path: str) -> Quart:
     import importlib
 
     module = importlib.import_module(module_path)
     app = Quart(__name__)
     app.config["async_dal"] = bundle_install_db
     app.config["dal"] = bundle_install_db.dal
+    app.config["install_dal"] = install_dal
     for bp in module.BLUEPRINTS:
         app.register_blueprint(bp)
     return app
 
 
-async def test_distribution_sources_publish_the_exact_m5_auth_shape(bundle_install_db: Any) -> None:
-    await _seed(bundle_install_db)
-    app = _app(bundle_install_db, "blueprints.v1.distribution")
+async def test_distribution_sources_publish_the_exact_m5_auth_shape(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
+    await _seed(install_dal)
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.distribution")
     token = make_user_token(user_id=1, scope="distribution:read", tenant=TENANT_SLUG)
     response = await app.test_client().get(
         "/api/v1/distribution/sources", headers={"Authorization": f"Bearer {token}"}
@@ -12402,9 +12837,11 @@ async def test_distribution_sources_publish_the_exact_m5_auth_shape(bundle_insta
     assert by_id["tw-channelA"]["auth"]["origin_suffixes"] == ["twitch.tv"]
 
 
-async def test_distribution_sources_never_echo_the_bearer_token(bundle_install_db: Any) -> None:
-    await _seed(bundle_install_db)
-    app = _app(bundle_install_db, "blueprints.v1.distribution")
+async def test_distribution_sources_never_echo_the_bearer_token(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
+    await _seed(install_dal)
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.distribution")
     token = make_user_token(user_id=1, scope="distribution:read", tenant=TENANT_SLUG)
     response = await app.test_client().get(
         "/api/v1/distribution/sources", headers={"Authorization": f"Bearer {token}"}
@@ -12412,9 +12849,11 @@ async def test_distribution_sources_never_echo_the_bearer_token(bundle_install_d
     assert _BEARER not in (await response.get_data()).decode()
 
 
-async def test_distribution_sources_etag_changes_when_auth_changes(bundle_install_db: Any) -> None:
-    await _seed(bundle_install_db)
-    app = _app(bundle_install_db, "blueprints.v1.distribution")
+async def test_distribution_sources_etag_changes_when_auth_changes(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
+    await _seed(install_dal)
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.distribution")
     token = make_user_token(user_id=1, scope="distribution:read", tenant=TENANT_SLUG)
     client = app.test_client()
     before = await client.get("/api/v1/distribution/sources", headers={"Authorization": f"Bearer {token}"})
@@ -12422,16 +12861,18 @@ async def test_distribution_sources_etag_changes_when_auth_changes(bundle_instal
     from services.ingest_source_service import update_source_auth
 
     await update_source_auth(
-        bundle_install_db, bundle_install_db.dal, tenant_id=1, source_id="wh-1",
+        install_dal, tenant_id=1, source_id="wh-1",
         auth={"modes": ["ip_allowlist"], "cidrs": ["203.0.113.0/24"]}, actor_id=1,
     )
     after = await client.get("/api/v1/distribution/sources", headers={"Authorization": f"Bearer {token}"})
     assert before.headers["ETag"] != after.headers["ETag"]
 
 
-async def test_tenant_config_view_shows_the_configured_mode(bundle_install_db: Any) -> None:
-    await _seed(bundle_install_db)
-    app = _app(bundle_install_db, "blueprints.v1.ingest_sources")
+async def test_tenant_config_view_shows_the_configured_mode(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
+    await _seed(install_dal)
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.ingest_sources")
     token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
     response = await app.test_client().get(
         f"/api/v1/tenant/{TENANT_SLUG}/ingest-sources", headers={"Authorization": f"Bearer {token}"}
@@ -12442,8 +12883,10 @@ async def test_tenant_config_view_shows_the_configured_mode(bundle_install_db: A
     assert _BEARER not in (await response.get_data()).decode()
 
 
-async def test_post_source_rejects_a_generic_source_without_a_second_factor(bundle_install_db: Any) -> None:
-    app = _app(bundle_install_db, "blueprints.v1.ingest_sources")
+async def test_post_source_rejects_a_generic_source_without_a_second_factor(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.ingest_sources")
     token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
     response = await app.test_client().post(
         f"/api/v1/tenant/{TENANT_SLUG}/ingest-sources",
@@ -12465,10 +12908,10 @@ async def test_post_source_rejects_a_generic_source_without_a_second_factor(bund
     ],
 )
 async def test_put_auth_surfaces_every_validation_failure_as_422(
-    bundle_install_db: Any, auth: dict[str, Any], code: str
+    bundle_install_db: Any, install_dal: Any, auth: dict[str, Any], code: str
 ) -> None:
-    await _seed(bundle_install_db)
-    app = _app(bundle_install_db, "blueprints.v1.ingest_sources")
+    await _seed(install_dal)
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.ingest_sources")
     token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
     response = await app.test_client().put(
         f"/api/v1/tenant/{TENANT_SLUG}/ingest-sources/wh-1/auth",
@@ -12478,9 +12921,9 @@ async def test_put_auth_surfaces_every_validation_failure_as_422(
     assert (await response.get_json())["error"]["code"] == code
 
 
-async def test_put_auth_requires_tenant_admin(bundle_install_db: Any) -> None:
-    await _seed(bundle_install_db)
-    app = _app(bundle_install_db, "blueprints.v1.ingest_sources")
+async def test_put_auth_requires_tenant_admin(bundle_install_db: Any, install_dal: Any) -> None:
+    await _seed(install_dal)
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.ingest_sources")
     token = make_user_token(user_id=1, scope="", tenant=TENANT_SLUG)
     response = await app.test_client().put(
         f"/api/v1/tenant/{TENANT_SLUG}/ingest-sources/wh-1/auth",
@@ -12490,9 +12933,9 @@ async def test_put_auth_requires_tenant_admin(bundle_install_db: Any) -> None:
     assert response.status_code == 403
 
 
-async def test_put_auth_is_flag_gated(bundle_install_db: Any) -> None:
-    await _seed(bundle_install_db)
-    app = _app(bundle_install_db, "blueprints.v1.ingest_sources")
+async def test_put_auth_is_flag_gated(bundle_install_db: Any, install_dal: Any) -> None:
+    await _seed(install_dal)
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.ingest_sources")
     token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
     with patch("services.bundle_feature_gate.feature_enabled", new_callable=AsyncMock) as mock_flag:
         mock_flag.return_value = False
@@ -12505,10 +12948,9 @@ async def test_put_auth_is_flag_gated(bundle_install_db: Any) -> None:
     assert (await response.get_json())["error"]["code"] == "feature_disabled"
 
 
-async def test_put_auth_happy_path_writes_the_audit_row(bundle_install_db: Any) -> None:
-    await _seed(bundle_install_db)
-    dal = bundle_install_db.dal
-    app = _app(bundle_install_db, "blueprints.v1.ingest_sources")
+async def test_put_auth_happy_path_writes_the_audit_row(bundle_install_db: Any, install_dal: Any) -> None:
+    await _seed(install_dal)
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.ingest_sources")
     token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
     response = await app.test_client().put(
         f"/api/v1/tenant/{TENANT_SLUG}/ingest-sources/wh-1/auth",
@@ -12518,16 +12960,24 @@ async def test_put_auth_happy_path_writes_the_audit_row(bundle_install_db: Any) 
     assert response.status_code == 200
     assert (await response.get_json())["modes"] == ["hmac", "ip_allowlist"]
 
-    audit_row = dal(dal.audit_log.action == "ingest_source_auth_changed").select().first()
+    audit_rows = await raw_sql_rows(
+        install_dal, "SELECT details FROM audit_log WHERE action = :a", {"a": "ingest_source_auth_changed"}
+    )
+    audit_row = audit_rows.first()
     assert audit_row is not None
-    assert audit_row.details["new_modes"] == ["hmac", "ip_allowlist"]
+    import json
+
+    details = audit_row["details"]
+    if isinstance(details, str):
+        details = json.loads(details)
+    assert details["new_modes"] == ["hmac", "ip_allowlist"]
 
 
 async def test_consent_view_shows_the_mode_without_changing_the_permission_hash(
-    bundle_install_db: Any,
+    bundle_install_db: Any, install_dal: Any
 ) -> None:
-    await _seed(bundle_install_db)
-    dal = bundle_install_db.dal
+    await _seed(install_dal)
+    now = datetime.now(UTC)
     manifest = {
         "schema_version": 2, "app_id": "waddles.socials.music.default", "name": "Music Station",
         "version": "3.0.1", "feature": "waddles.socials.music", "module": "socials",
@@ -12535,13 +12985,13 @@ async def test_consent_view_shows_the_mode_without_changing_the_permission_hash(
         "stages": {"process": {"entry": "x:y",
                                "consumes": [{"platform": "twitch", "event_types": ["chat.message"]}]}},
     }
-    dal.app_version_uploads.insert(
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
         artifact_kind="source", language="python", status="PUBLISHED", manifest_json=manifest,
+        created_at=now, updated_at=now,
     )
-    dal.commit()
 
-    app = _app(bundle_install_db, "blueprints.v1.bundle_approvals")
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.bundle_approvals")
     token = make_user_token(user_id=1, scope="platform:admin", tenant=TENANT_SLUG)
     client = app.test_client()
     before = await client.get(
@@ -12556,7 +13006,7 @@ async def test_consent_view_shows_the_mode_without_changing_the_permission_hash(
     from services.ingest_source_service import update_source_auth
 
     await update_source_auth(
-        bundle_install_db, dal, tenant_id=1, source_id="tw-channelA",
+        install_dal, tenant_id=1, source_id="tw-channelA",
         auth={"origin_suffixes": ["twitch.tv", "eventsub.twitch.tv"]}, actor_id=1,
     )
     after = await client.get(
@@ -12570,10 +13020,10 @@ async def test_consent_view_shows_the_mode_without_changing_the_permission_hash(
     ]
 
 
-async def test_consent_view_never_echoes_a_secret(bundle_install_db: Any) -> None:
-    await _seed(bundle_install_db)
-    dal = bundle_install_db.dal
-    dal.app_version_uploads.insert(
+async def test_consent_view_never_echoes_a_secret(bundle_install_db: Any, install_dal: Any) -> None:
+    await _seed(install_dal)
+    now = datetime.now(UTC)
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
         artifact_kind="source", language="python", status="PUBLISHED",
         manifest_json={
@@ -12583,9 +13033,9 @@ async def test_consent_view_never_echoes_a_secret(bundle_install_db: Any) -> Non
             "stages": {"process": {"entry": "x:y",
                                    "consumes": [{"platform": "custom:acme", "event_types": ["chat.message"]}]}},
         },
+        created_at=now, updated_at=now,
     )
-    dal.commit()
-    app = _app(bundle_install_db, "blueprints.v1.bundle_approvals")
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.bundle_approvals")
     token = make_user_token(user_id=1, scope="platform:admin", tenant=TENANT_SLUG)
     response = await app.test_client().get(
         "/api/v1/apps/waddles.socials.music.default/versions/3.0.1/permissions",
@@ -12607,13 +13057,13 @@ In `hub_api/services/ingest_source_service.py`, add `auth: dict[str, Any]` as th
     auth: dict[str, Any]
 ```
 
-and add `auth=dict(row.auth or {}),` to the `DistributionSource(...)` construction inside `list_sources_for_distribution`.
+and add `auth=dict(row.auth or {}),` to the `DistributionSource(...)` construction inside `list_sources_for_distribution` (Task 34's version, which iterates `rows` from `install_dal(query).select()`).
 
 Append this function to the same module:
 
 ```python
 async def source_auth_for_consent(
-    async_dal: Any, dal: Any, *, tenant_id: int, community_id: int | None, consumes_platforms: set[str]
+    install_dal: AsyncDB, *, tenant_id: int, community_id: int | None, consumes_platforms: set[str]
 ) -> list[dict[str, Any]]:
     """The configured auth mode of every source a bundle's `consumes` rules would reach.
 
@@ -12621,14 +13071,15 @@ async def source_auth_for_consent(
     sees *how a caller is authenticated*, not only *what is read*.
     Deliberately NOT part of the hashed permission summary: rotating a
     token or widening a CIDR must never invalidate an existing
-    approval.
+    approval. R52: `ingest_sources` is this plan's own new table,
+    queried through `install_dal` only.
     """
-    query = dal.ingest_sources.tenant_id == tenant_id
+    query = install_dal.ingest_sources.tenant_id == tenant_id
     if community_id is not None:
-        query &= (dal.ingest_sources.community_id == community_id) | (
-            dal.ingest_sources.community_id == None  # noqa: E711 - pydal IS NULL operator
+        query &= (install_dal.ingest_sources.community_id == community_id) | (
+            install_dal.ingest_sources.community_id == None  # noqa: E711 - penguin-dal IS NULL operator
         )
-    rows = await async_dal.select_async(dal(query), orderby=dal.ingest_sources.source_id)
+    rows = await install_dal(query).select(orderby=install_dal.ingest_sources.source_id)
     wildcard = "*" in consumes_platforms
     entries: list[dict[str, Any]] = []
     for row in rows:
@@ -12669,16 +13120,13 @@ pass `auth=s.auth,` in the `DistributionSourceDTO(...)` construction, and add `"
 In `hub_api/blueprints/v1/ingest_sources.py`:
 
 ```python
-from typing import Any
-
 from services.bundle_feature_gate import FLAG_GENERIC_INTAKE, FLAG_RUST_DATA_PLANE, require_flags
-from services.current_user import get_current_user_id
 from services.ingest_source_service import update_source_auth
 ```
 
 Add `auth: dict[str, Any] | None = None` as the last field of the existing `CreateSourceRequest` DTO, and pass `auth=data.auth` through to `create_source(...)`.
 
-Add `auth: dict[str, Any] = field(default_factory=dict)` to the source DTO the `GET` handler returns, populated from `row.auth or {}`. The `GET` handler must never include `auth_secret_ciphertext`/`auth_secret_iv` — it builds a DTO per row, so simply do not add those fields.
+Add `auth: dict[str, Any] = field(default_factory=dict)` to the `SourceDTO` the `GET` handler returns, populated from `row.auth or {}`. The `GET` handler must never include `auth_secret_ciphertext`/`auth_secret_iv` — it builds a DTO per row, so simply do not add those fields.
 
 Append this request DTO and route immediately before the file's final `BLUEPRINTS: list[Blueprint] = [...]` line:
 
@@ -12690,32 +13138,37 @@ class IngestSourceAuthRequest:
     auth: dict[str, Any]
 
 
-@ingest_sources_bp.route("/<slug>/ingest-sources/<source_id>/auth", methods=["PUT"])
+@ingest_sources_bp.route("/<source_id>/auth", methods=["PUT"])
 @tenant_middleware  # type: ignore[untyped-decorator]
 @require_scope("tenant:admin")  # type: ignore[untyped-decorator]
 @require_flags(FLAG_RUST_DATA_PLANE, FLAG_GENERIC_INTAKE)
 @validate_request(IngestSourceAuthRequest)
 async def put_source_auth(
-    data: IngestSourceAuthRequest, slug: str, source_id: str
+    data: IngestSourceAuthRequest, tenant_slug: str, source_id: str
 ) -> tuple[dict[str, object], int]:
     """Replace one source's caller-authentication policy and audit the mode change.
 
-    `slug` is a routing segment only -- the tenant this writes to comes
-    from the caller's own JWT via `get_tenant_context`, never the path
-    (security.md Tenant Isolation).
+    `tenant_slug` is a routing segment only (from the blueprint's
+    `url_prefix`) -- the tenant this writes to comes from the caller's
+    own JWT via `get_tenant_context`, never the path (security.md
+    Tenant Isolation). R52: `install_dal`-only, `ingest_sources` is
+    this plan's own new table.
     """
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     ctx = get_tenant_context(request)
     assert ctx is not None  # nosec B101 - tenant_middleware always publishes this on the success path
+    require_matching_tenant(tenant_slug, ctx.tenant_slug)
     try:
         row = await update_source_auth(
-            async_dal, dal, tenant_id=ctx.tenant_id, source_id=source_id,
+            install_dal, tenant_id=ctx.tenant_id, source_id=source_id,
             auth=data.auth, actor_id=get_current_user_id(request),
         )
     except ApiError as exc:
         return _err(exc)
     return {"success": True, "modes": list((row.auth or {}).get("modes", []))}, 200
 ```
+
+(This route reuses `ingest_sources_bp`'s existing `url_prefix="/api/v1/tenant/<tenant_slug>/ingest-sources"` from Task 27 — the route rule is `/<source_id>/auth`, giving the full path `/api/v1/tenant/{slug}/ingest-sources/{sourceId}/auth`. `get_current_user_id` and `require_matching_tenant` are already imported by this file from Task 27.)
 
 - [ ] **Step 6: Add `sourceAuth` to the consent view**
 
@@ -12751,15 +13204,16 @@ and replace the `get_permissions` body's return with:
         community_id = _parse_community_id(request.args.get("communityId"))
     except ApiError as exc:
         return _err(exc)
+    install_dal = _install_dal()
     source_auth = await source_auth_for_consent(
-        async_dal, dal, tenant_id=ctx.tenant_id, community_id=community_id, consumes_platforms=platforms
+        install_dal, tenant_id=ctx.tenant_id, community_id=community_id, consumes_platforms=platforms
     )
     return PermissionSummaryResponse(
         success=True, summary=summary, permissionHash=permission_hash, sourceAuth=source_auth
     )
 ```
 
-Add `ctx = get_tenant_context(request)` / `assert ctx is not None  # nosec B101` above it, and the same `_parse_community_id` helper Task 31's blueprint defines (copy it verbatim into this file — a five-line helper duplicated is better than a cross-blueprint import).
+`get_permissions` already binds `install_dal = _install_dal()` at its top (Task 22); reuse that binding instead of re-fetching it if the existing local variable is still in scope at this point in the function body. Add `ctx = get_tenant_context(request)` / `assert ctx is not None  # nosec B101` above this block if `get_permissions` does not already bind `ctx` (Task 22's version does not need `ctx` for anything else, so add it here), and the same `_parse_community_id` helper Task 31's blueprint defines (copy it verbatim into this file — a five-line helper duplicated is better than a cross-blueprint import).
 
 - [ ] **Step 7: Run to verify all pass**
 
@@ -12785,7 +13239,7 @@ git add hub_api/services/ingest_source_service.py hub_api/blueprints/v1/distribu
         hub_api/blueprints/v1/ingest_sources.py hub_api/blueprints/v1/bundle_approvals.py \
         hub_api/tests/test_ingest_source_auth_api.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): publish the per-source auth config -- distribution /sources, config view, consent view, auth PUT
+feat(hub-api): publish the per-source auth config -- distribution /sources, config view, consent view, auth PUT (R52)
 
 GET /api/v1/distribution/sources now carries auth =
 {modes, cidrs, secret_ref, origin_suffixes, origin_cidrs} per source,
@@ -12799,14 +13253,14 @@ audit row.
 The consent view gains sourceAuth as a sibling of summary, never a
 member: rotating a token or widening a CIDR list must not invalidate
 existing approvals, so permissionHash is provably unchanged by an auth
-edit. No bearer token or password hash appears in any response.
+edit. No bearer token or password hash appears in any response. Every
+new query in this task goes through penguin-dal's install_dal.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
 ## Task 41: OpenAPI coverage, logging conformance, coverage gate, lint and the containerized `make` gates
@@ -13457,68 +13911,114 @@ EOF
 
 ---
 
-## Task 43: pydal binder extension for `workstreams`/`workstream_usage_hourly` + smoke test
+## Task 43: `install_dal` fixture extension for `workstreams`/`workstream_usage_hourly` + smoke test (R52)
 
-**Depends on:** Task 4 (`bind_bundle_install_tables`, the function this task extends), Task 42 (migration 0023's DDL, which this binder mirrors).
+**Depends on:** Task 4 (`_create_bundle_install_tables()`/`install_dal` fixture, the function this task extends), Task 42 (migration 0023's DDL, which this fixture's DDL mirrors).
 
 **Files:**
-- Modify: `hub_api/services/schema.py`
+- Modify: `hub_api/tests/conftest.py`
 - Create: `hub_api/tests/test_workstream_fixture_smoke.py`
 
 **Interfaces:**
-- Produces: `bind_bundle_install_tables()` additionally binds `workstreams`/`workstream_usage_hourly` (same idempotent guard as every other table in that function).
+- Produces: `_create_bundle_install_tables()` (Task 4) additionally creates `workstreams`/`workstream_usage_hourly` via SQLAlchemy Core, so `install_dal` (Task 4's fixture, unchanged in shape) reflects them too.
 - Consumes: nothing new.
 
-**Why the shared `bundle_install_db` fixture (Task 4) is not seeded with a workstream row here.** Dozens of already-written M2b tests assert exact row counts and index-`[0]` lookups against that fixture's existing seed data (one tenant, one community, one `app_catalog` row) — adding a new pre-seeded `ingest_sources`/`workstreams` row to the shared fixture would silently perturb every one of those counts. This task's own smoke test seeds its own rows instead; Task 44's tests do the same.
+**Why the shared `bundle_install_db`/`install_dal` fixtures are not seeded with a workstream row here.** Dozens of already-written M2b tests assert exact row counts and index-`[0]` lookups against those fixtures' existing seed data (one tenant, one community, one `app_catalog` row) — adding a new pre-seeded `ingest_sources`/`workstreams` row to either shared fixture would silently perturb every one of those counts. This task's own smoke test seeds its own rows instead; Task 44's tests do the same.
 
-- [ ] **Step 1: Extend the binder**
+- [ ] **Step 1: Extend `_create_bundle_install_tables()` in `hub_api/tests/conftest.py`**
 
-In `hub_api/services/schema.py`, add these two `dal.define_table(...)` calls at the end of the existing `bind_bundle_install_tables` function, immediately after the `platform_settings` table definition (the function's current last statement):
+Task 4 added this function to `hub_api/tests/conftest.py`, ending with the `platform_settings` table and its `metadata.create_all(conn)` call:
 
 ```python
-    dal.define_table(
-        "workstreams",
-        Field("tenant_id", "integer", notnull=True),
-        Field("community_id", "integer"),
-        Field("ingest_source_id", "bigint"),
-        Field("platform", "string", length=50, notnull=True),
-        Field("source_id", "string", length=255, notnull=True),
-        Field("created_at", "datetime"),
-        Field("disabled_at", "datetime"),
-        migrate=migrate,
+    Table(
+        "platform_settings",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("key", String(150), nullable=False),
+        Column("value", Text),
+        Column("updated_by", Integer),
+        Column("updated_at", DateTime),
     )
-
-    dal.define_table(
-        "workstream_usage_hourly",
-        Field("tenant_id", "integer", notnull=True),
-        Field("community_id", "integer"),
-        Field("workstream_id", "string", length=36, notnull=True),
-        Field("stage", "string", length=20, notnull=True),
-        Field("app_id", "string", length=255),
-        Field("hour", "datetime", notnull=True),
-        Field("events", "bigint", default=0),
-        Field("invocations", "bigint", default=0),
-        Field("host_calls", "bigint", default=0),
-        Field("actions_delivered", "bigint", default=0),
-        Field("fuel_ms", "bigint", default=0),
-        Field("outbound_bytes", "bigint", default=0),
-        Field("media_minutes", "double"),
-        Field("recorded_at", "datetime"),
-        migrate=migrate,
-    )
+    metadata.create_all(conn)
 ```
 
-`workstream_usage_hourly.workstream_id` is a `string` field here, not an integer FK — the real Postgres column is `UUID` (Task 42), while `workstreams.id` in this pydal/sqlite test binder stays the ORM's usual autoincrement integer (pydal has no native UUID field type, Decision #14). Every service function treats `workstream_id` as an opaque string via `str(...)` on both backends, so `"string", length=36` holds either representation without a type mismatch anywhere a test constructs one.
+Replace those two lines (the `platform_settings` `Table(...)` call plus `metadata.create_all(conn)`) with:
+
+```python
+    Table(
+        "platform_settings",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("key", String(150), nullable=False),
+        Column("value", Text),
+        Column("updated_by", Integer),
+        Column("updated_at", DateTime),
+    )
+    Table(
+        "workstreams",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("tenant_id", Integer, nullable=False),
+        Column("community_id", Integer),
+        Column("ingest_source_id", BigInteger),
+        Column("platform", String(50), nullable=False),
+        Column("source_id", String(255), nullable=False),
+        Column("created_at", DateTime),
+        Column("disabled_at", DateTime),
+    )
+    Table(
+        "workstream_usage_hourly",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("tenant_id", Integer, nullable=False),
+        Column("community_id", Integer),
+        Column("workstream_id", String(36), nullable=False),
+        Column("stage", String(20), nullable=False),
+        Column("app_id", String(255)),
+        Column("hour", DateTime, nullable=False),
+        Column("events", BigInteger, server_default="0"),
+        Column("invocations", BigInteger, server_default="0"),
+        Column("host_calls", BigInteger, server_default="0"),
+        Column("actions_delivered", BigInteger, server_default="0"),
+        Column("fuel_ms", BigInteger, server_default="0"),
+        Column("outbound_bytes", BigInteger, server_default="0"),
+        Column("media_minutes", Float),
+        Column("recorded_at", DateTime),
+    )
+    metadata.create_all(conn)
+```
+
+`workstream_usage_hourly.workstream_id` is a `String(36)` column here, not an integer FK — the real Postgres column is `UUID` (Task 42), while `workstreams.id` in this SQLAlchemy/sqlite test fixture stays an autoincrement integer (sqlite has no native `UUID` type, Decision #14; `penguin_dal.FieldProxy` reflects whatever SQLAlchemy type the column has, so this is purely a fixture-schema choice, not a `penguin-dal` limitation). Every service function treats `workstream_id` as an opaque string via `str(...)` on both backends, so `String(36)` holds either representation without a type mismatch anywhere a test constructs one.
+
+Add `BigInteger` and `Float` to the existing `from sqlalchemy import (...)` block Task 4 added at the top of `hub_api/tests/conftest.py` (it already imports `BigInteger` for `app_versions.size_bytes`/`app_version_uploads.app_version_id` — only `Float` is new):
+
+```python
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    Integer,
+    LargeBinary,
+    MetaData,
+    String,
+    Table,
+    Text,
+    true as sa_true,
+)
+```
 
 - [ ] **Step 2: Write the smoke test**
 
 ```python
 # hub_api/tests/test_workstream_fixture_smoke.py
-"""Smoke test for workstreams/workstream_usage_hourly binding -- proves both tables are queryable.
+"""Smoke test for workstreams/workstream_usage_hourly reflection -- proves both tables are queryable via install_dal.
 
 Seeds its own ingest_sources + workstreams rows rather than relying on
-bundle_install_db's shared seed data, so this test cannot perturb row
-counts any other M2b test already asserts against.
+bundle_install_db's/install_dal's shared seed data, so this test cannot
+perturb row counts any other M2b test already asserts against.
 """
 
 from __future__ import annotations
@@ -13526,56 +14026,105 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-
-async def test_workstreams_and_usage_tables_are_queryable(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    assert "workstreams" in dal.tables
-    assert "workstream_usage_hourly" in dal.tables
-    assert dal(dal.workstreams).count() == 0
-    assert dal(dal.workstream_usage_hourly).count() == 0
+from services.bundle_install_dal import raw_sql_rows, raw_sql_write
 
 
-async def test_a_workstream_row_round_trips(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    source_id = dal.ingest_sources.insert(
-        tenant_id=1, community_id=None, platform="twitch", source_id="smoke-src-1",
-        label="Smoke Source", enabled=True, created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+async def test_workstreams_and_usage_tables_are_queryable(install_dal: Any) -> None:
+    assert "workstreams" in install_dal.tables
+    assert "workstream_usage_hourly" in install_dal.tables
+    workstreams_count = await raw_sql_rows(install_dal, "SELECT COUNT(*) AS n FROM workstreams")
+    assert workstreams_count.first()["n"] == 0
+    usage_count = await raw_sql_rows(install_dal, "SELECT COUNT(*) AS n FROM workstream_usage_hourly")
+    assert usage_count.first()["n"] == 0
+
+
+async def test_a_workstream_row_round_trips(install_dal: Any) -> None:
+    source_id = (
+        await install_dal.ingest_sources.async_insert(
+            tenant_id=1,
+            community_id=None,
+            platform="twitch",
+            source_id="smoke-src-1",
+            label="Smoke Source",
+            enabled=True,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
     )
-    workstream_id = dal.workstreams.insert(
-        tenant_id=1, community_id=None, ingest_source_id=source_id, platform="twitch",
-        source_id="smoke-src-1", created_at=datetime.now(UTC),
+    workstream_id = await install_dal.workstreams.async_insert(
+        tenant_id=1,
+        community_id=None,
+        ingest_source_id=source_id,
+        platform="twitch",
+        source_id="smoke-src-1",
+        created_at=datetime.now(UTC),
     )
-    dal.commit()
-    row = dal(dal.workstreams.id == workstream_id).select().first()
+    row = (
+        await install_dal(install_dal.workstreams.id == workstream_id).select()
+    ).first()
     assert row is not None
     assert row.source_id == "smoke-src-1"
     assert row.disabled_at is None
 
 
-async def test_a_usage_hourly_row_round_trips(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    source_id = dal.ingest_sources.insert(
-        tenant_id=1, community_id=None, platform="twitch", source_id="smoke-src-2",
-        label="Smoke Source 2", enabled=True, created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+async def test_a_usage_hourly_row_round_trips(install_dal: Any) -> None:
+    source_id = await install_dal.ingest_sources.async_insert(
+        tenant_id=1,
+        community_id=None,
+        platform="twitch",
+        source_id="smoke-src-2",
+        label="Smoke Source 2",
+        enabled=True,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
-    workstream_id = dal.workstreams.insert(
-        tenant_id=1, community_id=None, ingest_source_id=source_id, platform="twitch",
-        source_id="smoke-src-2", created_at=datetime.now(UTC),
+    workstream_id = await install_dal.workstreams.async_insert(
+        tenant_id=1,
+        community_id=None,
+        ingest_source_id=source_id,
+        platform="twitch",
+        source_id="smoke-src-2",
+        created_at=datetime.now(UTC),
     )
-    dal.commit()
-    usage_id = dal.workstream_usage_hourly.insert(
-        tenant_id=1, community_id=None, workstream_id=str(workstream_id), stage="ingest",
-        app_id=None, hour=datetime(2026, 9, 14, 10, 0, 0, tzinfo=UTC), events=5,
-        invocations=0, host_calls=0, actions_delivered=0, fuel_ms=0, outbound_bytes=1024,
-        media_minutes=None, recorded_at=datetime.now(UTC),
+    rows = await raw_sql_write(
+        install_dal,
+        """
+        INSERT INTO workstream_usage_hourly
+            (tenant_id, community_id, workstream_id, stage, app_id, hour, events,
+             invocations, host_calls, actions_delivered, fuel_ms, outbound_bytes,
+             media_minutes, recorded_at)
+        VALUES
+            (:tenant_id, :community_id, :workstream_id, :stage, :app_id, :hour, :events,
+             :invocations, :host_calls, :actions_delivered, :fuel_ms, :outbound_bytes,
+             :media_minutes, :recorded_at)
+        """,
+        {
+            "tenant_id": 1,
+            "community_id": None,
+            "workstream_id": str(workstream_id),
+            "stage": "ingest",
+            "app_id": None,
+            "hour": datetime(2026, 9, 14, 10, 0, 0, tzinfo=UTC),
+            "events": 5,
+            "invocations": 0,
+            "host_calls": 0,
+            "actions_delivered": 0,
+            "fuel_ms": 0,
+            "outbound_bytes": 1024,
+            "media_minutes": None,
+            "recorded_at": datetime.now(UTC),
+        },
     )
-    dal.commit()
-    row = dal(dal.workstream_usage_hourly.id == usage_id).select().first()
+    assert rows.first() is None or len(rows) == 0  # no RETURNING clause
+    check = await raw_sql_rows(
+        install_dal,
+        "SELECT events, workstream_id FROM workstream_usage_hourly WHERE workstream_id = :w",
+        {"w": str(workstream_id)},
+    )
+    row = check.first()
     assert row is not None
-    assert row.events == 5
-    assert row.workstream_id == str(workstream_id)
+    assert row["events"] == 5
+    assert row["workstream_id"] == str(workstream_id)
 ```
 
 - [ ] **Step 3: Run the smoke test**
@@ -13591,28 +14140,30 @@ Expected: every previously-passing test still passes; the printed summary line's
 - [ ] **Step 5: Commit**
 
 ```bash
-git add hub_api/services/schema.py hub_api/tests/test_workstream_fixture_smoke.py
+git add hub_api/tests/conftest.py hub_api/tests/test_workstream_fixture_smoke.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): bind workstreams/workstream_usage_hourly into bind_bundle_install_tables() (D30/D31)
+feat(hub-api): reflect workstreams/workstream_usage_hourly into install_dal (D30/D31, R52)
 
-Extends the existing M2b pydal test binder with the two new Task 42
-tables. workstream_id is a string(36) field on both sides -- Postgres
-uses a real UUID (Decision #14), pydal/sqlite has no UUID field type,
-and every service function treats the value as an opaque string on
-both backends. Seeds its own rows in a new, isolated test rather than
-touching the shared bundle_install_db fixture's seed data.
+Extends the existing M2b install_dal test fixture's SQLAlchemy Core DDL
+(_create_bundle_install_tables()) with the two new Task 42 tables.
+workstream_id is a String(36) column on both sides -- Postgres uses a
+real UUID (Decision #14), sqlite has no UUID type, and every service
+function treats the value as an opaque string on both backends. Seeds
+its own rows in a new, isolated test rather than touching the shared
+fixtures' seed data.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 44: `workstream_service.py` — creation/disable lifecycle wired into `ingest_source_service` (D30)
+## Task 44: `workstream_service.py` — creation/disable lifecycle wired into `ingest_source_service` (D30) (R52: penguin-dal)
 
-**Depends on:** Task 42 (`workstreams` DDL), Task 43 (the pydal binder), Task 26 (`ingest_source_service.create_source`/`delete_source`, both modified here), Task 39 (`create_source`'s current signature, which already gained an `auth` keyword — this task adds no new parameter, only a call at the end of the existing body).
+**Depends on:** Task 42 (`workstreams` DDL), Task 43 (the `install_dal` fixture extension), Task 26 (`ingest_source_service.create_source`/`delete_source`, both modified here, `install_dal`-only per R52), Task 39 (`create_source`'s current signature, which already gained an `auth` keyword — this task changes `create_source`'s final statements, not its signature).
+
+**R52/Decision #18(a) note:** `ingest_sources` and `workstreams` are both this plan's own new tables, both on the same `install_dal`. Creating both rows for a new source is this plan's one genuine cross-table atomicity requirement (the coordinator ruling's own worked example) — closed here for real, with one `async with install_dal.engine.begin() as conn:` block wrapping both inserts, rather than the pre-R52 plan's two sequential, separately-committed calls (safe only because the second was idempotent). This is written directly against `conn`, not through `core_transaction()` (Task 4): the `workstreams` insert needs `ingest_sources.id`, a value the database only assigns once the first `INSERT` executes, and `core_transaction()`'s statement list is built eagerly, before either runs — it cannot express "build statement 2 from statement 1's result." `disable_workstream_for_source`/`get_workstream_for_source` and `delete_source`'s wiring keep the original "order, don't couple" sequential pattern — disabling a workstream before removing its source is safe to retry either way, so no shared transaction is needed there.
 
 **Files:**
 - Create: `hub_api/services/workstream_service.py`
@@ -13621,14 +14172,21 @@ EOF
 - Modify: `hub_api/tests/test_ingest_source_service.py`
 
 **Interfaces:**
-- Produces: `async def create_workstream_for_source(async_dal, dal, *, ingest_source_id: int, tenant_id: int, community_id: int | None, platform: str, source_id: str) -> Any` (idempotent on `ingest_source_id` — a retried `create_source()` call never duplicates a workstream row); `async def disable_workstream_for_source(async_dal, dal, *, ingest_source_id: int) -> None` (sets `disabled_at`; a no-op when none exists or it is already disabled); `async def get_workstream_for_source(async_dal, dal, *, ingest_source_id: int) -> Any | None`.
+- Produces: `async def create_workstream_for_source(install_dal, *, ingest_source_id: int, tenant_id: int, community_id: int | None, platform: str, source_id: str) -> Any` (idempotent on `ingest_source_id` — a standalone caller that retries never duplicates a workstream row; **not** called by `create_source()`, which does its own atomic dual-insert instead — see the R52 note above); `async def disable_workstream_for_source(install_dal, *, ingest_source_id: int) -> None` (sets `disabled_at`; a no-op when none exists or it is already disabled); `async def get_workstream_for_source(install_dal, *, ingest_source_id: int) -> Any | None`. `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `ingest_sources`/`workstreams` are this plan's own new tables (R52).
 - Consumes: nothing new.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # hub_api/tests/test_workstream_service.py
-"""Tests for workstream creation/disable lifecycle (spec Sec5.11, Sec6.11, D30)."""
+"""Tests for the standalone workstream creation/disable helpers (spec Sec5.11, Sec6.11, D30).
+
+create_workstream_for_source() is exercised standalone here -- it is
+NOT called by create_source() (Task 44's atomicity fix routes that
+through create_source's own engine.begin() block instead, Decision
+#18(a)); this function remains available, idempotent, and tested for
+any other caller that needs to ensure a source's workstream exists.
+"""
 
 from __future__ import annotations
 
@@ -13642,77 +14200,69 @@ from services.workstream_service import (
 )
 
 
-async def _seed_source(bundle_install_db: Any, source_id: str = "wsvc-1") -> int:
-    dal = bundle_install_db.dal
-    new_id = dal.ingest_sources.insert(
+async def _seed_source(install_dal: Any, source_id: str = "wsvc-1") -> int:
+    now = datetime.now(UTC)
+    return await install_dal.ingest_sources.async_insert(
         tenant_id=1, community_id=None, platform="twitch", source_id=source_id,
-        label="X", enabled=True, created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+        label="X", enabled=True, created_at=now, updated_at=now,
     )
-    dal.commit()
-    return new_id
 
 
-async def test_create_workstream_for_source_creates_exactly_one_row(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    source_id = await _seed_source(bundle_install_db)
+async def test_create_workstream_for_source_creates_exactly_one_row(install_dal: Any) -> None:
+    source_id = await _seed_source(install_dal)
     row = await create_workstream_for_source(
-        async_dal, async_dal.dal, ingest_source_id=source_id, tenant_id=1,
+        install_dal, ingest_source_id=source_id, tenant_id=1,
         community_id=None, platform="twitch", source_id="wsvc-1",
     )
     assert row.platform == "twitch"
     assert row.disabled_at is None
-    assert async_dal.dal(async_dal.dal.workstreams).count() == 1
+    assert await install_dal(install_dal.workstreams.id > 0).count() == 1
 
 
-async def test_create_workstream_for_source_is_idempotent(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    source_id = await _seed_source(bundle_install_db)
+async def test_create_workstream_for_source_is_idempotent(install_dal: Any) -> None:
+    source_id = await _seed_source(install_dal)
     first = await create_workstream_for_source(
-        async_dal, async_dal.dal, ingest_source_id=source_id, tenant_id=1,
+        install_dal, ingest_source_id=source_id, tenant_id=1,
         community_id=None, platform="twitch", source_id="wsvc-1",
     )
     second = await create_workstream_for_source(
-        async_dal, async_dal.dal, ingest_source_id=source_id, tenant_id=1,
+        install_dal, ingest_source_id=source_id, tenant_id=1,
         community_id=None, platform="twitch", source_id="wsvc-1",
     )
     assert first.id == second.id
-    assert async_dal.dal(async_dal.dal.workstreams).count() == 1
+    assert await install_dal(install_dal.workstreams.id > 0).count() == 1
 
 
-async def test_disable_workstream_for_source_sets_disabled_at(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    source_id = await _seed_source(bundle_install_db)
+async def test_disable_workstream_for_source_sets_disabled_at(install_dal: Any) -> None:
+    source_id = await _seed_source(install_dal)
     await create_workstream_for_source(
-        async_dal, async_dal.dal, ingest_source_id=source_id, tenant_id=1,
+        install_dal, ingest_source_id=source_id, tenant_id=1,
         community_id=None, platform="twitch", source_id="wsvc-1",
     )
-    await disable_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=source_id)
-    row = await get_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=source_id)
+    await disable_workstream_for_source(install_dal, ingest_source_id=source_id)
+    row = await get_workstream_for_source(install_dal, ingest_source_id=source_id)
     assert row is not None
     assert row.disabled_at is not None
 
 
-async def test_disable_workstream_for_source_is_a_noop_when_none_exists(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    await disable_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=999999)
+async def test_disable_workstream_for_source_is_a_noop_when_none_exists(install_dal: Any) -> None:
+    await disable_workstream_for_source(install_dal, ingest_source_id=999999)
 
 
-async def test_disable_workstream_for_source_is_idempotent(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    source_id = await _seed_source(bundle_install_db)
+async def test_disable_workstream_for_source_is_idempotent(install_dal: Any) -> None:
+    source_id = await _seed_source(install_dal)
     await create_workstream_for_source(
-        async_dal, async_dal.dal, ingest_source_id=source_id, tenant_id=1,
+        install_dal, ingest_source_id=source_id, tenant_id=1,
         community_id=None, platform="twitch", source_id="wsvc-1",
     )
-    await disable_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=source_id)
-    await disable_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=source_id)
-    row = await get_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=source_id)
+    await disable_workstream_for_source(install_dal, ingest_source_id=source_id)
+    await disable_workstream_for_source(install_dal, ingest_source_id=source_id)
+    row = await get_workstream_for_source(install_dal, ingest_source_id=source_id)
     assert row.disabled_at is not None
 
 
-async def test_get_workstream_for_source_returns_none_when_absent(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    assert await get_workstream_for_source(async_dal, async_dal.dal, ingest_source_id=999999) is None
+async def test_get_workstream_for_source_returns_none_when_absent(install_dal: Any) -> None:
+    assert await get_workstream_for_source(install_dal, ingest_source_id=999999) is None
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -13726,13 +14276,19 @@ Expected: `ModuleNotFoundError: No module named 'services.workstream_service'`
 # hub_api/services/workstream_service.py
 """hub-api-owned workstream lifecycle -- 1:1 with ingest_sources (spec Sec5.11, Sec6.11, D30).
 
-A workstream is created the moment its ingest source is registered and
-disabled (never deleted) the moment that source is removed --
-workstream_usage_hourly rows keep their FK target for the life of the
-tenant's usage history even after the source itself is gone (Task 42's
-migration docstring explains the nullable ingest_source_id FK). Every
-function here is idempotent: a retried create_source()/delete_source()
-call must never raise or duplicate a workstream row.
+A workstream is created the moment its ingest source is registered
+(`ingest_source_service.create_source()` does this atomically itself,
+Decision #18(a) -- see that module, not this one, for the create-time
+path) and disabled (never deleted) the moment that source is removed
+-- workstream_usage_hourly rows keep their FK target for the life of
+the tenant's usage history even after the source itself is gone
+(Task 42's migration docstring explains the nullable ingest_source_id
+FK). `create_workstream_for_source` here is the standalone, idempotent
+helper for any caller other than `create_source()` itself; `disable_workstream_for_source`/
+`get_workstream_for_source` are used by `delete_source()`.
+
+R52: `ingest_sources`/`workstreams` are this plan's own new tables,
+queried through the penguin-dal `install_dal: AsyncDB` (Task 4).
 """
 
 from __future__ import annotations
@@ -13740,10 +14296,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from penguin_dal import AsyncDB
+
 
 async def create_workstream_for_source(
-    async_dal: Any,
-    dal: Any,
+    install_dal: AsyncDB,
     *,
     ingest_source_id: int,
     tenant_id: int,
@@ -13751,20 +14308,13 @@ async def create_workstream_for_source(
     platform: str,
     source_id: str,
 ) -> Any:
-    """Create the 1:1 workstream for a newly registered ingest source, or return the existing one.
+    """Create the 1:1 workstream for an ingest source, or return the existing one. Idempotent."""
+    existing = await install_dal(install_dal.workstreams.ingest_source_id == ingest_source_id).select()
+    first = existing.first()
+    if first is not None:
+        return first
 
-    Idempotent on `ingest_source_id` so a caller that retries
-    `create_source()` after a partial failure never ends up with two
-    workstream rows for the same source.
-    """
-    existing = await async_dal.select_async(
-        dal(dal.workstreams.ingest_source_id == ingest_source_id)
-    )
-    if existing:
-        return existing[0]
-
-    new_id = await async_dal.insert_async(
-        dal.workstreams,
+    new_id = await install_dal.workstreams.async_insert(
         tenant_id=tenant_id,
         community_id=community_id,
         ingest_source_id=ingest_source_id,
@@ -13772,33 +14322,30 @@ async def create_workstream_for_source(
         source_id=source_id,
         created_at=datetime.now(UTC),
     )
-    async_dal.dal.commit()
-    return (await async_dal.select_async(dal(dal.workstreams.id == new_id)))[0]
+    return (await install_dal(install_dal.workstreams.id == new_id).select()).first()
 
 
-async def disable_workstream_for_source(async_dal: Any, dal: Any, *, ingest_source_id: int) -> None:
+async def disable_workstream_for_source(install_dal: AsyncDB, *, ingest_source_id: int) -> None:
     """Set `disabled_at` on the source's workstream. No-op if none exists or it is already disabled.
 
     Called before the owning `ingest_sources` row is deleted -- never
     after, since the FK is `ON DELETE SET NULL` and this function needs
     `ingest_source_id` to still resolve to the right row.
     """
-    rows = await async_dal.select_async(
-        dal(
-            (dal.workstreams.ingest_source_id == ingest_source_id)
-            & (dal.workstreams.disabled_at == None)  # noqa: E711 - pydal IS NULL operator
-        )
-    )
-    if not rows:
+    rows = await install_dal(
+        (install_dal.workstreams.ingest_source_id == ingest_source_id)
+        & (install_dal.workstreams.disabled_at == None)  # noqa: E711 - penguin-dal IS NULL operator
+    ).select()
+    target = rows.first()
+    if target is None:
         return
-    await async_dal.update_async(dal.workstreams.id == rows[0].id, disabled_at=datetime.now(UTC))
-    async_dal.dal.commit()
+    await install_dal(install_dal.workstreams.id == target.id).update(disabled_at=datetime.now(UTC))
 
 
-async def get_workstream_for_source(async_dal: Any, dal: Any, *, ingest_source_id: int) -> Any | None:
+async def get_workstream_for_source(install_dal: AsyncDB, *, ingest_source_id: int) -> Any | None:
     """The workstream row for a given ingest source, or `None` if it has none."""
-    rows = await async_dal.select_async(dal(dal.workstreams.ingest_source_id == ingest_source_id))
-    return rows[0] if rows else None
+    rows = await install_dal(install_dal.workstreams.ingest_source_id == ingest_source_id).select()
+    return rows.first()
 ```
 
 - [ ] **Step 4: Run to verify all pass**
@@ -13806,72 +14353,107 @@ async def get_workstream_for_source(async_dal: Any, dal: Any, *, ingest_source_i
 Run: `cd hub_api && python3 -m pytest tests/test_workstream_service.py -v`
 Expected: `6 passed`
 
-- [ ] **Step 5: Wire `create_source()`**
-
-In `hub_api/services/ingest_source_service.py`, add the import:
-
-```python
-from services.workstream_service import create_workstream_for_source, disable_workstream_for_source
-```
+- [ ] **Step 5: Wire `create_source()` — atomic dual-insert, Decision #18(a)**
 
 `create_source()`'s current body (after Tasks 26 and 39) ends:
 
 ```python
-    async_dal.dal.commit()
-    row = (await async_dal.select_async(dal(dal.ingest_sources.id == new_id)))[0]
+    plaintext_secret = secrets.token_urlsafe(32)
+    ciphertext, iv = encrypt(plaintext_secret)
+    now = datetime.now(UTC)
+    try:
+        auth_config, auth_plaintext = build_auth_config(platform, auth, secret_ref=f"src:{source_id}")
+    except AuthConfigError as exc:
+        raise ApiError(str(exc), 422, exc.reason) from exc
+    auth_ciphertext, auth_iv = encrypt(auth_plaintext) if auth_plaintext is not None else (None, None)
+    new_id = await install_dal.ingest_sources.async_insert(
+        tenant_id=tenant_id, community_id=community_id, platform=platform, source_id=source_id,
+        label=label, secret_ciphertext=ciphertext, secret_iv=iv, mapping=mapping, enabled=True,
+        auth=auth_config, auth_secret_ciphertext=auth_ciphertext, auth_secret_iv=auth_iv,
+        created_at=now, updated_at=now,
+    )
+    row = (await install_dal(install_dal.ingest_sources.id == new_id).select()).first()
     return row, plaintext_secret
 ```
 
-Replace those three lines with:
+Replace the last four lines (from `new_id = await install_dal.ingest_sources.async_insert(...)` through `return row, plaintext_secret`) with:
 
 ```python
-    async_dal.dal.commit()
-    row = (await async_dal.select_async(dal(dal.ingest_sources.id == new_id)))[0]
-    await create_workstream_for_source(
-        async_dal, dal, ingest_source_id=new_id, tenant_id=tenant_id,
-        community_id=community_id, platform=platform, source_id=source_id,
-    )
+    ingest_sources_table = install_dal.ingest_sources.table
+    workstreams_table = install_dal.workstreams.table
+    async with install_dal.engine.begin() as conn:
+        result = await conn.execute(
+            ingest_sources_table.insert().values(
+                tenant_id=tenant_id, community_id=community_id, platform=platform, source_id=source_id,
+                label=label, secret_ciphertext=ciphertext, secret_iv=iv, mapping=mapping, enabled=True,
+                auth=auth_config, auth_secret_ciphertext=auth_ciphertext, auth_secret_iv=auth_iv,
+                created_at=now, updated_at=now,
+            )
+        )
+        new_id = result.inserted_primary_key[0]
+        await conn.execute(
+            workstreams_table.insert().values(
+                tenant_id=tenant_id, community_id=community_id, ingest_source_id=new_id,
+                platform=platform, source_id=source_id, created_at=now,
+            )
+        )
+    row = (await install_dal(install_dal.ingest_sources.id == new_id).select()).first()
     return row, plaintext_secret
 ```
+
+Both inserts now commit or roll back together: a crash or exception between them leaves neither row, never an `ingest_sources` row with no workstream. `ingest_sources_table`/`workstreams_table` are the real, reflected SQLAlchemy `Table` objects (`TableProxy.table`, a public property), so `auth`/`mapping`'s JSON columns still serialize correctly — the same type-aware guarantee `core_transaction()` documents, applied here directly since the two statements are data-dependent.
 
 - [ ] **Step 6: Wire `delete_source()`**
 
 `delete_source()`'s current body (unchanged since Task 26) is:
 
 ```python
-async def delete_source(async_dal: Any, dal: Any, *, tenant_id: int, source_id: str) -> None:
+async def delete_source(install_dal: AsyncDB, *, tenant_id: int, source_id: str) -> None:
     """Remove an ingest source by its `source_id`. Raises 404 if absent."""
-    existing = await async_dal.select_async(
-        dal((dal.ingest_sources.tenant_id == tenant_id) & (dal.ingest_sources.source_id == source_id))
-    )
+    existing = await install_dal(
+        (install_dal.ingest_sources.tenant_id == tenant_id)
+        & (install_dal.ingest_sources.source_id == source_id)
+    ).select()
     if not existing:
         raise not_found(f"ingest source {source_id!r} not found")
-    await async_dal.delete_async(
-        (dal.ingest_sources.tenant_id == tenant_id) & (dal.ingest_sources.source_id == source_id)
-    )
-    async_dal.dal.commit()
+    await install_dal(
+        (install_dal.ingest_sources.tenant_id == tenant_id)
+        & (install_dal.ingest_sources.source_id == source_id)
+    ).delete()
 ```
 
-Replace it with:
+Add the import:
 
 ```python
-async def delete_source(async_dal: Any, dal: Any, *, tenant_id: int, source_id: str) -> None:
+from services.workstream_service import disable_workstream_for_source
+```
+
+Replace `delete_source`'s body with:
+
+```python
+async def delete_source(install_dal: AsyncDB, *, tenant_id: int, source_id: str) -> None:
     """Remove an ingest source by its `source_id`. Raises 404 if absent.
 
     Disables the source's workstream (never deletes it) before the
     source row itself is removed -- workstream_usage_hourly keeps its
     FK target for the life of the tenant's usage history (Decision #14).
+    Sequential, not a shared transaction: disabling a workstream ahead
+    of a delete that then fails is a harmless, safe-to-retry state (the
+    disable itself is idempotent), unlike Decision #18(a)'s create-time
+    case where a missing workstream would be a real gap.
     """
-    existing = await async_dal.select_async(
-        dal((dal.ingest_sources.tenant_id == tenant_id) & (dal.ingest_sources.source_id == source_id))
-    )
-    if not existing:
+    existing = await install_dal(
+        (install_dal.ingest_sources.tenant_id == tenant_id)
+        & (install_dal.ingest_sources.source_id == source_id)
+    ).select()
+    row = existing.first()
+    if row is None:
         raise not_found(f"ingest source {source_id!r} not found")
-    await disable_workstream_for_source(async_dal, dal, ingest_source_id=existing[0].id)
-    await async_dal.delete_async(
-        (dal.ingest_sources.tenant_id == tenant_id) & (dal.ingest_sources.source_id == source_id)
-    )
-    async_dal.dal.commit()
+    await disable_workstream_for_source(install_dal, ingest_source_id=row.id)
+    await install_dal(
+        (install_dal.ingest_sources.tenant_id == tenant_id)
+        & (install_dal.ingest_sources.source_id == source_id)
+    ).delete()
 ```
 
 - [ ] **Step 7: Append regression tests to `test_ingest_source_service.py`**
@@ -13879,27 +14461,28 @@ async def delete_source(async_dal: Any, dal: Any, *, tenant_id: int, source_id: 
 Append these two functions to the end of `hub_api/tests/test_ingest_source_service.py`:
 
 ```python
-async def test_create_source_creates_a_workstream(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
+async def test_create_source_creates_a_workstream(install_dal: Any) -> None:
     row, _ = await create_source(
-        async_dal, async_dal.dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         platform="custom:mycrm", source_id="ws-reg-1", label="x", mapping=None,
     )
-    workstream = async_dal.dal(async_dal.dal.workstreams.ingest_source_id == row.id).select().first()
+    workstream = (
+        await install_dal(install_dal.workstreams.ingest_source_id == row.id).select()
+    ).first()
     assert workstream is not None
     assert workstream.source_id == "ws-reg-1"
     assert workstream.disabled_at is None
 
 
-async def test_delete_source_disables_the_workstream_without_deleting_it(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
+async def test_delete_source_disables_the_workstream_without_deleting_it(install_dal: Any) -> None:
     row, _ = await create_source(
-        async_dal, dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         platform="custom:mycrm", source_id="ws-reg-2", label="x", mapping=None,
     )
-    await delete_source(async_dal, dal, tenant_id=1, source_id="ws-reg-2")
-    workstream = dal(dal.workstreams.ingest_source_id == row.id).select().first()
+    await delete_source(install_dal, tenant_id=1, source_id="ws-reg-2")
+    workstream = (
+        await install_dal(install_dal.workstreams.ingest_source_id == row.id).select()
+    ).first()
     assert workstream is not None
     assert workstream.disabled_at is not None
 ```
@@ -13907,7 +14490,7 @@ async def test_delete_source_disables_the_workstream_without_deleting_it(bundle_
 - [ ] **Step 8: Run to verify all pass**
 
 Run: `cd hub_api && python3 -m pytest tests/test_ingest_source_service.py tests/test_ingest_sources_blueprint.py tests/test_distribution_sources_blueprint.py tests/test_ingest_source_auth.py tests/test_ingest_source_auth_api.py -v`
-Expected: every previously-passing test still passes, plus the 2 new regression tests — `create_workstream_for_source`/`disable_workstream_for_source` are additive calls at the end of each function's existing body, so no prior assertion about `create_source`'s or `delete_source`'s return value changes.
+Expected: every previously-passing test still passes, plus the 2 new regression tests — `create_source`'s atomic dual-insert and `delete_source`'s additive `disable_workstream_for_source()` call change no prior assertion about either function's return value.
 
 - [ ] **Step 9: Commit**
 
@@ -13915,25 +14498,31 @@ Expected: every previously-passing test still passes, plus the 2 new regression 
 git add hub_api/services/workstream_service.py hub_api/services/ingest_source_service.py \
         hub_api/tests/test_workstream_service.py hub_api/tests/test_ingest_source_service.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): create/disable the 1:1 workstream inside create_source()/delete_source() (spec Sec5.11, D30)
+feat(hub-api): atomically create the 1:1 workstream inside create_source() (spec Sec5.11, D30, R52)
 
-workstream_service.create_workstream_for_source() runs at the end of
-create_source(), idempotent on ingest_source_id. delete_source() now
-disables the workstream (sets disabled_at) before removing the source
-row -- workstream_usage_hourly's FK target survives the deletion, per
-this plan's Decision #14.
+create_source() now inserts ingest_sources and its 1:1 workstreams row
+inside one engine.begin() transaction (Decision #18(a)) -- a real
+atomicity fix the R52 rewrite enables, since both tables now share one
+penguin-dal engine: a crash between the two inserts previously left an
+ingest_sources row with no workstream until the next retry. Written
+directly against the connection, not through core_transaction(), since
+the workstream insert needs the ingest source's generated id.
+create_workstream_for_source() stays available as a standalone,
+idempotent helper for other callers. delete_source() disables the
+workstream (sets disabled_at) before removing the source row --
+workstream_usage_hourly's FK target survives the deletion, per this
+plan's Decision #14.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 45: Publish `workstreamId` — distribution `/sources`, the tenant config view, and the consent screen (D30)
+## Task 45: Publish `workstreamId` — distribution `/sources`, the tenant config view, and the consent screen (D30) (R52: penguin-dal)
 
-**Depends on:** Task 44 (`workstream_service.get_workstream_for_source`, and every `ingest_sources` row now has a 1:1 workstream), Task 34 (`DistributionSource`/`DistributionSourceDTO`, `list_sources_for_distribution`), Task 27 (`blueprints/v1/ingest_sources.py`'s `SourceDTO`/`list_sources` handler), Task 40 (`source_auth_for_consent`, the `auth` fields these same dataclasses/functions already carry — this task adds one more sibling field to each, never touching `auth`'s own shape or the `permissionHash` computation).
+**Depends on:** Task 44 (`workstream_service.get_workstream_for_source`, `install_dal`-only per R52, and every `ingest_sources` row now has a 1:1 workstream), Task 34 (`DistributionSource`/`DistributionSourceDTO`, `list_sources_for_distribution`), Task 27 (`blueprints/v1/ingest_sources.py`'s `SourceDTO`/`list_sources` handler), Task 40 (`source_auth_for_consent`, the `auth` fields these same dataclasses/functions already carry — this task adds one more sibling field to each, never touching `auth`'s own shape or the `permissionHash` computation).
 
 **Files:**
 - Modify: `hub_api/services/ingest_source_service.py`
@@ -13943,7 +14532,7 @@ EOF
 
 **Interfaces:**
 - Produces: `DistributionSource.workstream_id: str | None` (last field); `DistributionSourceDTO.workstreamId: str | None = None` (last field); tenant config view `SourceDTO.workstreamId: str | None = None` (last field); `source_auth_for_consent(...)`'s returned dict entries gain a `"workstreamId"` key.
-- Consumes: `services.workstream_service.get_workstream_for_source` (Task 44).
+- Consumes: `services.workstream_service.get_workstream_for_source` (Task 44, `install_dal`-only per R52).
 
 Spec basis (D30, spec §5.11): "Shown on the source's config view (§10.3) and on the consent screen (§9.7.1) alongside the source it reads." svc-ingest mints `workstream_id` from its own `intake_sources`/`workstreams` lookup (spec §5.11's Minting paragraph), so the distribution `/sources` endpoint svc-ingest polls must carry it too — without it, the ingest-side minting code (plan M5, once it lands D30) has nowhere to read the id from at runtime.
 
@@ -13957,6 +14546,7 @@ Spec basis (D30, spec §5.11): "Shown on the source's config view (§10.3) and o
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from quart import Quart
@@ -13964,26 +14554,29 @@ from quart import Quart
 from tests.conftest import TENANT_SLUG, make_user_token
 
 
-def _app(bundle_install_db: Any, module_path: str) -> Quart:
+def _app(bundle_install_db: Any, install_dal: Any, module_path: str) -> Quart:
     import importlib
 
     module = importlib.import_module(module_path)
     app = Quart(__name__)
     app.config["async_dal"] = bundle_install_db
     app.config["dal"] = bundle_install_db.dal
+    app.config["install_dal"] = install_dal
     for bp in module.BLUEPRINTS:
         app.register_blueprint(bp)
     return app
 
 
-async def test_distribution_sources_carries_a_workstream_id(bundle_install_db: Any) -> None:
+async def test_distribution_sources_carries_a_workstream_id(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     from services.ingest_source_service import create_source
 
     await create_source(
-        bundle_install_db, bundle_install_db.dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         platform="twitch", source_id="ws-tw-1", label="Twitch WS test", mapping=None,
     )
-    app = _app(bundle_install_db, "blueprints.v1.distribution")
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.distribution")
     token = make_user_token(user_id=1, scope="distribution:read", tenant=TENANT_SLUG)
     response = await app.test_client().get(
         "/api/v1/distribution/sources", headers={"Authorization": f"Bearer {token}"}
@@ -13994,14 +14587,16 @@ async def test_distribution_sources_carries_a_workstream_id(bundle_install_db: A
     assert isinstance(by_id["ws-tw-1"]["workstreamId"], str)
 
 
-async def test_tenant_config_view_carries_a_workstream_id(bundle_install_db: Any) -> None:
+async def test_tenant_config_view_carries_a_workstream_id(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     from services.ingest_source_service import create_source
 
     await create_source(
-        bundle_install_db, bundle_install_db.dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         platform="twitch", source_id="ws-tw-2", label="Twitch WS test 2", mapping=None,
     )
-    app = _app(bundle_install_db, "blueprints.v1.ingest_sources")
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.ingest_sources")
     token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
     response = await app.test_client().get(
         f"/api/v1/tenant/{TENANT_SLUG}/ingest-sources", headers={"Authorization": f"Bearer {token}"}
@@ -14011,14 +14606,16 @@ async def test_tenant_config_view_carries_a_workstream_id(bundle_install_db: Any
     assert by_id["ws-tw-2"]["workstreamId"] is not None
 
 
-async def test_consent_screen_carries_a_workstream_id_without_moving_the_hash(bundle_install_db: Any) -> None:
+async def test_consent_screen_carries_a_workstream_id_without_moving_the_hash(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     from services.ingest_source_service import create_source
 
     await create_source(
-        bundle_install_db, bundle_install_db.dal, tenant_id=1, community_id=None,
+        install_dal, tenant_id=1, community_id=None,
         platform="twitch", source_id="ws-tw-3", label="Twitch WS test 3", mapping=None,
     )
-    dal = bundle_install_db.dal
+    now = datetime.now(UTC)
     manifest = {
         "schema_version": 2, "app_id": "waddles.socials.music.default", "name": "Music Station",
         "version": "3.0.1", "feature": "waddles.socials.music", "module": "socials",
@@ -14026,12 +14623,12 @@ async def test_consent_screen_carries_a_workstream_id_without_moving_the_hash(bu
         "stages": {"process": {"entry": "x:y",
                                "consumes": [{"platform": "twitch", "event_types": ["chat.message"]}]}},
     }
-    dal.app_version_uploads.insert(
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.1", tenant_id=1,
         artifact_kind="source", language="python", status="PUBLISHED", manifest_json=manifest,
+        created_at=now, updated_at=now,
     )
-    dal.commit()
-    app = _app(bundle_install_db, "blueprints.v1.bundle_approvals")
+    app = _app(bundle_install_db, install_dal, "blueprints.v1.bundle_approvals")
     token = make_user_token(user_id=1, scope="platform:admin", tenant=TENANT_SLUG)
     response = await app.test_client().get(
         "/api/v1/apps/waddles.socials.music.default/versions/3.0.1/permissions",
@@ -14058,20 +14655,20 @@ from services.workstream_service import get_workstream_for_source
 
 Add `workstream_id: str | None` as the **last** field of the `DistributionSource` dataclass (after `auth`).
 
-In `list_sources_for_distribution`'s loop over `rows`, immediately before the `results.append(DistributionSource(...))` call, add:
+`list_sources_for_distribution`'s signature (Task 34) is `(install_dal, async_dal, dal, *, tenant_id, tenant_slug, community_id=None, platform=None, enabled=None)`. In its loop over `rows`, immediately before the `results.append(DistributionSource(...))` call, add:
 
 ```python
-        workstream = await get_workstream_for_source(async_dal, dal, ingest_source_id=row.id)
+        workstream = await get_workstream_for_source(install_dal, ingest_source_id=row.id)
 ```
 
 and add `workstream_id=str(workstream.id) if workstream is not None else None,` as the last keyword argument of that `DistributionSource(...)` construction.
 
 - [ ] **Step 4: Add `workstreamId` to `source_auth_for_consent`**
 
-In the same file, `source_auth_for_consent`'s loop over `rows` currently builds each `entries.append({...})` dict from `row`. Add, immediately before that `entries.append(...)` call:
+In the same file, `source_auth_for_consent`'s signature (Task 40) is `(install_dal, *, tenant_id, community_id, consumes_platforms)`. Its loop over `rows` currently builds each `entries.append({...})` dict from `row`. Add, immediately before that `entries.append(...)` call:
 
 ```python
-        workstream = await get_workstream_for_source(async_dal, dal, ingest_source_id=row.id)
+        workstream = await get_workstream_for_source(install_dal, ingest_source_id=row.id)
 ```
 
 and add `"workstreamId": str(workstream.id) if workstream is not None else None,` as a new key in that dict.
@@ -14096,15 +14693,15 @@ Add `workstreamId: str | None = None` as the last field of `SourceDTO`. Replace 
 @validate_response(SourceListResponse)
 async def list_sources(tenant_slug: str) -> SourceListResponse | tuple[dict[str, object], int]:
     """List every ingest source for this tenant. Never includes a secret field."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     try:
         tenant_id = _tenant_id(tenant_slug)
     except ApiError as exc:
         return _err(exc)
-    rows = await svc.list_sources(async_dal, dal, tenant_id=tenant_id)
+    rows = await svc.list_sources(install_dal, tenant_id=tenant_id)
     sources: list[SourceDTO] = []
     for r in rows:
-        workstream = await get_workstream_for_source(async_dal, dal, ingest_source_id=r.id)
+        workstream = await get_workstream_for_source(install_dal, ingest_source_id=r.id)
         sources.append(
             SourceDTO(
                 platform=r.platform, sourceId=r.source_id, label=r.label,
@@ -14137,33 +14734,35 @@ Expected: every previously-passing test still passes — `permissionHash`-relate
 git add hub_api/services/ingest_source_service.py hub_api/blueprints/v1/distribution.py \
         hub_api/blueprints/v1/ingest_sources.py hub_api/tests/test_workstream_id_publication.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): publish workstreamId -- distribution /sources, tenant config view, consent screen (spec Sec5.11, D30)
+feat(hub-api): publish workstreamId -- distribution /sources, tenant config view, consent screen (spec Sec5.11, D30, R52)
 
 svc-ingest mints workstream_id from its own source lookup at runtime,
 so the distribution /sources feed it polls must carry it. Also shown
 on the tenant's ingest-source config view and, as a sibling of summary
 and sourceAuth (never a member), on the bundle consent screen --
-permissionHash is unaffected.
+permissionHash is unaffected. Every new lookup goes through
+penguin-dal's install_dal.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 46: `routes_to` cross-tenant refusal wired into `approve_version()` (spec §5.9, D30)
+## Task 46: `routes_to` cross-tenant refusal wired into `approve_version()` (spec §5.9, D30) (R52: penguin-dal)
 
-**Depends on:** Task 21 (`approve_version`, the function this task extends), Task 7 (`BundleManifestV2.routes_to`, already parsed and available on `manifest`).
+**Depends on:** Task 21 (`approve_version`, the function this task extends, `install_dal`-only per R52), Task 7 (`BundleManifestV2.routes_to`, already parsed and available on `manifest`).
+
+**R52 note:** `app_catalog` is a **pre-existing** table, but `install_dal.reflect()` (Task 4) discovers hub-api's entire live Postgres schema, not only the 11 new tables — exactly what already makes `install_dal.audit_log` a valid `TableProxy` (Decision #18). The same is true of `app_catalog`: this task's `routes_to` existence check is a **read-only** lookup against it, so it goes through the same `install_dal` `approve_version()` already holds, rather than requiring a second, pydal `dal` parameter this function has never needed before. `app_install_approvals` is this plan's own new table. Nothing here touches any EXISTING pydal call site that also reads `app_catalog` elsewhere in the codebase.
 
 **Files:**
 - Modify: `hub_api/services/bundle_approval_service.py`
 - Modify: `hub_api/tests/test_bundle_approval_service.py`
 
 **Interfaces:**
-- Produces: `approve_version(...)` refuses `422 routes_to_target_not_found` when a declared `routes_to` target does not exist in `app_catalog`, and `422 routes_to_cross_tenant` when it exists but is not installed in the approving call's tenant — both refusals write an `audit_log` row (`action = "routes_to_refused"`) before raising. No new parameter; every existing caller and test keeps its exact current behaviour when `manifest.routes_to` is empty.
-- Consumes: nothing new — uses `dal.app_catalog`/`dal.app_install_approvals`/`dal.audit_log`, all already bound.
+- Produces: `approve_version(...)` refuses `422 routes_to_target_not_found` when a declared `routes_to` target does not exist in `app_catalog`, and `422 routes_to_cross_tenant` when it exists but is not installed in the approving call's tenant — both refusals write a best-effort `audit_log` row (`action = "routes_to_refused"`) before raising. No new parameter; every existing caller and test keeps its exact current behaviour when `manifest.routes_to` is empty.
+- Consumes: nothing new — uses `install_dal.app_catalog`/`install_dal.app_install_approvals`/`install_dal.audit_log`, all reachable via the one `install_dal` this function already takes.
 
 **"Installed in the same tenant" is defined here** (this plan's Decision #15) as: the target `app_id` has a non-superseded `app_install_approvals` row whose `tenant_id` equals the approving call's `tenant_id` — community-agnostic, since a tenant-wide or any-community install of the target both count as "installed in this tenant." This is spec §5.9's install-time row: "hub-api validates that each target exists in `app_catalog`, is installed in the same tenant as the declaring bundle — a cross-tenant target is refused outright at approval, not merely left unapproved (D30)."
 
@@ -14172,7 +14771,7 @@ EOF
 Append to `hub_api/tests/test_bundle_approval_service.py` (add `from datetime import UTC, datetime` and `from services.errors import ApiError` at the top of the file only if they are not already imported there):
 
 ```python
-async def _seed_uploaded_version_with_routes_to(dal: Any, *, routes_to: list[str]) -> None:
+async def _seed_uploaded_version_with_routes_to(install_dal: Any, *, routes_to: list[str]) -> None:
     manifest = {
         "schema_version": 2, "app_id": "waddles.socials.music.default", "name": "Music Station",
         "version": "3.0.2", "feature": "waddles.socials.music", "module": "socials",
@@ -14180,26 +14779,28 @@ async def _seed_uploaded_version_with_routes_to(dal: Any, *, routes_to: list[str
         "routes_to": routes_to,
         "stages": {"process": {"entry": "x:y", "consumes": []}},
     }
-    dal.app_version_uploads.insert(
+    now = datetime.now(UTC)
+    await install_dal.app_version_uploads.async_insert(
         app_id="waddles.socials.music.default", version="3.0.2", tenant_id=1,
         artifact_kind="source", language="python", status="PUBLISHED", manifest_json=manifest,
+        created_at=now, updated_at=now,
     )
-    dal.commit()
 
 
-async def test_approve_version_refuses_a_routes_to_target_that_does_not_exist(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    await _seed_uploaded_version_with_routes_to(dal, routes_to=["waddles.nope.default"])
+async def test_approve_version_refuses_a_routes_to_target_that_does_not_exist(install_dal: Any) -> None:
+    await _seed_uploaded_version_with_routes_to(install_dal, routes_to=["waddles.nope.default"])
     with pytest.raises(ApiError) as excinfo:
         await approve_version(
-            bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.2",
+            install_dal, app_id="waddles.socials.music.default", version="3.0.2",
             tenant_id=1, community_id=None, approved_by=1,
         )
     assert excinfo.value.status_code == 422
     assert excinfo.value.code == "routes_to_target_not_found"
 
 
-async def test_approve_version_refuses_a_cross_tenant_routes_to_target(bundle_install_db: Any) -> None:
+async def test_approve_version_refuses_a_cross_tenant_routes_to_target(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     dal = bundle_install_db.dal
     other_tenant_id = dal.tenants.insert(slug="other-corp", display_name="Other Corp", is_active=True)
     dal.app_catalog.insert(
@@ -14209,23 +14810,25 @@ async def test_approve_version_refuses_a_cross_tenant_routes_to_target(bundle_in
         platform_compatibility={"tested_with": "3.0.0", "min_version": None, "max_version": None},
         status="active", stages={},
     )
-    dal.app_install_approvals.insert(
+    dal.commit()
+    await install_dal.app_install_approvals.async_insert(
         tenant_id=other_tenant_id, community_id=None, app_id="waddles.socials.forums.default",
         version="1.0.0", permission_hash="sha256:" + "b" * 64, summary_json={}, approved_by=1,
         approved_at=datetime.now(UTC),
     )
-    dal.commit()
-    await _seed_uploaded_version_with_routes_to(dal, routes_to=["waddles.socials.forums.default"])
+    await _seed_uploaded_version_with_routes_to(install_dal, routes_to=["waddles.socials.forums.default"])
     with pytest.raises(ApiError) as excinfo:
         await approve_version(
-            bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.2",
+            install_dal, app_id="waddles.socials.music.default", version="3.0.2",
             tenant_id=1, community_id=None, approved_by=1,
         )
     assert excinfo.value.status_code == 422
     assert excinfo.value.code == "routes_to_cross_tenant"
 
 
-async def test_approve_version_allows_a_same_tenant_routes_to_target(bundle_install_db: Any) -> None:
+async def test_approve_version_allows_a_same_tenant_routes_to_target(
+    bundle_install_db: Any, install_dal: Any
+) -> None:
     dal = bundle_install_db.dal
     dal.app_catalog.insert(
         app_id="waddles.socials.forums.default", name="Forums", manifest_version="3.0.0",
@@ -14234,32 +14837,41 @@ async def test_approve_version_allows_a_same_tenant_routes_to_target(bundle_inst
         platform_compatibility={"tested_with": "3.0.0", "min_version": None, "max_version": None},
         status="active", stages={},
     )
-    dal.app_install_approvals.insert(
+    dal.commit()
+    await install_dal.app_install_approvals.async_insert(
         tenant_id=1, community_id=None, app_id="waddles.socials.forums.default",
         version="1.0.0", permission_hash="sha256:" + "b" * 64, summary_json={}, approved_by=1,
         approved_at=datetime.now(UTC),
     )
-    dal.commit()
-    await _seed_uploaded_version_with_routes_to(dal, routes_to=["waddles.socials.forums.default"])
+    await _seed_uploaded_version_with_routes_to(install_dal, routes_to=["waddles.socials.forums.default"])
     result = await approve_version(
-        bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.2",
+        install_dal, app_id="waddles.socials.music.default", version="3.0.2",
         tenant_id=1, community_id=None, approved_by=1,
     )
     assert result.app_id == "waddles.socials.music.default"
 
 
-async def test_approve_version_audits_a_routes_to_refusal(bundle_install_db: Any) -> None:
-    dal = bundle_install_db.dal
-    await _seed_uploaded_version_with_routes_to(dal, routes_to=["waddles.nope.default"])
+async def test_approve_version_audits_a_routes_to_refusal(install_dal: Any) -> None:
+    from services.bundle_install_dal import raw_sql_rows
+
+    await _seed_uploaded_version_with_routes_to(install_dal, routes_to=["waddles.nope.default"])
     with pytest.raises(ApiError):
         await approve_version(
-            bundle_install_db, dal, app_id="waddles.socials.music.default", version="3.0.2",
+            install_dal, app_id="waddles.socials.music.default", version="3.0.2",
             tenant_id=1, community_id=None, approved_by=1,
         )
-    audit_row = dal(dal.audit_log.action == "routes_to_refused").select().first()
+    audit_rows = await raw_sql_rows(
+        install_dal, "SELECT details FROM audit_log WHERE action = :a", {"a": "routes_to_refused"}
+    )
+    audit_row = audit_rows.first()
     assert audit_row is not None
-    assert audit_row.details["target_app_id"] == "waddles.nope.default"
-    assert audit_row.details["reason"] == "routes_to_target_not_found"
+    import json
+
+    details = audit_row["details"]
+    if isinstance(details, str):
+        details = json.loads(details)
+    assert details["target_app_id"] == "waddles.nope.default"
+    assert details["reason"] == "routes_to_target_not_found"
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -14273,48 +14885,54 @@ In `hub_api/services/bundle_approval_service.py`, append these two functions (af
 
 ```python
 async def _audit_routes_to_refusal(
-    async_dal: Any, *, actor_id: int, app_id: str, version: str, target_app_id: str, reason: str
+    install_dal: AsyncDB, *, actor_id: int, app_id: str, version: str, target_app_id: str, reason: str
 ) -> None:
-    """Record a routes_to refusal -- D30 requires the refusal itself to be auditable, not only a success."""
-    dal = async_dal.dal
+    """Record a routes_to refusal -- D30 requires the refusal itself to be auditable, not only a success.
+
+    Best-effort, matching this codebase's convention for every other
+    audit-log write (Decision #18): a logging failure must never
+    prevent the caller from raising the refusal itself.
+    """
     try:
-        await async_dal.insert_async(
-            dal.audit_log, user_id=actor_id, action="routes_to_refused",
+        await install_dal.audit_log.async_insert(
+            user_id=actor_id, action="routes_to_refused",
             target_type="app_install_approvals", target_id=f"{app_id}@{version}",
             details={"target_app_id": target_app_id, "reason": reason},
             created_at=datetime.now(UTC),
         )
-        async_dal.dal.commit()
     except Exception:  # noqa: BLE001, S110 -- audit logging failure must not break the refusal itself
         pass
 
 
 async def _validate_routes_to(
-    async_dal: Any, dal: Any, *, routes_to: tuple[str, ...], tenant_id: int,
+    install_dal: AsyncDB, *, routes_to: tuple[str, ...], tenant_id: int,
     approved_by: int, app_id: str, version: str,
 ) -> None:
-    """Refuse a routes_to target that does not exist, or exists in a different tenant (spec Sec5.9, D30)."""
+    """Refuse a routes_to target that does not exist, or exists in a different tenant (spec Sec5.9, D30).
+
+    `app_catalog` is a pre-existing table, reachable read-only through
+    `install_dal` since `reflect()` (Task 4) discovers the entire live
+    schema, not only this plan's own new tables.
+    """
     for target_app_id in routes_to:
-        catalog_rows = await async_dal.select_async(dal(dal.app_catalog.app_id == target_app_id))
+        catalog_rows = await install_dal(install_dal.app_catalog.app_id == target_app_id).select()
         if not catalog_rows:
             await _audit_routes_to_refusal(
-                async_dal, actor_id=approved_by, app_id=app_id, version=version,
+                install_dal, actor_id=approved_by, app_id=app_id, version=version,
                 target_app_id=target_app_id, reason="routes_to_target_not_found",
             )
             raise ApiError(
                 f"routes_to target {target_app_id!r} does not exist in the app catalog",
                 422, "routes_to_target_not_found",
             )
-        installed = await async_dal.select_async(
-            dal(
-                (dal.app_install_approvals.app_id == target_app_id)
-                & (dal.app_install_approvals.tenant_id == tenant_id)
-                & (dal.app_install_approvals.superseded_by == None)  # noqa: E711 - pydal IS NULL operator
-            )
-        )
+        installed = await install_dal(
+            (install_dal.app_install_approvals.app_id == target_app_id)
+            & (install_dal.app_install_approvals.tenant_id == tenant_id)
+            & (install_dal.app_install_approvals.superseded_by == None)  # noqa: E711 - penguin-dal IS NULL operator
+        ).select()
         if not installed:
             await _audit_routes_to_refusal(
-                async_dal, actor_id=approved_by, app_id=app_id, version=version,
+                install_dal, actor_id=approved_by, app_id=app_id, version=version,
                 target_app_id=target_app_id, reason="routes_to_cross_tenant",
             )
             raise ApiError(
@@ -14323,12 +14941,12 @@ async def _validate_routes_to(
             )
 ```
 
-Then, in `approve_version()`, immediately after the line `manifest = _reparse_trusted(upload_rows[0].manifest_json)`, insert:
+Then, in `approve_version()`, immediately after the line `manifest = _reparse_trusted(upload.manifest_json)`, insert:
 
 ```python
     if manifest.routes_to:
         await _validate_routes_to(
-            async_dal, dal, routes_to=manifest.routes_to, tenant_id=tenant_id,
+            install_dal, routes_to=manifest.routes_to, tenant_id=tenant_id,
             approved_by=approved_by, app_id=app_id, version=version,
         )
 ```
@@ -14345,26 +14963,27 @@ Expected: every previously-passing test in this file still passes, plus the 5 ne
 ```bash
 git add hub_api/services/bundle_approval_service.py hub_api/tests/test_bundle_approval_service.py
 git commit -m "$(cat <<'EOF'
-feat(hub-api): refuse a cross-tenant routes_to target at approval (spec Sec5.9, D30)
+feat(hub-api): refuse a cross-tenant routes_to target at approval (spec Sec5.9, D30, R52)
 
 approve_version() now validates every manifest.routes_to entry before
 recording the approval: a target absent from app_catalog is 422
 routes_to_target_not_found, one that exists but has no non-superseded
 app_install_approvals row for this tenant is 422 routes_to_cross_tenant.
-Both refusals write an audit_log row (routes_to_refused) before
-raising, so the refusal is exactly as auditable as a success.
+Both refusals write a best-effort audit_log row (routes_to_refused)
+before raising, so the refusal is exactly as auditable as a success.
+app_catalog is read-only here, through the same install_dal
+approve_version() already holds (reflect() sees the whole schema).
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 47: `usage_aggregator_service.py` — the `waddles:usage` consumer writing `workstream_usage_hourly` (spec §5.12, D31)
+## Task 47: `usage_aggregator_service.py` — the `waddles:usage` consumer writing `workstream_usage_hourly` (spec §5.12, D31) (R52: penguin-dal)
 
-**Depends on:** Task 42 (`workstream_usage_hourly` DDL), Task 43 (the pydal binder), Task 28 (`valkey_admin_client.build_client`, `ensure_group`), Task 38 (`bundle_telemetry.get_meter`, `bundle_span` — this task only calls these existing exports, it does not modify `bundle_telemetry.py`).
+**Depends on:** Task 42 (`workstream_usage_hourly` DDL), Task 43 (the `install_dal` fixture extension), Task 28 (`valkey_admin_client.build_client`, `ensure_group`), Task 38 (`bundle_telemetry.get_meter`, `bundle_span` — this task only calls these existing exports, it does not modify `bundle_telemetry.py`), Task 4 (`services.bundle_install_dal.build_install_dal` — this standalone CronJob process builds its own `install_dal`, the same pattern Task 36's `bundle_role_cleanup_job.py` established).
 
 **Files:**
 - Create: `hub_api/services/usage_aggregator_service.py`
@@ -14373,8 +14992,8 @@ EOF
 - Test: `hub_api/tests/test_usage_aggregator_service.py`
 
 **Interfaces:**
-- Produces: `USAGE_STREAM = "waddles:usage"`, `USAGE_CONSUMER_GROUP = "hub_api_usage_aggregator"`; `@dataclass(slots=True, frozen=True) UsageDelta(tenant_id, community_id, workstream_id, stage, app_id, hour, events, invocations, host_calls, actions_delivered, fuel_ms, outbound_bytes, media_minutes)`; `def parse_usage_entry(fields: dict[Any, Any]) -> UsageDelta` (raises `ValueError` on a malformed entry); `@dataclass(slots=True, frozen=True) AggregationResult(examined: int, written: int, skipped: int)`; `async def run_usage_aggregation_batch(async_dal, dal, redis_client, *, batch_size: int = 500, consumer_name: str = "hub-api-1") -> AggregationResult`; `async def main() -> int` (the CronJob entrypoint, `python -m services.usage_aggregator_service`).
-- Consumes: `services.valkey_admin_client.{build_client, ensure_group}` (Task 28); `services.bundle_telemetry.{bundle_span, get_meter}` (Task 38).
+- Produces: `USAGE_STREAM = "waddles:usage"`, `USAGE_CONSUMER_GROUP = "hub_api_usage_aggregator"`; `@dataclass(slots=True, frozen=True) UsageDelta(tenant_id, community_id, workstream_id, stage, app_id, hour, events, invocations, host_calls, actions_delivered, fuel_ms, outbound_bytes, media_minutes)`; `def parse_usage_entry(fields: dict[Any, Any]) -> UsageDelta` (raises `ValueError` on a malformed entry, no DB access); `@dataclass(slots=True, frozen=True) AggregationResult(examined: int, written: int, skipped: int)`; `async def run_usage_aggregation_batch(install_dal, redis_client, *, batch_size: int = 500, consumer_name: str = "hub-api-1") -> AggregationResult`; `async def main() -> int` (the CronJob entrypoint, `python -m services.usage_aggregator_service`). `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `workstream_usage_hourly` is this plan's own new table (R52); this standalone process builds its own `install_dal` via `build_install_dal()`, the same way `bundle_role_cleanup_job.py` (Task 36) does.
+- Consumes: `services.valkey_admin_client.{build_client, ensure_group}` (Task 28); `services.bundle_telemetry.{bundle_span, get_meter}` (Task 38); `services.bundle_install_dal.build_install_dal` (Task 4).
 
 **Wire shape of one `waddles:usage` entry** (this task's own decision — the spec specifies the transport and the recorded fields, §5.12, not the field names on the wire; **must match** whichever plan implements the stage-side `XADD` producer: M3 `svc_action`, M4 `svc_process`, M5 `svc_ingest`, and `svc_streaming`'s own future plan): `tenant_id` (decimal string), `community_id` (decimal string, or the literal `"_tenant"` for tenant-wide, mirroring the stream-key segment convention §6.2), `workstream_id` (opaque string), `stage` (one of `ingest`/`process`/`action`/`streaming`), `app_id` (string, or `""`/absent for ingest-stage entries with no bundle), `hour` (an RFC3339 timestamp truncated to the hour), `events`/`invocations`/`host_calls`/`actions_delivered`/`fuel_ms`/`outbound_bytes` (decimal strings, default `"0"` when absent), `media_minutes` (decimal string, `svc-streaming` only, absent elsewhere).
 
@@ -14393,6 +15012,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from services.bundle_install_dal import raw_sql_rows
 from services.usage_aggregator_service import (
     USAGE_CONSUMER_GROUP,
     USAGE_STREAM,
@@ -14457,9 +15077,7 @@ def test_parse_usage_entry_rejects_a_non_numeric_field() -> None:
         parse_usage_entry(_entry(events="not-a-number"))
 
 
-async def test_run_usage_aggregation_batch_writes_one_row_per_group(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
+async def test_run_usage_aggregation_batch_writes_one_row_per_group(install_dal: Any) -> None:
     redis_client = AsyncMock()
     redis_client.xreadgroup.return_value = [
         (USAGE_STREAM, [
@@ -14473,39 +15091,37 @@ async def test_run_usage_aggregation_batch_writes_one_row_per_group(bundle_insta
                       b"actions_delivered": b"0", b"fuel_ms": b"0", b"outbound_bytes": b"50"}),
         ]),
     ]
-    result = await run_usage_aggregation_batch(async_dal, dal, redis_client)
+    result = await run_usage_aggregation_batch(install_dal, redis_client)
     assert result == AggregationResult(examined=2, written=1, skipped=0)
-    row = dal(dal.workstream_usage_hourly.workstream_id == "ws-1").select().first()
-    assert row.events == 5
-    assert row.outbound_bytes == 150
+    rows = await raw_sql_rows(
+        install_dal, "SELECT events, outbound_bytes FROM workstream_usage_hourly WHERE workstream_id = :w",
+        {"w": "ws-1"},
+    )
+    row = rows.first()
+    assert row["events"] == 5
+    assert row["outbound_bytes"] == 150
     redis_client.xack.assert_called_once_with(USAGE_STREAM, USAGE_CONSUMER_GROUP, b"1-1", b"1-2")
 
 
-async def test_run_usage_aggregation_batch_acks_and_skips_a_malformed_entry(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
+async def test_run_usage_aggregation_batch_acks_and_skips_a_malformed_entry(install_dal: Any) -> None:
     redis_client = AsyncMock()
     redis_client.xreadgroup.return_value = [
         (USAGE_STREAM, [(b"2-1", {b"tenant_id": b"1", b"stage": b"bogus"})]),
     ]
-    result = await run_usage_aggregation_batch(async_dal, dal, redis_client)
+    result = await run_usage_aggregation_batch(install_dal, redis_client)
     assert result == AggregationResult(examined=1, written=0, skipped=1)
     redis_client.xack.assert_called_once_with(USAGE_STREAM, USAGE_CONSUMER_GROUP, b"2-1")
 
 
-async def test_run_usage_aggregation_batch_with_nothing_to_read_examines_zero(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
+async def test_run_usage_aggregation_batch_with_nothing_to_read_examines_zero(install_dal: Any) -> None:
     redis_client = AsyncMock()
     redis_client.xreadgroup.return_value = []
-    result = await run_usage_aggregation_batch(async_dal, dal, redis_client)
+    result = await run_usage_aggregation_batch(install_dal, redis_client)
     assert result == AggregationResult(examined=0, written=0, skipped=0)
     redis_client.xack.assert_not_called()
 
 
-async def test_run_usage_aggregation_batch_groups_two_different_workstreams_separately(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
+async def test_run_usage_aggregation_batch_groups_two_different_workstreams_separately(install_dal: Any) -> None:
     redis_client = AsyncMock()
     redis_client.xreadgroup.return_value = [
         (USAGE_STREAM, [
@@ -14521,11 +15137,13 @@ async def test_run_usage_aggregation_batch_groups_two_different_workstreams_sepa
                       b"outbound_bytes": b"0"}),
         ]),
     ]
-    result = await run_usage_aggregation_batch(async_dal, dal, redis_client)
+    result = await run_usage_aggregation_batch(install_dal, redis_client)
     assert result == AggregationResult(examined=2, written=2, skipped=0)
 
 
-async def test_main_propagates_a_redis_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_main_propagates_a_redis_connection_error(
+    monkeypatch: pytest.MonkeyPatch, install_dal: Any
+) -> None:
     """Prove the gate can fail: a Redis outage must not be swallowed into a silent zero-examined pass."""
     from services import usage_aggregator_service as job
 
@@ -14539,7 +15157,7 @@ async def test_main_propagates_a_redis_connection_error(monkeypatch: pytest.Monk
     with (
         patch.object(job, "build_client", return_value=mock_client),
         patch.object(job, "ensure_group", new_callable=AsyncMock),
-        patch.object(job, "_build_dals", return_value=(object(), object())),
+        patch.object(job, "_build_install_dal", new_callable=AsyncMock, return_value=install_dal),
         pytest.raises(ConnectionError),
     ):
         await job.main()
@@ -14580,11 +15198,15 @@ string, or the literal "_tenant" for tenant-wide), `workstream_id`
 strings, default "0"), `media_minutes` (decimal string, svc-streaming
 only, absent elsewhere).
 
-Runs as a Kubernetes CronJob (`k8s/helm/waddlebot/templates/
-usage-aggregator-cronjob.yaml`), entrypoint `python -m
+R52: `workstream_usage_hourly` is this plan's own new table, queried
+through the penguin-dal `install_dal: AsyncDB` (Task 4). This is a
+standalone process (a Kubernetes CronJob), so it builds its own
+`install_dal` via `build_install_dal()` rather than reading one from a
+Quart `app.config` -- the same pattern `bundle_role_cleanup_job.py`
+(Task 36) established. Runs as a CronJob (`k8s/helm/waddlebot/
+templates/usage-aggregator-cronjob.yaml`), entrypoint `python -m
 services.usage_aggregator_service` -- bounded per-invocation batches
-under `concurrencyPolicy: Forbid`, the same CronJob shape this plan
-already established for `bundle_role_cleanup_job.py` (Task 36).
+under `concurrencyPolicy: Forbid`.
 """
 
 from __future__ import annotations
@@ -14597,10 +15219,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from flask_core.database import AsyncDAL
+from penguin_dal import AsyncDB
 
+from services.bundle_install_dal import build_install_dal
 from services.bundle_telemetry import bundle_span, get_meter
-from services.schema import bind_bundle_install_tables
 from services.valkey_admin_client import build_client, ensure_group
 
 USAGE_STREAM = "waddles:usage"
@@ -14687,8 +15309,7 @@ def _group_key(delta: UsageDelta) -> tuple[int, int | None, str, str, str | None
 
 
 async def run_usage_aggregation_batch(
-    async_dal: Any,
-    dal: Any,
+    install_dal: AsyncDB,
     redis_client: Any,
     *,
     batch_size: int = 500,
@@ -14720,8 +15341,7 @@ async def run_usage_aggregation_batch(
         now = datetime.now(UTC)
         written = 0
         for (tenant_id, community_id, workstream_id, stage, app_id, hour), deltas in groups.items():
-            await async_dal.insert_async(
-                dal.workstream_usage_hourly,
+            await install_dal.workstream_usage_hourly.async_insert(
                 tenant_id=tenant_id, community_id=community_id, workstream_id=workstream_id,
                 stage=stage, app_id=app_id, hour=hour,
                 events=sum(d.events for d in deltas),
@@ -14737,7 +15357,6 @@ async def run_usage_aggregation_batch(
                 recorded_at=now,
             )
             written += 1
-        async_dal.dal.commit()
 
         if to_ack:
             await redis_client.xack(USAGE_STREAM, USAGE_CONSUMER_GROUP, *to_ack)
@@ -14747,12 +15366,9 @@ async def run_usage_aggregation_batch(
         return AggregationResult(examined=len(entries), written=written, skipped=skipped)
 
 
-def _build_dals() -> tuple[Any, Any]:
-    """Open the job's own DAL connection from `DATABASE_URL` and bind the tables it writes."""
-    async_dal = AsyncDAL(os.environ["DATABASE_URL"], pool_size=1)
-    dal = async_dal.dal
-    bind_bundle_install_tables(dal)
-    return async_dal, dal
+async def _build_install_dal() -> AsyncDB:
+    """Open this standalone CronJob process's own penguin-dal connection (R52) -- same DSN, separate pool."""
+    return await build_install_dal(os.environ["DATABASE_URL"], pool_size=1)
 
 
 async def main() -> int:
@@ -14766,7 +15382,7 @@ async def main() -> int:
     missing DATABASE_URL) raises an exception instead of returning a
     silent zero, which is what the test above proves.
     """
-    async_dal, dal = _build_dals()
+    install_dal = await _build_install_dal()
     redis_client = build_client()
     await ensure_group(redis_client, stream=USAGE_STREAM, group=USAGE_CONSUMER_GROUP)
 
@@ -14774,7 +15390,7 @@ async def main() -> int:
     total_written = 0
     total_skipped = 0
     for _ in range(20):
-        result = await run_usage_aggregation_batch(async_dal, dal, redis_client)
+        result = await run_usage_aggregation_batch(install_dal, redis_client)
         total_examined += result.examined
         total_written += result.written
         total_skipped += result.skipped
@@ -14922,28 +15538,29 @@ Expected: `helm lint` reports `1 chart(s) linted, 0 chart(s) failed`, and the te
 git add hub_api/services/usage_aggregator_service.py hub_api/tests/test_usage_aggregator_service.py \
         k8s/helm/waddlebot/templates/usage-aggregator-cronjob.yaml k8s/helm/waddlebot/values.yaml
 git commit -m "$(cat <<'EOF'
-feat(hub-api): usage_aggregator_service -- the waddles:usage consumer writing workstream_usage_hourly (spec Sec5.12, D31)
+feat(hub-api): usage_aggregator_service -- the waddles:usage consumer writing workstream_usage_hourly (spec Sec5.12, D31, R52)
 
 Own consumer group (hub_api_usage_aggregator), commits every batch to
 Postgres before XACKing its entries -- a crash between the two causes
 at-least-once redelivery, never data loss, which the append-only,
 summed-at-query-time workstream_usage_hourly table already tolerates.
 Runs as a CronJob gated by the chart value metering.enabled, not a
-PostHog flag (spec Sec12.3). Wire shape of one waddles:usage entry is
-this task's own decision, documented in the module docstring and
-marked must-match for the stage-side XADD producer plans (M3/M4/M5).
+PostHog flag (spec Sec12.3), building its own standalone penguin-dal
+install_dal connection the same way bundle_role_cleanup_job.py (Task
+36) does. Wire shape of one waddles:usage entry is this task's own
+decision, documented in the module docstring and marked must-match for
+the stage-side XADD producer plans (M3/M4/M5).
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
-## Task 48: `usage_query_service.py` + `blueprints/v1/workstream_usage.py` — the per-community admin usage API (spec §5.12, D31)
+## Task 48: `usage_query_service.py` + `blueprints/v1/workstream_usage.py` — the per-community admin usage API (spec §5.12, D31) (R52: penguin-dal)
 
-**Depends on:** Task 42 (`workstream_usage_hourly` DDL), Task 43 (the pydal binder), Task 47 (the aggregator that populates the rows this API reads).
+**Depends on:** Task 42 (`workstream_usage_hourly` DDL), Task 43 (the `install_dal` fixture extension), Task 47 (the aggregator that populates the rows this API reads, `install_dal`-only per R52).
 
 **Files:**
 - Create: `hub_api/services/usage_query_service.py`
@@ -14953,7 +15570,7 @@ EOF
 - Modify: `hub_api/pyproject.toml`
 
 **Interfaces:**
-- Produces: `MAX_USAGE_PAGE_SIZE = 200`; `@dataclass(slots=True, frozen=True) UsageRow(tenant_id, community_id, workstream_id, stage, app_id, hour, events, invocations, host_calls, actions_delivered, fuel_ms, outbound_bytes, media_minutes)`; `async def query_usage(async_dal, dal, *, tenant_id: int, community_id: int | None = None, workstream_id: str | None = None, stage: str | None = None, app_id: str | None = None, hour_from: datetime | None = None, hour_to: datetime | None = None, limit: int = 50, offset: int = 0) -> tuple[list[UsageRow], int]` (returns `(page, total)`, summed by natural key per spec §5.12/§6.12, raises `ApiError(..., 422, ...)` on an invalid filter); `GET /api/v1/tenant/{slug}/usage` (scope `tenant:admin`), DTOs `UsageRowDTO`, `UsageMetaDTO`, `UsageListResponse(success, rows, meta)`.
+- Produces: `MAX_USAGE_PAGE_SIZE = 200`; `@dataclass(slots=True, frozen=True) UsageRow(tenant_id, community_id, workstream_id, stage, app_id, hour, events, invocations, host_calls, actions_delivered, fuel_ms, outbound_bytes, media_minutes)`; `async def query_usage(install_dal, *, tenant_id: int, community_id: int | None = None, workstream_id: str | None = None, stage: str | None = None, app_id: str | None = None, hour_from: datetime | None = None, hour_to: datetime | None = None, limit: int = 50, offset: int = 0) -> tuple[list[UsageRow], int]` (returns `(page, total)`, summed by natural key per spec §5.12/§6.12, raises `ApiError(..., 422, ...)` on an invalid filter); `GET /api/v1/tenant/{slug}/usage` (scope `tenant:admin`), DTOs `UsageRowDTO`, `UsageMetaDTO`, `UsageListResponse(success, rows, meta)`. `install_dal` is the `penguin_dal.AsyncDB` from Task 4 — `workstream_usage_hourly` is this plan's own new table (R52).
 - Consumes: nothing new.
 
 **Ungated by design.** This view is read-only, so it follows this plan's established rule (Task 37: "write surfaces are gated; read surfaces are not") — no new PostHog flag. The recording pipeline behind it is gated instead, by the chart value `metering.enabled` (Task 47), exactly as the spec names it (§12.3).
@@ -14975,7 +15592,7 @@ from services.errors import ApiError
 from services.usage_query_service import query_usage
 
 
-def _seed_row(dal: Any, **overrides: Any) -> None:
+async def _seed_row(install_dal: Any, **overrides: Any) -> None:
     base = {
         "tenant_id": 1, "community_id": None, "workstream_id": "ws-1", "stage": "ingest",
         "app_id": None, "hour": datetime(2026, 9, 14, 10, 0, tzinfo=UTC), "events": 1,
@@ -14983,80 +15600,66 @@ def _seed_row(dal: Any, **overrides: Any) -> None:
         "outbound_bytes": 100, "media_minutes": None, "recorded_at": datetime.now(UTC),
     }
     base.update(overrides)
-    dal.workstream_usage_hourly.insert(**base)
-    dal.commit()
+    await install_dal.workstream_usage_hourly.async_insert(**base)
 
 
-async def test_query_usage_with_no_rows_returns_an_empty_page(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    rows, total = await query_usage(async_dal, async_dal.dal, tenant_id=1)
+async def test_query_usage_with_no_rows_returns_an_empty_page(install_dal: Any) -> None:
+    rows, total = await query_usage(install_dal, tenant_id=1)
     assert rows == []
     assert total == 0
 
 
-async def test_query_usage_sums_two_correction_rows_for_the_same_natural_key(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    _seed_row(dal, events=2, outbound_bytes=100)
-    _seed_row(dal, events=3, outbound_bytes=50)
-    rows, total = await query_usage(async_dal, dal, tenant_id=1)
+async def test_query_usage_sums_two_correction_rows_for_the_same_natural_key(install_dal: Any) -> None:
+    await _seed_row(install_dal, events=2, outbound_bytes=100)
+    await _seed_row(install_dal, events=3, outbound_bytes=50)
+    rows, total = await query_usage(install_dal, tenant_id=1)
     assert total == 1
     assert rows[0].events == 5
     assert rows[0].outbound_bytes == 150
 
 
-async def test_query_usage_filters_by_community(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    _seed_row(dal, workstream_id="ws-a", community_id=1)
-    _seed_row(dal, workstream_id="ws-b", community_id=2)
-    rows, total = await query_usage(async_dal, dal, tenant_id=1, community_id=1)
+async def test_query_usage_filters_by_community(install_dal: Any) -> None:
+    await _seed_row(install_dal, workstream_id="ws-a", community_id=1)
+    await _seed_row(install_dal, workstream_id="ws-b", community_id=2)
+    rows, total = await query_usage(install_dal, tenant_id=1, community_id=1)
     assert total == 1
     assert rows[0].workstream_id == "ws-a"
 
 
-async def test_query_usage_filters_by_workstream(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    _seed_row(dal, workstream_id="ws-a")
-    _seed_row(dal, workstream_id="ws-b")
-    rows, total = await query_usage(async_dal, dal, tenant_id=1, workstream_id="ws-b")
+async def test_query_usage_filters_by_workstream(install_dal: Any) -> None:
+    await _seed_row(install_dal, workstream_id="ws-a")
+    await _seed_row(install_dal, workstream_id="ws-b")
+    rows, total = await query_usage(install_dal, tenant_id=1, workstream_id="ws-b")
     assert total == 1
     assert rows[0].workstream_id == "ws-b"
 
 
-async def test_query_usage_filters_by_date_range(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    _seed_row(dal, workstream_id="ws-early", hour=datetime(2026, 9, 10, 0, 0, tzinfo=UTC))
-    _seed_row(dal, workstream_id="ws-late", hour=datetime(2026, 9, 20, 0, 0, tzinfo=UTC))
+async def test_query_usage_filters_by_date_range(install_dal: Any) -> None:
+    await _seed_row(install_dal, workstream_id="ws-early", hour=datetime(2026, 9, 10, 0, 0, tzinfo=UTC))
+    await _seed_row(install_dal, workstream_id="ws-late", hour=datetime(2026, 9, 20, 0, 0, tzinfo=UTC))
     rows, total = await query_usage(
-        async_dal, dal, tenant_id=1,
+        install_dal, tenant_id=1,
         hour_from=datetime(2026, 9, 15, 0, 0, tzinfo=UTC), hour_to=datetime(2026, 9, 25, 0, 0, tzinfo=UTC),
     )
     assert total == 1
     assert rows[0].workstream_id == "ws-late"
 
 
-async def test_query_usage_paginates(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
+async def test_query_usage_paginates(install_dal: Any) -> None:
     for i in range(5):
-        _seed_row(dal, workstream_id=f"ws-{i}", hour=datetime(2026, 9, 14, i, 0, tzinfo=UTC))
-    page1, total = await query_usage(async_dal, dal, tenant_id=1, limit=2, offset=0)
-    page2, _ = await query_usage(async_dal, dal, tenant_id=1, limit=2, offset=2)
+        await _seed_row(install_dal, workstream_id=f"ws-{i}", hour=datetime(2026, 9, 14, i, 0, tzinfo=UTC))
+    page1, total = await query_usage(install_dal, tenant_id=1, limit=2, offset=0)
+    page2, _ = await query_usage(install_dal, tenant_id=1, limit=2, offset=2)
     assert total == 5
     assert len(page1) == 2
     assert len(page2) == 2
     assert {r.workstream_id for r in page1} != {r.workstream_id for r in page2}
 
 
-async def test_query_usage_never_returns_another_tenants_rows(bundle_install_db: Any) -> None:
-    async_dal = bundle_install_db
-    dal = async_dal.dal
-    _seed_row(dal, tenant_id=1, workstream_id="ws-mine")
-    _seed_row(dal, tenant_id=2, workstream_id="ws-other")
-    rows, total = await query_usage(async_dal, dal, tenant_id=1)
+async def test_query_usage_never_returns_another_tenants_rows(install_dal: Any) -> None:
+    await _seed_row(install_dal, tenant_id=1, workstream_id="ws-mine")
+    await _seed_row(install_dal, tenant_id=2, workstream_id="ws-other")
+    rows, total = await query_usage(install_dal, tenant_id=1)
     assert total == 1
     assert rows[0].workstream_id == "ws-mine"
 
@@ -15076,11 +15679,10 @@ async def test_query_usage_never_returns_another_tenants_rows(bundle_install_db:
     ],
 )
 async def test_query_usage_rejects_every_invalid_filter(
-    bundle_install_db: Any, kwargs: dict[str, Any], code: str
+    install_dal: Any, kwargs: dict[str, Any], code: str
 ) -> None:
-    async_dal = bundle_install_db
     with pytest.raises(ApiError) as excinfo:
-        await query_usage(async_dal, async_dal.dal, tenant_id=1, **kwargs)
+        await query_usage(install_dal, tenant_id=1, **kwargs)
     assert excinfo.value.code == code
 ```
 
@@ -15100,6 +15702,9 @@ correction is a new row, spec Sec6.12) -- this module sums by
 `(tenant_id, community_id, workstream_id, stage, app_id, hour)` at
 query time, exactly as the spec's design intends, rather than exposing
 raw, possibly-duplicated rows to an admin.
+
+R52: `workstream_usage_hourly` is this plan's own new table, queried
+through the penguin-dal `install_dal: AsyncDB` (Task 4).
 """
 
 from __future__ import annotations
@@ -15107,6 +15712,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+
+from penguin_dal import AsyncDB
 
 from services.errors import ApiError
 
@@ -15150,8 +15757,7 @@ def _validate_filters(
 
 
 async def query_usage(
-    async_dal: Any,
-    dal: Any,
+    install_dal: AsyncDB,
     *,
     tenant_id: int,
     community_id: int | None = None,
@@ -15168,7 +15774,7 @@ async def query_usage(
     Aggregation and pagination both happen in Python after the filtered
     rows are fetched -- an admin reporting view bounded by tenant (and
     usually by a community/date-range filter too), never a hot path, so
-    this trades a little raw-row overhead for a query pydal's
+    this trades a little raw-row overhead for a query `penguin_dal`'s
     query-builder can express without a second, aggregate-specific
     code path (never raw SQL, per this plan's Global Constraints).
     """
@@ -15176,21 +15782,21 @@ async def query_usage(
         workstream_id=workstream_id, stage=stage, hour_from=hour_from, hour_to=hour_to,
         limit=limit, offset=offset,
     )
-    query = dal.workstream_usage_hourly.tenant_id == tenant_id
+    query = install_dal.workstream_usage_hourly.tenant_id == tenant_id
     if community_id is not None:
-        query &= dal.workstream_usage_hourly.community_id == community_id
+        query &= install_dal.workstream_usage_hourly.community_id == community_id
     if workstream_id is not None:
-        query &= dal.workstream_usage_hourly.workstream_id == workstream_id
+        query &= install_dal.workstream_usage_hourly.workstream_id == workstream_id
     if stage is not None:
-        query &= dal.workstream_usage_hourly.stage == stage
+        query &= install_dal.workstream_usage_hourly.stage == stage
     if app_id is not None:
-        query &= dal.workstream_usage_hourly.app_id == app_id
+        query &= install_dal.workstream_usage_hourly.app_id == app_id
     if hour_from is not None:
-        query &= dal.workstream_usage_hourly.hour >= hour_from
+        query &= install_dal.workstream_usage_hourly.hour >= hour_from
     if hour_to is not None:
-        query &= dal.workstream_usage_hourly.hour < hour_to
+        query &= install_dal.workstream_usage_hourly.hour < hour_to
 
-    raw_rows = await async_dal.select_async(dal(query))
+    raw_rows = await install_dal(query).select()
 
     grouped: dict[tuple[int, int | None, str, str, str | None, datetime], dict[str, Any]] = {}
     for row in raw_rows:
@@ -15244,18 +15850,17 @@ from tests.conftest import TENANT_SLUG, make_user_token
 
 
 @pytest.fixture
-def app(bundle_install_db: Any) -> Quart:
-    dal = bundle_install_db.dal
-    dal.workstream_usage_hourly.insert(
+async def app(bundle_install_db: Any, install_dal: Any) -> Quart:
+    await install_dal.workstream_usage_hourly.async_insert(
         tenant_id=1, community_id=None, workstream_id="ws-1", stage="ingest", app_id=None,
         hour=datetime(2026, 9, 14, 10, 0, tzinfo=UTC), events=4, invocations=0, host_calls=0,
         actions_delivered=0, fuel_ms=0, outbound_bytes=200, media_minutes=None,
         recorded_at=datetime.now(UTC),
     )
-    dal.commit()
     quart_app = Quart(__name__)
     quart_app.config["async_dal"] = bundle_install_db
-    quart_app.config["dal"] = dal
+    quart_app.config["dal"] = bundle_install_db.dal
+    quart_app.config["install_dal"] = install_dal
     for bp in BLUEPRINTS:
         quart_app.register_blueprint(bp)
     return quart_app
@@ -15311,15 +15916,14 @@ async def test_usage_rejects_an_out_of_range_limit(app: Quart) -> None:
 
 
 async def test_usage_paginates_via_query_params(app: Quart) -> None:
-    dal = app.config["dal"]
+    install_dal = app.config["install_dal"]
     for i in range(3):
-        dal.workstream_usage_hourly.insert(
+        await install_dal.workstream_usage_hourly.async_insert(
             tenant_id=1, community_id=None, workstream_id=f"ws-extra-{i}", stage="ingest", app_id=None,
             hour=datetime(2026, 9, 14, 12 + i, 0, tzinfo=UTC), events=1, invocations=0, host_calls=0,
             actions_delivered=0, fuel_ms=0, outbound_bytes=0, media_minutes=None,
             recorded_at=datetime.now(UTC),
         )
-    dal.commit()
     token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
     response = await app.test_client().get(
         f"/api/v1/tenant/{TENANT_SLUG}/usage?limit=2&offset=0", headers={"Authorization": f"Bearer {token}"}
@@ -15331,13 +15935,14 @@ async def test_usage_paginates_via_query_params(app: Quart) -> None:
 
 async def test_usage_never_returns_another_tenants_rows(app: Quart) -> None:
     dal = app.config["dal"]
+    install_dal = app.config["install_dal"]
     other_tenant_id = dal.tenants.insert(slug="other-corp", display_name="Other", is_active=True)
-    dal.workstream_usage_hourly.insert(
+    dal.commit()
+    await install_dal.workstream_usage_hourly.async_insert(
         tenant_id=other_tenant_id, community_id=None, workstream_id="ws-other", stage="ingest", app_id=None,
         hour=datetime(2026, 9, 14, 10, 0, tzinfo=UTC), events=99, invocations=0, host_calls=0,
         actions_delivered=0, fuel_ms=0, outbound_bytes=0, media_minutes=None, recorded_at=datetime.now(UTC),
     )
-    dal.commit()
     token = make_user_token(user_id=1, scope="tenant:admin", tenant=TENANT_SLUG)
     response = await app.test_client().get(
         f"/api/v1/tenant/{TENANT_SLUG}/usage", headers={"Authorization": f"Bearer {token}"}
@@ -15363,7 +15968,8 @@ established rule is "write surfaces are gated, read surfaces are not"
 looking at usage data. Gated instead by `metering.enabled` (a chart
 value, not a PostHog flag, spec Sec12.3) -- when metering is off the
 aggregator (Task 47) simply never runs and this view returns empty
-pages, never an error.
+pages, never an error. R52: reads `current_app.config["install_dal"]`
+-- `workstream_usage_hourly` is this plan's own new table.
 """
 
 from __future__ import annotations
@@ -15375,6 +15981,7 @@ from typing import Any, cast
 from flask_core.api_utils import error_response
 from flask_core.authz import require_scope
 from flask_core.tenancy import get_tenant_context, tenant_middleware
+from penguin_dal import AsyncDB
 from quart import Blueprint, current_app, request
 from quart_schema import validate_response
 
@@ -15387,8 +15994,8 @@ workstream_usage_bp = Blueprint(
 )
 
 
-def _dal() -> tuple[Any, Any]:
-    return current_app.config["async_dal"], current_app.config["dal"]
+def _install_dal() -> AsyncDB:
+    return cast(AsyncDB, current_app.config["install_dal"])
 
 
 def _err(exc: ApiError) -> tuple[dict[str, object], int]:
@@ -15463,7 +16070,7 @@ class UsageListResponse:
 @validate_response(UsageListResponse)
 async def list_usage(tenant_slug: str) -> UsageListResponse | tuple[dict[str, object], int]:
     """Per-community usage, summed by `(community, workstream, stage, app, hour)`, paginated."""
-    async_dal, dal = _dal()
+    install_dal = _install_dal()
     try:
         tenant_id = _tenant_id(tenant_slug)
         community_id = _parse_int(
@@ -15474,7 +16081,7 @@ async def list_usage(tenant_slug: str) -> UsageListResponse | tuple[dict[str, ob
         hour_from = _parse_datetime(request.args.get("from"), field_name="from", code="invalid_date_range")
         hour_to = _parse_datetime(request.args.get("to"), field_name="to", code="invalid_date_range")
         rows, total = await query_usage(
-            async_dal, dal, tenant_id=tenant_id, community_id=community_id,
+            install_dal, tenant_id=tenant_id, community_id=community_id,
             workstream_id=request.args.get("workstreamId"), stage=request.args.get("stage"),
             app_id=request.args.get("appId"), hour_from=hour_from, hour_to=hour_to,
             limit=limit, offset=offset,
@@ -15520,7 +16127,7 @@ git add hub_api/services/usage_query_service.py hub_api/blueprints/v1/workstream
         hub_api/tests/test_usage_query_service.py hub_api/tests/test_workstream_usage_blueprint.py \
         hub_api/pyproject.toml
 git commit -m "$(cat <<'EOF'
-feat(hub-api): GET /api/v1/tenant/{slug}/usage -- per-community admin usage view (spec Sec5.12, D31)
+feat(hub-api): GET /api/v1/tenant/{slug}/usage -- per-community admin usage view (spec Sec5.12, D31, R52)
 
 query_usage() sums workstream_usage_hourly by natural key at query
 time (corrections are new rows, never an UPDATE, per spec Sec6.12) and
@@ -15529,14 +16136,14 @@ limit/offset pagination -- every filter combination, an invalid value,
 and the empty-result case are covered. Read-only and ungated by a
 PostHog flag, following this plan's established write/read gating
 split (Task 37); the recording pipeline behind it is gated instead by
-the chart value metering.enabled (Task 47).
+the chart value metering.enabled (Task 47). Queries the new
+workstream_usage_hourly table through penguin-dal's install_dal.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01N2rQgkHY872RubwXoBZxtE
 EOF
 )"
 ```
-
 ---
 
 ## Task 49: M2b D30/D31 closing gate — OpenAPI coverage, logging conformance, and the coverage/lint/make re-run for the workstream/usage surface
@@ -15771,7 +16378,7 @@ Expected: exactly **two** hits, both in Task 38's wiring steps (`...  # the exis
 | 8 | Tasks 1-32 (written before this pass) carried `**Files:**` and `**Interfaces:**` blocks but no `**Depends on:**` line, so a worker picking up a task in isolation had no statement of what must already exist. | Added a `**Depends on:**` line to every one of Tasks 1-32, derived from each task's own `Consumes` list and the migration chain. All 41 tasks now carry one. |
 | 9 | A mid-flight requirement arrived from the user's third spec review — every ingest source needs a caller-auth second factor (generic webhooks) or an origin policy (Twitch/Kick), published to svc_ingest. Nothing in the plan modelled it: `ingest_sources` had only the HMAC secret. | Added Decision #13 (the exact wire shape, marked *must match plan M5*), Task 39 (migration 0022 + `ingest_source_auth.py` + service wiring + the audit row) and Task 40 (publication through `/distribution/sources`, the tenant config view, the consent view, and the auth `PUT`). |
 | 10 | Several tasks' "Expected: `N` passed" lines were miscounted against their own parametrized cases — a worker would have seen a mismatch and assumed a real failure. | Recounted every new task's test list; corrected Tasks 33 (13→14), 36 (9→10), 37 (13→11) and 39 (31→35). |
-| 11 | D30 (workstream identity/end-to-end trace/tenant wall) and D31 (workstream usage metering) arrived from the spec's third user review after this plan's original 41 tasks were written. Nothing in Tasks 1-41 modeled a `workstreams` table, a usage-metering consumer, an admin usage view, or a `routes_to` tenant check — the spec's own M2b milestone row (§16) names all four as this milestone's D30/D31 deliverables, and none existed. | Added Tasks 42-49: migration 0023 + RBAC extension (42), the pydal binder (43), workstream create/disable lifecycle wired into `ingest_source_service` (44), `workstreamId` publication on the config view/distribution feed/consent screen (45), `routes_to` cross-tenant refusal in `approve_version()` (46), the `waddles:usage` aggregator + its CronJob (47), the per-community usage API with full filter coverage (48), and a widened closing gate (49). Decisions #14-#17 record the schema deviations and scope boundaries this required. |
+| 11 | D30 (workstream identity/end-to-end trace/tenant wall) and D31 (workstream usage metering) arrived from the spec's third user review after this plan's original 41 tasks were written. Nothing in Tasks 1-41 modeled a `workstreams` table, a usage-metering consumer, an admin usage view, or a `routes_to` tenant check — the spec's own M2b milestone row (§16) names all four as this milestone's D30/D31 deliverables, and none existed. | Added Tasks 42-49: migration 0023 + RBAC extension (42), the `install_dal` fixture extension (43, penguin-dal per the later R52 ruling — see the top of this document), workstream create/disable lifecycle wired into `ingest_source_service` (44), `workstreamId` publication on the config view/distribution feed/consent screen (45), `routes_to` cross-tenant refusal in `approve_version()` (46), the `waddles:usage` aggregator + its CronJob (47), the per-community usage API with full filter coverage (48), and a widened closing gate (49). Decisions #14-#17 record the schema deviations and scope boundaries this required. |
 | 12 | The task brief that triggered this pass asked two open questions to verify, not assume: whether hub-api ever touches the envelope binding key (`security.envelopeBinding.keySecretRef`), and whether RLS policies on bundle-reachable tables belong to this milestone. Neither is mentioned in the spec's own M2b milestone row (§16), and `bundle_db_role_service.py` (Task 20) already only grants table-level privileges, never RLS. | Confirmed both are **not** M2b's job — the binding key is stage-only by spec §5.11/§12.3's explicit wording, and RLS enforcement is the Rust stage side's job per spec §7.4, corroborated by the M2a plan's own PA4 scope note ("RLS... M3/M4/M5 scope"). Recorded as Decision #17 and in the spec-coverage table above rather than fabricating a task for scope this milestone does not own. |
 
 ---
