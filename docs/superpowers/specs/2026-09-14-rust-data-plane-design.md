@@ -117,6 +117,7 @@ Every row was decided by the human product owner during the 2026-09-14 design se
 | D26 | **Install is an explicit permission-consent step, and the runtime enforces the approval rather than the manifest.** The admin sees the bundle's full contract — granted streams in words, egress hosts and methods, tables with read/write, host capabilities actually imported, `routes_to`, limits, scan status, tier and flag — approves it, and the approval is recorded with a `permission_hash` over the canonical summary. Grants, egress allowlists, table roles and capability wiring are generated from that record. Widening on upgrade requires re-approval against a diff; narrowing auto-approves with an audit entry; headless installs must pass the expected hash or fail closed. | A manifest is a request from the bundle's author; an approval is a decision by the operator. Deriving runtime authorization from the manifest would let a new version widen access silently, which is precisely what the consent step exists to prevent. | Human, 2026-09-14 |
 | D25 | **Action streams are strictly per bundle** — one stream, one consumer group, never read on another bundle's behalf — and the `_target_app_id` cross-bundle redirect becomes a **declared, approved capability** (`routes_to`, exact ids, no wildcards), enforced by the stage, which is also the only writer. | Ingest streams are shared read-only platform data; action envelopes are a bundle's own output and routinely carry its private state. The asymmetry is deliberate, and the one cross-bundle path is visible at install rather than implicit. | Human, 2026-09-14 |
 | D22 | **Naming: Waddles is the product and repo name; `waddlebot` survives only as the legacy identifiers listed here.** The repo becomes `penguintechinc/waddles` (local clone `~/code/waddles`), images become `ghcr.io/penguintechinc/waddles/<service>`, the Kubernetes namespace and in-cluster DNS become `waddles` (`hub-api.waddles.svc.cluster.local`), and chart Secrets become `waddles-*`. Flag keys (`waddles.*`) and Valkey keys (`waddles:*`) already used the name. **The complete list of surviving `waddlebot` literals:** (1) the Helm chart directory and release name `k8s/helm/waddlebot`, which this project does not rename (N4 keeps the chart's names and values stable); (2) the Postgres `DB_NAME` default `waddlebot`, which this project does not migrate; (3) the legacy `waddlebot:stream:*` / `waddlebot:dlq:*` key prefixes belonging to the unused `flask_core.stream_pipeline.StreamPipeline` class, which this spec does not use and does not rename; (4) Python package paths and the scratchpad path of the sandbox spike report. Every other occurrence is Waddles. | One product name, and a short, explicit list of the places a rename would mean a migration this project is not doing. | Human, 2026-09-14 |
+| D29 | **Webhook intake source restriction (user review 3).** Every generic webhook source (`POST /intake/webhook/{tenant}/{source}`) must configure at least one of a source-IP allowlist, a bearer token or HTTP basic credentials in addition to the mandatory per-source HMAC signature; hub-api refuses to activate a generic source configured with none of the three. Twitch EventSub and Kick webhooks additionally require the client address to forward-confirm (FCrDNS) to `twitch.tv` / `kick.com`, or match an operator-configured static CIDR allowlist, on top of each platform's own signature scheme (§4.1.1). | A per-source secret is a single point of failure once it leaks or is guessed; a signature alone cannot tell a forged request from a genuine one once the secret is compromised. An origin or auth factor that travels out-of-band from the secret closes exactly that gap: an attacker holding only the secret still cannot originate from `twitch.tv`, land inside an allowlisted CIDR, or present a bearer/basic credential they were never given. Alternatives rejected: **signature-only** (the prior design — a leaked or guessed per-source secret was sufficient on its own to forge any generic or platform webhook); **IP-only without signature** (drops per-message tamper-evidence and is brittle against a sending platform's own IP rotation, so it was rejected in favor of requiring both). | Human, 2026-09-14 (review 3) |
 
 ---
 
@@ -335,6 +336,25 @@ penguin-libs/packages/
 | `INTAKE_RATE_LIMIT_TENANT_RPS` / `_BURST` | `100` / `200` | Per-tenant token bucket. |
 | `DRAIN_SOCKET_TIMEOUT_S` | `65` | Outbound-relay connection read timeout; must exceed the blocking-pop block time (§5.5). |
 | `RELAY_BLOCK_TIMEOUT_S` | `30` | Blocking-pop block time for the outbound relay. |
+| `WADDLES_INGEST_TRUSTED_PROXIES` | *(empty)* | CIDR list; `X-Forwarded-For` honoured only when the direct TCP peer is in this list (§4.1.1). |
+
+#### 4.1.1 Webhook intake: source restriction and authentication
+
+Per-source HMAC verification (§10.1, §10.3) is **necessary but not sufficient** — a leaked or guessed per-source secret must not, by itself, be enough to forge an event. Every webhook-shaped intake route therefore also restricts by origin, by a second authentication factor, or both. This section states the rule; §10.1's endpoint table and §11.1's threat table carry the per-route detail.
+
+**Generic webhook (`POST /intake/webhook/{tenant}/{source}`).** The per-source HMAC signature (§10.1) stays mandatory. In addition, each generic source **MUST** be configured with at least one of:
+
+- **Source-IP allowlist** — one or more CIDRs, checked against the resolved client address (trusted-proxy rules below);
+- **Bearer token** — `Authorization: Bearer <token>`, a per-source secret compared with `subtle::ConstantTimeEq`;
+- **HTTP basic authentication** — a per-source username/password, both compared with `subtle::ConstantTimeEq`.
+
+Configured modes combine as **AND** — with the HMAC signature and with each other, so a source configured with both an IP allowlist and a bearer token must satisfy both on every request. A generic source with **none** of the three configured cannot be activated: hub-api's source create/update validation rejects it with `422 auth_factor_required` (§10.3). If such a source's HMAC-only configuration ever reaches svc_ingest regardless, svc_ingest answers `401 auth_not_configured` rather than accepting on signature alone.
+
+**Twitch EventSub and Kick webhooks.** Platform signature verification is unchanged from §10.1 (Twitch: `Twitch-Eventsub-Message-Signature` HMAC-SHA256 over `id + timestamp + body`, 600 s / 10-minute timestamp window, message-id replay cache; Kick: the platform's public-key signature header). In addition, the client address **MUST** forward-confirmed reverse-DNS (FCrDNS: a PTR lookup on the client address, then an A/AAAA lookup of the returned name, which must contain the original address) to the platform's domain — `twitch.tv` for Twitch, `kick.com` for Kick, by default, each configurable per platform (`ingest.platforms.twitch.originSuffixes`, `ingest.platforms.kick.originSuffixes`, §12.3). An optional per-platform CIDR allowlist (`ingest.platforms.twitch.originCidrs`, `ingest.platforms.kick.originCidrs`) lets an operator pin static ranges instead of relying on FCrDNS. FCrDNS results are cached (TTL 10 minutes, bounded size). A signature failure and an origin failure are both rejections but are distinguished: signature failure is `401 bad_signature` (unchanged, §10.1); an origin failure is `403 origin_not_trusted`. Every rejection increments `ingest_webhook_rejected_total{platform|source, reason="origin"|"signature"|"auth"|"replay"}` and logs a sanitized WARN — never the token, the signature, or the body.
+
+**Trusted proxies.** `WADDLES_INGEST_TRUSTED_PROXIES` (`ingest.trustedProxies` in the chart, §12.3) is a CIDR list, default empty. Empty means the client address used for every check above is the direct TCP peer, full stop. `X-Forwarded-For` is honoured **only** when the direct peer is in this list, and then only as the rightmost hop that is **not** itself in the trusted set — a spoofed header presented by an untrusted peer is ignored entirely, never partially trusted.
+
+**`POST /intake/events` (JWT).** Already authenticated by the hub-api-issued JWT (§10.4) and unaffected by the requirements above; it **may** additionally carry a per-caller IP allowlist as an optional hardening layer, checked against the same trusted-proxy-derived client address.
 
 ### 4.2 `core/svc_process` (Rust, rewrite)
 
@@ -1893,7 +1913,7 @@ Derived from `bundle.yaml` **plus the validated component's actual host imports*
 
 | Section | Rendered as |
 |---|---|
-| **Ingest streams** | The resolved grant list in words — "reads Twitch #channelA, Discord guild X" — with wildcards spelled out into the concrete sources they currently resolve to, and a note that a `platform`-wide rule will also pick up sources added later (§5.2) |
+| **Ingest streams** | The resolved grant list in words — "reads Twitch #channelA, Discord guild X" — with wildcards spelled out into the concrete sources they currently resolve to, a note that a `platform`-wide rule will also pick up sources added later (§5.2), and each source's configured authentication mode shown alongside it (signature, IP allowlist, bearer, or basic — §10.3, §4.1.1) |
 | **Outbound network** | Each `egress` host with its allowed methods; `*.example.com` shown as a wildcard, not flattened |
 | **Database** | Each `data.tables` entry with **read / write** derived from the statements the component can issue, one line per table |
 | **Host capabilities** | Which of `http`, `kv`, `db`, `relay`, `flags`, `log` the component actually imports (`context` and `clock` are always granted and are not listed as permissions) |
@@ -1946,10 +1966,10 @@ All routes are on `:8200`. `INTAKE_MAX_BODY_BYTES` = `262144` (256 KiB) applies 
 
 | Method + path | Auth | Required headers | Limits | Success | Error codes |
 |---|---|---|---|---|---|
-| `POST /eventsub/twitch/webhook` | HMAC-SHA256 hex over `id + timestamp + body`, prefixed `sha256=`, constant-time compare | `Twitch-Eventsub-Message-Signature`, `-Timestamp`, `-Id`, `-Type` | 256 KiB body; 600 s timestamp window (Twitch's own); per-source bucket 20/40 | `200` — and for `webhook_callback_verification`, the bare `challenge` string echoed as `text/plain`, not JSON | `400 malformed_body`, `401 bad_signature`, `403 replay_window`, `409 duplicate_message_id`, `413 body_too_large`, `429 rate_limited` (+ `Retry-After: 1`), `503 secret_unset`. Route is **not registered at all** when `TWITCH_EVENTSUB_SECRET` is unset. |
-| `POST /webhook/kick` | HMAC-SHA256 hex over the raw body; fail-closed on a missing or empty signature | `X-Kick-Signature` | 256 KiB; per-source bucket 20/40 | `200` | `400`, `401 bad_signature`, `413`, `429`, `503 secret_unset` (route always mounted) |
-| `POST /intake/webhook/{tenant}/{source}` | Per-source HMAC-SHA256 hex over `{timestamp}.{raw_body}`, secret fetched from hub-api and cached 60 s | `X-Waddles-Signature: sha256=<hex>`, `X-Waddles-Timestamp: <unix seconds>`; optional `X-Waddles-Delivery-Id` | 256 KiB; `INTAKE_REPLAY_WINDOW_S` = 300 s; per-source bucket 20/40; per-tenant bucket 100/200 | `202 Accepted` with `{"accepted": true, "events": <n>}` | `400 malformed_body`, `401 bad_signature`, `403 replay_window`, `404 unknown_source`, `409 duplicate_delivery_id`, `413`, `422 mapping_failed`, `429`, `503 source_disabled` |
-| `POST /intake/events` | hub-api-issued JWT, `Authorization: Bearer <jwt>`, scope `intake:write`, mandatory `tenant` claim | `Authorization`, `Content-Type: application/json` | 256 KiB; per-tenant bucket 100/200 | `202 Accepted` with `{"accepted": true, "events": 1}` | `400 malformed_body`, `401 invalid_token`, `403 missing_scope` / `tenant_mismatch` / `platform_not_registered`, `413`, `422 envelope_invalid`, `429` |
+| `POST /eventsub/twitch/webhook` | HMAC-SHA256 hex over `id + timestamp + body`, prefixed `sha256=`, constant-time compare; **and** origin restriction — FCrDNS or a pinned CIDR allowlist to `twitch.tv` (§4.1.1) | `Twitch-Eventsub-Message-Signature`, `-Timestamp`, `-Id`, `-Type` | 256 KiB body; 600 s timestamp window (Twitch's own); per-source bucket 20/40 | `200` — and for `webhook_callback_verification`, the bare `challenge` string echoed as `text/plain`, not JSON | `400 malformed_body`, `401 bad_signature`, `403 replay_window`, `403 origin_not_trusted`, `409 duplicate_message_id`, `413 body_too_large`, `429 rate_limited` (+ `Retry-After: 1`), `503 secret_unset`. Route is **not registered at all** when `TWITCH_EVENTSUB_SECRET` is unset. |
+| `POST /webhook/kick` | HMAC-SHA256 hex over the raw body; fail-closed on a missing or empty signature; **and** origin restriction — FCrDNS or a pinned CIDR allowlist to `kick.com` (§4.1.1) | `X-Kick-Signature` | 256 KiB; per-source bucket 20/40 | `200` | `400`, `401 bad_signature`, `403 origin_not_trusted`, `413`, `429`, `503 secret_unset` (route always mounted) |
+| `POST /intake/webhook/{tenant}/{source}` | Per-source HMAC-SHA256 hex over `{timestamp}.{raw_body}`, secret fetched from hub-api and cached 60 s; **and** the source's configured second factor — IP allowlist, bearer token, or HTTP basic (§4.1.1, §10.3) — required in addition to the signature | `X-Waddles-Signature: sha256=<hex>`, `X-Waddles-Timestamp: <unix seconds>`; optional `X-Waddles-Delivery-Id` | 256 KiB; `INTAKE_REPLAY_WINDOW_S` = 300 s; per-source bucket 20/40; per-tenant bucket 100/200 | `202 Accepted` with `{"accepted": true, "events": <n>}` | `400 malformed_body`, `401 bad_signature`, `401 second_factor_failed`, `401 auth_not_configured`, `403 replay_window`, `404 unknown_source`, `409 duplicate_delivery_id`, `413`, `422 mapping_failed`, `429`, `503 source_disabled` |
+| `POST /intake/events` | hub-api-issued JWT, `Authorization: Bearer <jwt>`, scope `intake:write`, mandatory `tenant` claim; may additionally require a per-caller IP allowlist (§4.1.1) | `Authorization`, `Content-Type: application/json` | 256 KiB; per-tenant bucket 100/200 | `202 Accepted` with `{"accepted": true, "events": 1}` | `400 malformed_body`, `401 invalid_token`, `403 missing_scope` / `tenant_mismatch` / `platform_not_registered` / `ip_not_allowed`, `413`, `422 envelope_invalid`, `429` |
 | `GET /health` | none | — | — | `200` with the body of §11.6.4 | `503` when not ready |
 | `GET /healthz` | none | — | — | `200 ok` | — |
 | `GET /metrics` | none (cluster-internal, `:9090`) | — | — | `200` Prometheus text | — |
@@ -1976,7 +1996,11 @@ Ported with today's exact authentication and lifecycle behaviour (`core/svc_inge
 
 ### 10.3 Generic webhook intake and its mapping
 
-A **source** is a per-tenant record held by hub-api: `{tenant, source, platform, secret_ref, community, mapping, enabled}`. `platform` must be one of the tenant's registered custom platforms (see §10.4). The mapping is declarative JSON — no expressions, no code:
+A **source** is a per-tenant record held by hub-api: `{tenant, source, platform, secret_ref, community, mapping, enabled, auth}`. `platform` must be one of the tenant's registered custom platforms (see §10.4).
+
+**`auth`** (§4.1.1, §11.1) declares the source's required authentication on top of the mandatory per-source HMAC: `auth = {modes: ["hmac", "ip_allowlist"|"bearer"|"basic", ...], cidrs: [...], secret_ref: "<id>", origin_suffixes: [...], origin_cidrs: [...]}`. `modes` always includes `"hmac"` plus, for a **generic** source, at least one of `ip_allowlist`, `bearer` or `basic` — hub-api's source create/update endpoint rejects a generic source whose `modes` carries no second factor with `422 auth_factor_required`. `cidrs` backs `ip_allowlist`. Bearer tokens and basic credentials are **never** stored inline and **never** returned by any API response — they live in the secret store, referenced by `secret_ref`, and are delivered to svc_ingest through the same per-source config lookup (hub-api, cached 60 s) that already serves the HMAC secret (§10.1, §11.5); only the reference travels in the polled config, never the value. `origin_suffixes` and `origin_cidrs` apply to the built-in Twitch/Kick sources, seeded from the chart defaults (`ingest.platforms.*`, §12.3) and overridable per source. Every change to a source's `auth` object is audit-logged (actor, old/new `modes`, timestamp), the same way grant and approval changes already are (§6.8, §9.7.2). The configured mode is shown on the source's config view in the admin UI, and alongside each source's name wherever the consent screen lists resolved sources (§9.7.1).
+
+The mapping is declarative JSON — no expressions, no code:
 
 ```json
 {
@@ -2058,7 +2082,8 @@ for each normalized PlatformEvent E from source S at (tenant, community):
 | Supply-chain: a hostile artifact swapped in the bucket | Content addressing + Ed25519 sidecar signature + digest cross-check against hub-api's DB; refuse on mismatch, keep the old version. | Compromise of both the DB and the signing key. |
 | A compromised build stage chooses its own digest | The digest is computed in the trusted `publisher` container from the bytes in the shared `emptyDir`, never in the `build` container that ran bundle code; hub-api independently re-hashes the bucket object and audit-logs any disagreement (D27). | A compromise of the publisher itself, which runs no guest code and has a far smaller attack surface. |
 | An unexpected writer rewrites a digest row | Exactly two Postgres roles may write `app_versions`; every other role has no privileges on it, asserted by a CI test per role. Every write is audited with the role, key and old/new digest (§6.10). | A compromise of one of the two legitimate writers — which the audit trail then attributes. |
-| Forged inbound events | Per-platform signature verification, per-source HMAC with a replay window, JWT with a mandatory tenant claim, built-in platforms unreachable through the generic REST route. | A leaked per-source secret. Mitigated by rotation and by the secret never leaving hub-api's store. |
+| Forged inbound events | Per-platform signature verification, per-source HMAC with a replay window, JWT with a mandatory tenant claim, built-in platforms unreachable through the generic REST route — **and, per source, a required second factor** (IP allowlist, bearer token or HTTP basic for generic webhooks; FCrDNS or a pinned CIDR to the platform's own domain for Twitch/Kick) on top of the signature, never the signature alone (§4.1.1). | A leaked per-source secret **combined with** a satisfied second factor — e.g. an attacker who also holds the bearer token, reaches an allowlisted address, or originates from inside the platform's own IP/DNS space. Mitigated by rotation, by secrets never leaving hub-api's store, and by the second factor traveling out-of-band from the secret. |
+| A forged Twitch/Kick webhook, signed with a leaked or guessed platform secret but sent from a non-platform origin | Origin restriction — FCrDNS to `twitch.tv`/`kick.com`, or a pinned CIDR allowlist — required in addition to platform signature verification: **webhook authenticity is signature AND an origin/auth factor, never signature alone** (§4.1.1). | A host compromised inside the platform's own IP/DNS space, or an operator-configured CIDR allowlist set too broad. |
 | Prompt/config injection through event payload | Tenant and community are never read from payload; `_target_app_id` changes only the destination key's `app_id` segment. | None structural; enforced by test. |
 
 ### 11.2 Sandbox layers
@@ -2390,6 +2415,11 @@ Existing keys keep their names and defaults. New keys:
 | `bundles.compiler.image` | `ghcr.io/penguintechinc/waddles/bundle-compiler:<tag>` | Job image |
 | `bundles.compiler.activeDeadlineSeconds` | `900` | Job deadline |
 | `bundles.compiler.resources.limits` | `{cpu: "2000m", memory: "4Gi"}` | Compilation is memory-hungry |
+| `ingest.trustedProxies` | `[]` | `WADDLES_INGEST_TRUSTED_PROXIES` — CIDR list; `X-Forwarded-For` honoured only from a trusted direct peer (§4.1.1) |
+| `ingest.platforms.twitch.originSuffixes` | `["twitch.tv"]` | FCrDNS domain suffixes required for the Twitch EventSub webhook's client address (§4.1.1) |
+| `ingest.platforms.twitch.originCidrs` | `[]` | Optional static CIDR allowlist, alternative to FCrDNS, for the Twitch webhook |
+| `ingest.platforms.kick.originSuffixes` | `["kick.com"]` | FCrDNS domain suffixes required for the Kick webhook's client address (§4.1.1) |
+| `ingest.platforms.kick.originCidrs` | `[]` | Optional static CIDR allowlist, alternative to FCrDNS, for the Kick webhook |
 | `security.transport.tls` | `true` | §11.6.4 |
 | `security.transport.auth` | `true` | §11.6.4 |
 | `security.transport.certManager` | auto-detected | Use cert-manager when present, chart-managed CA otherwise |
@@ -2595,7 +2625,7 @@ Defaults are the values a service uses when the variable is unset. Every secret-
 | `ACTION_MAX_RETRIES` | `3` |
 | `ACTION_BASE_BACKOFF_MS` / `ACTION_MAX_BACKOFF_MS` | `250` / `8000` |
 
-**svc-ingest only:** the table in §4.1, plus the platform credentials of §10.2 and `INTAKE_DEDUPE_TTL_S` (`900`).
+**svc-ingest only:** the table in §4.1 (now including `WADDLES_INGEST_TRUSTED_PROXIES`, §4.1.1), plus the platform credentials of §10.2, `INTAKE_DEDUPE_TTL_S` (`900`), and the rendered per-platform origin settings `INGEST_PLATFORM_TWITCH_ORIGIN_SUFFIXES` / `_CIDRS` and `INGEST_PLATFORM_KICK_ORIGIN_SUFFIXES` / `_CIDRS` (from `ingest.platforms.*`, §12.3, §4.1.1).
 
 **bundle-compiler only**
 
@@ -2850,6 +2880,20 @@ Against a freshly destroyed and rebuilt alpha cluster, with seeded mock data (3�
 
 Applied to every gate in this section: no `|| true` on a linter, scanner or test; `set -euo pipefail` in every script and hook; `${PIPESTATUS[0]}` rather than `$?` after a pipeline; every "clean" result reported with the number of items examined; a zero denominator is a failure. Each new gate is made to fail on purpose once, before it is trusted.
 
+### 14.10 Webhook intake source-restriction tests (svc_ingest)
+
+Mandatory negative tests for §4.1.1 — each asserts the attack is **rejected**, and each is counted so a zero-match run cannot pass silently:
+
+| # | Test | Expected |
+|---|---|---|
+| 1 | A **valid** Twitch EventSub signature arrives from a client address that does not forward-confirm to `twitch.tv` and matches no configured `originCidrs` | `403 origin_not_trusted`; `ingest_webhook_rejected_total{platform="twitch",reason="origin"}` +1 — signature validity alone never admits the request |
+| 2 | The client address's PTR record names a `twitch.tv` host, but the forward A/AAAA lookup of that name does **not** contain the client address (a spoofed or stale PTR) | `403 origin_not_trusted` — FCrDNS requires both halves to agree, not the PTR alone |
+| 3 | A generic source's per-source HMAC signature is valid, but no configured bearer token, basic credential or source IP matches | `401 second_factor_failed` (or `401 auth_not_configured` if the source has none configured) — a valid signature alone never admits a generic webhook |
+| 4 | `X-Forwarded-For` is set on a request whose direct TCP peer is **not** in `WADDLES_INGEST_TRUSTED_PROXIES` | The header is ignored entirely; the client address used for every check is the direct peer, never a value taken from the spoofed header |
+| 5 | A Twitch EventSub message with a message id already seen within the replay cache window is resent, with both signature and origin valid | `409 duplicate_message_id`; the second delivery is dropped and not double-enqueued |
+
+Each test asserts the specific rejection reason and increments the specific counter — a generic "it returned non-200" assertion does not satisfy this table.
+
 ---
 
 ## 15. Migration & cut-over
@@ -2901,7 +2945,7 @@ Database migrations are additive:
 |---|---|
 | `app_catalog` version columns | `artifact_digest`, `artifact_kind`, `language`, `scan_status`, `manifest_json` |
 | `custom_platforms` | per-tenant registered platform names for the REST intake |
-| `intake_sources` | `{tenant, source_id, source, platform, secret_ref, community, mapping, enabled}` — `source_id` is the stable id that names the source's stream |
+| `intake_sources` | `{tenant, source_id, source, platform, secret_ref, community, mapping, enabled, auth}` — `source_id` is the stable id that names the source's stream; `auth` is the source-restriction/authentication object of §10.3 |
 | `app_stream_grants` | §6.8 — one row per (bundle, granted stream) |
 | `bundle_scan_findings` | per-version scanner findings summary |
 | `app_install_approvals` | §6.9 — the approved permission summary and its hash, which the runtime derives authorization from |
